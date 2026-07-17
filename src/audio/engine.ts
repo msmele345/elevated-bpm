@@ -1,5 +1,6 @@
 import * as Tone from 'tone'
 import { STEP_COUNT, type Pattern } from '../model/types'
+import { stepIndexAtTicks } from './stepIndex'
 
 /**
  * The audio engine owns all Tone.js objects and lives outside React.
@@ -36,7 +37,7 @@ export function setBpm(next: number): void {
 export function getCurrentStep(): number {
   const transport = Tone.getTransport()
   if (transport.state !== 'started') return -1
-  return Math.floor(transport.ticks / TICKS_PER_16TH) % STEP_COUNT
+  return stepIndexAtTicks(transport.ticks, TICKS_PER_16TH, STEP_COUNT)
 }
 
 /**

@@ -53,11 +53,11 @@ A GitHub Actions workflow that runs typecheck+build and the test suite on every 
 
 ### Acceptance criteria
 
-- [ ] Every PR to `develop` or `main` runs a GitHub Actions workflow with typecheck+build and Vitest; a red check blocks merge
-- [ ] Vitest runs locally via `npm test` and in CI, seeded with passing tests over the pure model code (no DOM/audio mocks)
-- [ ] Every PR gets a Vercel preview URL; `develop` maintains a staging deployment; merging to `main` deploys production
-- [ ] `develop` and `main` are protected: required status checks, direct pushes blocked
-- [ ] The production URL serves the app with working audio (sample assets resolve; first-gesture unlock works in production build)
+- [ ] Every PR to `develop` or `main` runs a GitHub Actions workflow with typecheck+build and Vitest; a red check blocks merge — workflow written (`.github/workflows/ci.yml`), not yet observed running on a real PR
+- [x] Vitest runs locally via `npm test` and in CI, seeded with passing tests over the pure model code (no DOM/audio mocks) — `pattern.ts` + extracted `stepIndexAtTicks` (8 tests passing locally)
+- [ ] Every PR gets a Vercel preview URL; `develop` maintains a staging deployment; merging to `main` deploys production — pending user's own Vercel Git-integration connection
+- [ ] `develop` and `main` are protected: required status checks, direct pushes blocked — pending user configuring in GitHub settings (after the Actions check has run once)
+- [ ] The production URL serves the app with working audio (sample assets resolve; first-gesture unlock works in production build) — pending Vercel production deploy
 
 ---
 

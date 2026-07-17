@@ -371,6 +371,28 @@ body::before {
   user-select: none;
 }
 
+/* playhead sweep: the transport's current 16th, driven by rAF (usePlayhead).
+   Body brightens and the LED half-lights so the sweep reads on unlit steps;
+   the lit-state rule below wins on the LED of programmed steps. */
+.step.is-playhead {
+  background: linear-gradient(180deg, #4a5057 0%, #3b4046 45%, #2b2f33 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -3px 4px rgba(0, 0, 0, 0.45),
+    0 3px 5px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--led) 55%, transparent),
+    0 0 12px color-mix(in srgb, var(--led) 35%, transparent);
+}
+
+.step.is-playhead .step-led {
+  background: color-mix(in srgb, var(--led) 50%, #101113);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--led) 40%, transparent);
+}
+
+.step.is-playhead .step-num {
+  color: var(--ink);
+}
+
 /* lit state */
 .step[aria-pressed='true'] .step-led {
   background: var(--led);

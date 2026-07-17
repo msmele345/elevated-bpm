@@ -24,6 +24,7 @@ export function StepRow({ lane, onToggleStep }: StepRowProps) {
             type="button"
             className="step"
             data-quad={Math.floor(i / 4)}
+            data-step-index={i}
             aria-pressed={step.on}
             aria-label={`${lane.label} step ${i + 1}`}
             onClick={() => onToggleStep(i)}

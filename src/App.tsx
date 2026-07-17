@@ -8,6 +8,7 @@ import * as engine from './audio/engine'
 export default function App() {
   const [pattern, setPattern] = useState(createInitialPattern)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [bpm, setBpm] = useState(engine.DEFAULT_BPM)
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -17,6 +18,11 @@ export default function App() {
 
   const handleToggleStep = (laneId: DrumLaneId, stepIndex: number) => {
     setPattern((p) => toggleStep(p, laneId, stepIndex))
+  }
+
+  const handleBpmChange = (next: number) => {
+    setBpm(next)
+    engine.setBpm(next)
   }
 
   const handleTogglePlay = async () => {
@@ -39,7 +45,12 @@ export default function App() {
       </header>
 
       <section className="panel" aria-label="Drum machine">
-        <TransportBar isPlaying={isPlaying} bpm={engine.DEFAULT_BPM} onTogglePlay={handleTogglePlay} />
+        <TransportBar
+          isPlaying={isPlaying}
+          bpm={bpm}
+          onTogglePlay={handleTogglePlay}
+          onBpmChange={handleBpmChange}
+        />
         {pattern.lanes.map((lane) => (
           <StepRow
             key={lane.id}

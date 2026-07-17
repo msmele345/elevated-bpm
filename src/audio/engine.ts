@@ -9,8 +9,11 @@ import { STEP_COUNT, type Pattern } from '../model/types'
  */
 
 export const DEFAULT_BPM = 130
+export const MIN_BPM = 60
+export const MAX_BPM = 200
 const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
+let bpm = DEFAULT_BPM
 let currentPattern: Pattern | null = null
 let kick: Tone.Player | null = null
 let kickLoaded: Promise<void> | null = null
@@ -21,8 +24,12 @@ export function setPattern(pattern: Pattern): void {
   currentPattern = pattern
 }
 
-export function setBpm(bpm: number): void {
-  Tone.getTransport().bpm.value = bpm
+export function setBpm(next: number): void {
+  bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, next))
+  // Ramp instead of jumping so mid-playback tempo changes are click-free;
+  // step scheduling derives from transport ticks, so the sequence position
+  // is unaffected by the tempo curve.
+  Tone.getTransport().bpm.rampTo(bpm, 0.1)
 }
 
 /** Step the transport is currently on (for the rAF playhead in AC4). */
@@ -41,7 +48,7 @@ async function ensureReady(): Promise<void> {
   if (!kickLoaded) {
     kick = new Tone.Player('/samples/kick-909.wav').toDestination()
     kickLoaded = Tone.loaded()
-    Tone.getTransport().bpm.value = DEFAULT_BPM
+    Tone.getTransport().bpm.value = bpm
     if (import.meta.env.DEV) {
       // Debug handle for tooling/tests; never used by app code.
       const meter = new Tone.Meter()

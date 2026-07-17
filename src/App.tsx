@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
+import { usePlayhead } from './hooks/usePlayhead'
 import { createInitialPattern, toggleStep } from './model/pattern'
 import type { DrumLaneId } from './model/types'
 import * as engine from './audio/engine'
@@ -9,12 +10,30 @@ export default function App() {
   const [pattern, setPattern] = useState(createInitialPattern)
   const [isPlaying, setIsPlaying] = useState(false)
   const [bpm, setBpm] = useState(engine.DEFAULT_BPM)
+  const panelRef = useRef<HTMLElement>(null)
+
+  usePlayhead(panelRef, isPlaying)
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
   useEffect(() => {
     engine.setPattern(pattern)
   }, [pattern])
+
+  // Unlock the audio context and preload the kick on the first gesture
+  // anywhere, so the first Play is instant and never blocked by autoplay
+  // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
+  useEffect(() => {
+    const unlock = () => {
+      void engine.unlockAudio()
+    }
+    window.addEventListener('pointerdown', unlock, { once: true })
+    window.addEventListener('keydown', unlock, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [])
 
   const handleToggleStep = (laneId: DrumLaneId, stepIndex: number) => {
     setPattern((p) => toggleStep(p, laneId, stepIndex))
@@ -44,7 +63,7 @@ export default function App() {
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
       </header>
 
-      <section className="panel" aria-label="Drum machine">
+      <section className="panel" aria-label="Drum machine" ref={panelRef}>
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}

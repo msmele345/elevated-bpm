@@ -41,9 +41,12 @@ export function getCurrentStep(): number {
 
 /**
  * Unlock the audio context (must be called from a user gesture — browser
- * autoplay policy) and lazily create + load the kick player.
+ * autoplay policy) and lazily create + load the kick player. Idempotent, so
+ * the app calls it eagerly on the first gesture anywhere (pointer or key)
+ * and play() awaits it again as a safety net — by the time the user reaches
+ * Play, the context is running and the sample is loaded.
  */
-async function ensureReady(): Promise<void> {
+export async function unlockAudio(): Promise<void> {
   await Tone.start()
   if (!kickLoaded) {
     kick = new Tone.Player('/samples/kick-909.wav').toDestination()
@@ -63,7 +66,7 @@ async function ensureReady(): Promise<void> {
 }
 
 export async function play(): Promise<void> {
-  await ensureReady()
+  await unlockAudio()
   const transport = Tone.getTransport()
   if (!repeatScheduled) {
     transport.scheduleRepeat((time) => {

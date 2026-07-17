@@ -27,11 +27,37 @@ The thinnest playable slice: a scaffolded app showing a single 16-step kick lane
 
 ### Acceptance criteria
 
-- [ ] App loads to a visible, clickable 16-step kick row with no setup or login
-- [ ] Toggling steps and pressing play produces a kick loop with no audible drift or jitter at 120–140 BPM
-- [ ] BPM is adjustable while playing without glitches
-- [ ] Playhead position stays visually locked to the audio, driven by rAF (no per-16th React re-renders)
-- [ ] Audio context unlocks correctly from the first user gesture (browser autoplay policy handled)
+- [x] App loads to a visible, clickable 16-step kick row with no setup or login
+- [x] Toggling steps and pressing play produces a kick loop with no audible drift or jitter at 120–140 BPM
+- [x] BPM is adjustable while playing without glitches
+- [x] Playhead position stays visually locked to the audio, driven by rAF (no per-16th React re-renders)
+- [x] Audio context unlocks correctly from the first user gesture (browser autoplay policy handled)
+
+---
+
+## Phase 1.5: CI/CD pipeline
+
+**User stories**: every change is verified before merge and live on a URL after — the pipeline that every later phase rides on.
+
+### Decisions (from planning interview, 2026-07-17)
+
+- **CI**: GitHub Actions — the repo and PR workflow already live on GitHub.
+- **Checks**: typecheck + build (`tsc -b && vite build`) and unit tests (Vitest, to be added). ESLint/Prettier deliberately deferred.
+- **CD**: Vercel via its native Git integration — Vercel auto-builds every push; GitHub Actions stays checks-only.
+- **Branching**: gitflow — feature PRs target `develop` (checks + preview deploy); promoting `develop` → `main` deploys production.
+- **Branch protection**: required status checks on both `develop` and `main`; no direct pushes.
+
+### What to build
+
+A GitHub Actions workflow that runs typecheck+build and the test suite on every PR targeting `develop` or `main` (and on pushes to those branches). Add Vitest with a seed suite over the pure model code — `pattern.ts` (initial pattern shape, `toggleStep` immutability) and step-index math — no DOM or audio mocking. Connect the repo to Vercel: preview URLs per PR, staging preview on `develop`, production on `main`. Turn on branch protection so the checks actually gate merges.
+
+### Acceptance criteria
+
+- [ ] Every PR to `develop` or `main` runs a GitHub Actions workflow with typecheck+build and Vitest; a red check blocks merge
+- [ ] Vitest runs locally via `npm test` and in CI, seeded with passing tests over the pure model code (no DOM/audio mocks)
+- [ ] Every PR gets a Vercel preview URL; `develop` maintains a staging deployment; merging to `main` deploys production
+- [ ] `develop` and `main` are protected: required status checks, direct pushes blocked
+- [ ] The production URL serves the app with working audio (sample assets resolve; first-gesture unlock works in production build)
 
 ---
 

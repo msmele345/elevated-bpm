@@ -1,10 +1,13 @@
+import { MAX_BPM, MIN_BPM } from '../audio/engine'
+
 interface TransportBarProps {
   isPlaying: boolean
   bpm: number
   onTogglePlay: () => void
+  onBpmChange: (bpm: number) => void
 }
 
-export function TransportBar({ isPlaying, bpm, onTogglePlay }: TransportBarProps) {
+export function TransportBar({ isPlaying, bpm, onTogglePlay, onBpmChange }: TransportBarProps) {
   return (
     <div className="transport">
       <button
@@ -16,7 +19,20 @@ export function TransportBar({ isPlaying, bpm, onTogglePlay }: TransportBarProps
         <span className="transport-play-led" aria-hidden="true" />
         {isPlaying ? 'Stop' : 'Play'}
       </button>
-      <div className="transport-bpm" aria-label={`Tempo ${bpm} beats per minute`}>
+      <label className="transport-tempo">
+        <span className="transport-tempo-label">Tempo</span>
+        <input
+          type="range"
+          className="transport-tempo-fader"
+          min={MIN_BPM}
+          max={MAX_BPM}
+          step={1}
+          value={bpm}
+          onChange={(e) => onBpmChange(Number(e.target.value))}
+          aria-label="Tempo in beats per minute"
+        />
+      </label>
+      <div className="transport-bpm" aria-hidden="true">
         <span className="transport-bpm-value">{bpm}</span>
         <span className="transport-bpm-unit">BPM</span>
       </div>

@@ -1,0 +1,55 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - heading [level=1] [ref=e5]:
+      - text: Elevated
+      - emphasis [ref=e6]: BPM
+    - generic [ref=e7]: RHYTHM COMPOSER · EB-01
+  - complementary "Lesson" [ref=e8]:
+    - text: Lesson
+    - heading "Four on the Floor" [level=2] [ref=e9]
+    - paragraph [ref=e10]: "Every techno track stands on the same foundation: a kick drum on every beat. Light up steps 1, 5, 9, and 13 — the first step of each group of four — then press play and feel it lock in."
+  - region "Drum machine" [ref=e11]:
+    - generic [ref=e12]:
+      - button "Play" [ref=e13] [cursor=pointer]
+      - generic [ref=e15]:
+        - generic [ref=e16]: Tempo
+        - slider "Tempo in beats per minute" [ref=e17] [cursor=pointer]: "130"
+      - generic [ref=e18]:
+        - generic [ref=e19]: "130"
+        - generic [ref=e20]: BPM
+    - generic [ref=e21]:
+      - generic [ref=e22]: Kick
+      - group "Kick steps" [ref=e24]:
+        - button "Kick step 1" [ref=e25] [cursor=pointer]:
+          - generic [ref=e27]: "1"
+        - button "Kick step 2" [ref=e28] [cursor=pointer]:
+          - generic [ref=e30]: "2"
+        - button "Kick step 3" [ref=e31] [cursor=pointer]:
+          - generic [ref=e33]: "3"
+        - button "Kick step 4" [ref=e34] [cursor=pointer]:
+          - generic [ref=e36]: "4"
+        - button "Kick step 5" [ref=e37] [cursor=pointer]:
+          - generic [ref=e39]: "5"
+        - button "Kick step 6" [ref=e40] [cursor=pointer]:
+          - generic [ref=e42]: "6"
+        - button "Kick step 7" [ref=e43] [cursor=pointer]:
+          - generic [ref=e45]: "7"
+        - button "Kick step 8" [ref=e46] [cursor=pointer]:
+          - generic [ref=e48]: "8"
+        - button "Kick step 9" [ref=e49] [cursor=pointer]:
+          - generic [ref=e51]: "9"
+        - button "Kick step 10" [ref=e52] [cursor=pointer]:
+          - generic [ref=e54]: "10"
+        - button "Kick step 11" [ref=e55] [cursor=pointer]:
+          - generic [ref=e57]: "11"
+        - button "Kick step 12" [ref=e58] [cursor=pointer]:
+          - generic [ref=e60]: "12"
+        - button "Kick step 13" [ref=e61] [cursor=pointer]:
+          - generic [ref=e63]: "13"
+        - button "Kick step 14" [ref=e64] [cursor=pointer]:
+          - generic [ref=e66]: "14"
+        - button "Kick step 15" [ref=e67] [cursor=pointer]:
+          - generic [ref=e69]: "15"
+        - button "Kick step 16" [ref=e70] [cursor=pointer]:
+          - generic [ref=e72]: "16"
+    - paragraph [ref=e73]: Tap steps to program the kick — 1 · 5 · 9 · 13 is four-on-the-floor.

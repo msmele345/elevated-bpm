@@ -1,0 +1,7 @@
+{
+  "id": "four-on-the-floor",
+  "title": "Four on the Floor",
+  "intro": "Every techno track stands on the same foundation: a kick drum on every beat. Light up steps 1, 5, 9, and 13 — the first step of each group of four — then press play and feel it lock in.",
+  "spotlight": ["lane:kick"],
+  "goal": [{ "type": "stepsActive", "lane": "kick", "steps": [0, 4, 8, 12] }]
+}

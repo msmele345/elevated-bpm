@@ -53,11 +53,11 @@ A GitHub Actions workflow that runs typecheck+build and the test suite on every 
 
 ### Acceptance criteria
 
-- [ ] Every PR to `develop` or `main` runs a GitHub Actions workflow with typecheck+build and Vitest; a red check blocks merge — workflow written (`.github/workflows/ci.yml`), not yet observed running on a real PR
-- [x] Vitest runs locally via `npm test` and in CI, seeded with passing tests over the pure model code (no DOM/audio mocks) — `pattern.ts` + extracted `stepIndexAtTicks` (8 tests passing locally)
-- [ ] Every PR gets a Vercel preview URL; `develop` maintains a staging deployment; merging to `main` deploys production — pending user's own Vercel Git-integration connection
-- [ ] `develop` and `main` are protected: required status checks, direct pushes blocked — pending user configuring in GitHub settings (after the Actions check has run once)
-- [ ] The production URL serves the app with working audio (sample assets resolve; first-gesture unlock works in production build) — pending Vercel production deploy
+- [x] Every PR to `develop` or `main` runs a GitHub Actions workflow with typecheck+build and Vitest — confirmed green on PRs #14/#15 (`gh run list`), on both `pull_request` and `push` events for `develop`/`main`. Merge-blocking not yet enforced — see branch protection below.
+- [x] Vitest runs locally via `npm test` and in CI, seeded with passing tests over the pure model code (no DOM/audio mocks) — `pattern.ts` + extracted `stepIndexAtTicks` (8 tests passing locally and in CI)
+- [x] Every PR gets a Vercel preview URL; `develop` maintains a staging deployment; merging to `main` deploys production — confirmed: Vercel bot commented the preview link on PR #14; `elevated-bpm-git-develop-*.vercel.app` and production `elevated-bpm-dusky.vercel.app` both resolve
+- [ ] `develop` and `main` are protected: required status checks, direct pushes blocked — checked via `gh api repos/.../branches/{branch}/protection`, both return 404 "Branch not protected"; still pending user's own GitHub settings configuration
+- [x] The production URL serves the app with working audio (sample assets resolve; first-gesture unlock works in production build) — verified via curl: `/` → 200, `/samples/kick-909.wav` → 200 `audio/wave` (52,964 bytes)
 
 ---
 
@@ -71,8 +71,8 @@ One complete goal-checked challenge — "build a four-on-the-floor" — running 
 
 ### Acceptance criteria
 
-- [ ] The lesson is loaded from a JSON definition (intro, spotlight targets, declarative goal)
-- [ ] Spotlighting visually highlights the kick lane while the lesson is active
+- [x] The lesson is loaded from a JSON definition (intro, spotlight targets, declarative goal) — `src/lessons/four-on-the-floor.json` parsed through `parseLesson` (`src/model/lesson.ts`), which validates shape and goal assertions with descriptive errors; covered by Vitest (`lesson.test.ts`, `lessons.test.ts`)
+- [x] Spotlighting visually highlights the kick lane while the lesson is active — spotlight targets (`"lane:kick"`) derived via `spotlitLaneIds`; the kick lane gets an amber glow ring + highlighted label while the lesson is active, verified in-browser via Playwright screenshot
 - [ ] Placing kicks on steps 1/5/9/13 is detected automatically and triggers a completion celebration
 - [ ] Wrong or extra steps do not falsely complete the goal
 - [ ] The lesson can be dismissed and resumed; the sandbox is never gated

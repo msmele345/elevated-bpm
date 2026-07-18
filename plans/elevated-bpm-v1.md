@@ -73,9 +73,9 @@ One complete goal-checked challenge — "build a four-on-the-floor" — running 
 
 - [x] The lesson is loaded from a JSON definition (intro, spotlight targets, declarative goal) — `src/lessons/four-on-the-floor.json` parsed through `parseLesson` (`src/model/lesson.ts`), which validates shape and goal assertions with descriptive errors; covered by Vitest (`lesson.test.ts`, `lessons.test.ts`)
 - [x] Spotlighting visually highlights the kick lane while the lesson is active — spotlight targets (`"lane:kick"`) derived via `spotlitLaneIds`; the kick lane gets an amber glow ring + highlighted label while the lesson is active, verified in-browser via Playwright screenshot
-- [ ] Placing kicks on steps 1/5/9/13 is detected automatically and triggers a completion celebration
-- [ ] Wrong or extra steps do not falsely complete the goal
-- [ ] The lesson can be dismissed and resumed; the sandbox is never gated
+- [x] Placing kicks on steps 1/5/9/13 is detected automatically and triggers a completion celebration — `isGoalMet` (`src/model/lesson.ts`) is re-evaluated on every pattern edit and latched; the panel flips to a green "Lesson complete" celebration state, verified in-browser via Playwright
+- [x] Wrong or extra steps do not falsely complete the goal — `stepsActive` requires an exact match (every goal step on, every other step off); covered by Vitest (subset, wrong positions, goal-plus-extra, missing lane) and confirmed in-browser with steps 1/2/5/9/13 not completing
+- [x] The lesson can be dismissed and resumed; the sandbox is never gated — dismiss collapses the panel to a "Resume lesson" chip; steps stay editable while dismissed, goal detection keeps running, and resuming restores the panel (including an already-earned completed state)
 
 ---
 

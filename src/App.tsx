@@ -3,7 +3,7 @@ import { LessonPanel } from './components/LessonPanel'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
-import { parseLesson, spotlitLaneIds, type Lesson } from './model/lesson'
+import { isGoalMet, parseLesson, spotlitLaneIds, type Lesson } from './model/lesson'
 import { createInitialPattern, toggleStep } from './model/pattern'
 import type { DrumLaneId } from './model/types'
 import * as engine from './audio/engine'
@@ -17,11 +17,23 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [bpm, setBpm] = useState(engine.DEFAULT_BPM)
   const [activeLesson] = useState<Lesson | null>(fourOnTheFloor)
+  const [lessonCompleted, setLessonCompleted] = useState(false)
+  const [lessonDismissed, setLessonDismissed] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
 
-  const spotlitLanes = spotlitLaneIds(activeLesson)
+  // Spotlight guides toward the goal, so it rests once the goal is met or
+  // the lesson is put away.
+  const spotlitLanes = lessonCompleted || lessonDismissed ? [] : spotlitLaneIds(activeLesson)
 
   usePlayhead(panelRef, isPlaying)
+
+  // Goal detection: re-evaluated on every pattern edit (never on the audio
+  // clock) and latched — un-toggling a step later doesn't revoke completion.
+  // Runs even while dismissed so resuming shows the earned celebration.
+  useEffect(() => {
+    if (!activeLesson || lessonCompleted) return
+    if (isGoalMet(activeLesson, pattern)) setLessonCompleted(true)
+  }, [pattern, activeLesson, lessonCompleted])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -72,7 +84,23 @@ export default function App() {
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
       </header>
 
-      {activeLesson && <LessonPanel lesson={activeLesson} />}
+      {activeLesson &&
+        (lessonDismissed ? (
+          <button
+            type="button"
+            className="lesson-resume"
+            onClick={() => setLessonDismissed(false)}
+          >
+            <span className="lesson-resume-led" aria-hidden="true" />
+            Resume lesson · {activeLesson.title}
+          </button>
+        ) : (
+          <LessonPanel
+            lesson={activeLesson}
+            completed={lessonCompleted}
+            onDismiss={() => setLessonDismissed(true)}
+          />
+        ))}
 
       <section className="panel" aria-label="Drum machine" ref={panelRef}>
         <TransportBar

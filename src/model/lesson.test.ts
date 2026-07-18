@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { parseLesson, spotlitLaneIds } from './lesson'
+import { isGoalMet, parseLesson, spotlitLaneIds } from './lesson'
+import { createInitialPattern, toggleStep } from './pattern'
+import type { Pattern } from './types'
 
 const validLesson = {
   id: 'four-on-the-floor',
@@ -37,6 +39,39 @@ describe('parseLesson', () => {
       goal: [{ type: 'stepsActive', lane: 'kick', steps: [0, 16] }],
     }
     expect(() => parseLesson(badSteps)).toThrow(/steps/)
+  })
+})
+
+function patternWithKicksOn(steps: number[]): Pattern {
+  return steps.reduce((p, step) => toggleStep(p, 'kick', step), createInitialPattern())
+}
+
+describe('isGoalMet', () => {
+  const lesson = parseLesson(validLesson)
+
+  it('is met when exactly the goal steps are active', () => {
+    expect(isGoalMet(lesson, patternWithKicksOn([0, 4, 8, 12]))).toBe(true)
+  })
+
+  it('is not met while only some goal steps are active', () => {
+    expect(isGoalMet(lesson, patternWithKicksOn([]))).toBe(false)
+    expect(isGoalMet(lesson, patternWithKicksOn([0, 4, 8]))).toBe(false)
+  })
+
+  it('is not met when extra steps are active alongside the goal steps', () => {
+    expect(isGoalMet(lesson, patternWithKicksOn([0, 4, 8, 12, 15]))).toBe(false)
+  })
+
+  it('is not met when steps are on the wrong positions', () => {
+    expect(isGoalMet(lesson, patternWithKicksOn([1, 5, 9, 13]))).toBe(false)
+  })
+
+  it('is not met when the goal lane does not exist in the pattern', () => {
+    const snareLesson = parseLesson({
+      ...validLesson,
+      goal: [{ type: 'stepsActive', lane: 'snare', steps: [4, 12] }],
+    })
+    expect(isGoalMet(snareLesson, patternWithKicksOn([4, 12]))).toBe(false)
   })
 })
 

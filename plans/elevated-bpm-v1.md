@@ -89,10 +89,10 @@ Consolidate all state into the versioned `ProjectState` document and autosave it
 
 ### Acceptance criteria
 
-- [ ] All pattern, instrument, transport, and lesson-progress state round-trips through one serialized `ProjectState` document
-- [ ] Refreshing mid-session restores the exact pattern, BPM, and lesson completion state
-- [ ] The document carries a schema version; loading an older version runs a migration path (proven with a trivial v0→v1 migration test)
-- [ ] Autosave is debounced and never causes audible glitches while playing
+- [x] All pattern, instrument, transport, and lesson-progress state round-trips through one serialized `ProjectState` document — `src/model/projectState.ts` defines the versioned document (`patterns[]`, `activePatternId`, `transport`, `instrumentSettings`, `lessonProgress`, `prefs`); App holds it as its single state and all edits go through pure document helpers; round-trip covered by Vitest (`projectState.test.ts`, `projectStore.test.ts`)
+- [x] Refreshing mid-session restores the exact pattern, BPM, and lesson completion state — verified in-browser via Playwright: steps 1/5/9/13, BPM 124, lesson-complete and lesson-dismissed states all survived reloads; an edit made inside the debounce window survived an immediate refresh via the pagehide/visibilitychange flush
+- [x] The document carries a schema version; loading an older version runs a migration path (proven with a trivial v0→v1 migration test) — `migrateProjectState` lifts a v0 doc (single `pattern` + flat `bpm`) to v1 and returns null for corrupt/unknown versions so the app falls back to a fresh document; `loadProjectState` applies migration on every load; covered by Vitest
+- [x] Autosave is debounced and never causes audible glitches while playing — trailing-edge 400 ms debounce (`src/storage/autosave.ts`, fake-timer tested) coalesces edit bursts into one async IndexedDB write; verified while playing in-browser: transport stayed `started` with ticks advancing across three mid-playback saves, zero console errors
 
 ---
 

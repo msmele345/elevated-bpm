@@ -1,4 +1,5 @@
 import * as Tone from 'tone'
+import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type Pattern } from '../model/types'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -9,9 +10,9 @@ import { stepIndexAtTicks } from './stepIndex'
  * step edits are heard on the very next 16th without rescheduling.
  */
 
-export const DEFAULT_BPM = 130
-export const MIN_BPM = 60
-export const MAX_BPM = 200
+// The BPM range/default live in the model (model/transport.ts) — the state
+// document clamps with the same rule — and are re-exported for UI convenience.
+export { DEFAULT_BPM, MAX_BPM, MIN_BPM } from '../model/transport'
 const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
 let bpm = DEFAULT_BPM
@@ -26,7 +27,7 @@ export function setPattern(pattern: Pattern): void {
 }
 
 export function setBpm(next: number): void {
-  bpm = Math.min(MAX_BPM, Math.max(MIN_BPM, next))
+  bpm = clampBpm(next)
   // Ramp instead of jumping so mid-playback tempo changes are click-free;
   // step scheduling derives from transport ticks, so the sequence position
   // is unaffected by the tempo curve.

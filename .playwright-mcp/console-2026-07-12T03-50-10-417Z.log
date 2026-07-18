@@ -1,4 +1,0 @@
-[     278ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5174/node_modules/.vite/deps/react-dom_client.js?v=0c19dbad:20102
-[     285ms] [LOG] %c * Tone.js v15.1.22 *  background: #000; color: #fff @ http://localhost:5174/node_modules/.vite/deps/tone.js?v=0c19dbad:9690
-[     372ms] [WARNING] The AudioContext was not allowed to start. It must be resumed (or created) after a user gesture on the page. https://developer.chrome.com/blog/autoplay/#web_audio @ http://localhost:5174/node_modules/.vite/deps/tone.js?v=0c19dbad:7610
-[     373ms] [WARNING] The AudioContext was not allowed to start. It must be resumed (or created) after a user gesture on the page. https://developer.chrome.com/blog/autoplay/#web_audio @ http://localhost:5174/node_modules/.vite/deps/tone.js?v=0c19dbad:2867

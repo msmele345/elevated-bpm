@@ -1,4 +1,4 @@
-import { STEP_COUNT, type DrumLaneId } from './types'
+import { STEP_COUNT, type DrumLaneId, type Pattern } from './types'
 
 /**
  * Lessons are pure data (see plans/elevated-bpm-v1.md): a JSON definition of
@@ -32,6 +32,20 @@ export function spotlitLaneIds(lesson: Lesson | null): DrumLaneId[] {
   return lesson.spotlight
     .filter((target) => target.startsWith('lane:'))
     .map((target) => target.slice('lane:'.length) as DrumLaneId)
+}
+
+function isAssertionMet(goal: GoalAssertion, pattern: Pattern): boolean {
+  const lane = pattern.lanes.find((l) => l.id === goal.lane)
+  if (!lane) return false
+  const wanted = new Set(goal.steps)
+  // Exact match: every goal step on, every other step off — wrong or extra
+  // steps must never falsely complete a lesson.
+  return lane.steps.every((step, i) => step.on === wanted.has(i))
+}
+
+/** True when every goal assertion of the lesson holds against the live pattern. */
+export function isGoalMet(lesson: Lesson, pattern: Pattern): boolean {
+  return lesson.goal.every((goal) => isAssertionMet(goal, pattern))
 }
 
 function fail(lessonId: string, message: string): never {

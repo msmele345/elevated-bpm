@@ -71,8 +71,8 @@ One complete goal-checked challenge — "build a four-on-the-floor" — running 
 
 ### Acceptance criteria
 
-- [ ] The lesson is loaded from a JSON definition (intro, spotlight targets, declarative goal)
-- [ ] Spotlighting visually highlights the kick lane while the lesson is active
+- [x] The lesson is loaded from a JSON definition (intro, spotlight targets, declarative goal) — `src/lessons/four-on-the-floor.json` parsed through `parseLesson` (`src/model/lesson.ts`), which validates shape and goal assertions with descriptive errors; covered by Vitest (`lesson.test.ts`, `lessons.test.ts`)
+- [x] Spotlighting visually highlights the kick lane while the lesson is active — spotlight targets (`"lane:kick"`) derived via `spotlitLaneIds`; the kick lane gets an amber glow ring + highlighted label while the lesson is active, verified in-browser via Playwright screenshot
 - [ ] Placing kicks on steps 1/5/9/13 is detected automatically and triggers a completion celebration
 - [ ] Wrong or extra steps do not falsely complete the goal
 - [ ] The lesson can be dismissed and resumed; the sandbox is never gated

@@ -1,16 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
+import { LessonPanel } from './components/LessonPanel'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
+import { parseLesson, spotlitLaneIds, type Lesson } from './model/lesson'
 import { createInitialPattern, toggleStep } from './model/pattern'
 import type { DrumLaneId } from './model/types'
 import * as engine from './audio/engine'
+import fourOnTheFloorJson from './lessons/four-on-the-floor.json'
+
+// Lessons are pure data: the definition is JSON, parsed once at module load.
+const fourOnTheFloor = parseLesson(fourOnTheFloorJson)
 
 export default function App() {
   const [pattern, setPattern] = useState(createInitialPattern)
   const [isPlaying, setIsPlaying] = useState(false)
   const [bpm, setBpm] = useState(engine.DEFAULT_BPM)
+  const [activeLesson] = useState<Lesson | null>(fourOnTheFloor)
   const panelRef = useRef<HTMLElement>(null)
+
+  const spotlitLanes = spotlitLaneIds(activeLesson)
 
   usePlayhead(panelRef, isPlaying)
 
@@ -63,6 +72,8 @@ export default function App() {
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
       </header>
 
+      {activeLesson && <LessonPanel lesson={activeLesson} />}
+
       <section className="panel" aria-label="Drum machine" ref={panelRef}>
         <TransportBar
           isPlaying={isPlaying}
@@ -74,6 +85,7 @@ export default function App() {
           <StepRow
             key={lane.id}
             lane={lane}
+            spotlit={spotlitLanes.includes(lane.id)}
             onToggleStep={(stepIndex) => handleToggleStep(lane.id, stepIndex)}
           />
         ))}

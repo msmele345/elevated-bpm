@@ -415,3 +415,78 @@ body::before {
     gap: 4px;
   }
 }
+
+/* ── Lesson panel ──────────────────────────────────────────────────── */
+.lesson-panel {
+  margin-bottom: 14px;
+  padding: 16px 20px;
+  background: linear-gradient(180deg, var(--panel-edge) 0%, var(--panel) 100%);
+  border: 1px solid #000;
+  border-left: 3px solid var(--quad-2);
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+.lesson-tag {
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--quad-2);
+}
+
+.lesson-title {
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lesson-intro {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--silkscreen);
+}
+
+/* ── Lesson spotlight on a lane ────────────────────────────────────── */
+.step-row.is-spotlit {
+  padding: 10px 12px;
+  margin: -10px -12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--quad-2) 5%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 55%, transparent),
+    0 0 22px color-mix(in srgb, var(--quad-2) 22%, transparent),
+    inset 0 0 18px color-mix(in srgb, var(--quad-2) 6%, transparent);
+  animation: spotlight-breathe 2.4s ease-in-out infinite;
+}
+
+.step-row.is-spotlit .lane-label {
+  color: var(--quad-2);
+}
+
+.step-row.is-spotlit .lane-led {
+  background: var(--quad-2);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--quad-2) 80%, transparent);
+}
+
+@keyframes spotlight-breathe {
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--quad-2) 85%, transparent),
+      0 0 30px color-mix(in srgb, var(--quad-2) 38%, transparent),
+      inset 0 0 22px color-mix(in srgb, var(--quad-2) 10%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-row.is-spotlit {
+    animation: none;
+  }
+}

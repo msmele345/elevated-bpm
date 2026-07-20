@@ -4,22 +4,41 @@ import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
 import { isGoalMet, parseLesson, spotlitLaneIds, type Lesson } from './model/lesson'
-import { createInitialPattern, toggleStep } from './model/pattern'
+import {
+  activePattern,
+  createInitialProjectState,
+  setTransportBpm,
+  toggleActivePatternStep,
+  updateLessonProgress,
+} from './model/projectState'
 import type { DrumLaneId } from './model/types'
 import * as engine from './audio/engine'
+import { createAutosaver } from './storage/autosave'
+import { loadProjectState, saveProjectState } from './storage/projectStore'
 import fourOnTheFloorJson from './lessons/four-on-the-floor.json'
 
 // Lessons are pure data: the definition is JSON, parsed once at module load.
 const fourOnTheFloor = parseLesson(fourOnTheFloorJson)
 
+// Long enough to coalesce a burst of step taps into one IndexedDB write,
+// short enough that a save has almost always landed before a refresh.
+const AUTOSAVE_DELAY_MS = 400
+
 export default function App() {
-  const [pattern, setPattern] = useState(createInitialPattern)
+  // ProjectState is the single source of truth: pattern edits, transport
+  // settings, and lesson progress all live in (and persist as) one document.
+  const [project, setProject] = useState(createInitialProjectState)
+  const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [bpm, setBpm] = useState(engine.DEFAULT_BPM)
   const [activeLesson] = useState<Lesson | null>(fourOnTheFloor)
-  const [lessonCompleted, setLessonCompleted] = useState(false)
-  const [lessonDismissed, setLessonDismissed] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
+  const autosaverRef = useRef(createAutosaver(saveProjectState, AUTOSAVE_DELAY_MS))
+
+  const pattern = activePattern(project)
+  const bpm = project.transport.bpm
+  const lessonProgress = activeLesson ? project.lessonProgress[activeLesson.id] : undefined
+  const lessonCompleted = lessonProgress?.completed ?? false
+  const lessonDismissed = lessonProgress?.dismissed ?? false
 
   // Spotlight guides toward the goal, so it rests once the goal is met or
   // the lesson is put away.
@@ -27,12 +46,53 @@ export default function App() {
 
   usePlayhead(panelRef, isPlaying)
 
+  // Hydrate from IndexedDB once on mount; until then the deck shows a fresh
+  // document. Saved state also re-points the audio engine's tempo.
+  useEffect(() => {
+    let cancelled = false
+    void loadProjectState().then((saved) => {
+      if (cancelled) return
+      if (saved) {
+        setProject(saved)
+        engine.setBpm(saved.transport.bpm)
+      }
+      setHydrated(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Debounced autosave of every document change after hydration — never on
+  // the audio clock, and coalesced so playback stays glitch-free.
+  useEffect(() => {
+    if (!hydrated) return
+    autosaverRef.current.schedule(project)
+  }, [project, hydrated])
+
+  // A refresh or tab close inside the debounce window must not lose the last
+  // edit: flush the pending save as the page goes away.
+  useEffect(() => {
+    const flush = () => autosaverRef.current.flush()
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
+
   // Goal detection: re-evaluated on every pattern edit (never on the audio
-  // clock) and latched — un-toggling a step later doesn't revoke completion.
-  // Runs even while dismissed so resuming shows the earned celebration.
+  // clock) and latched in the document — un-toggling a step later doesn't
+  // revoke completion, and completion survives a reload.
   useEffect(() => {
     if (!activeLesson || lessonCompleted) return
-    if (isGoalMet(activeLesson, pattern)) setLessonCompleted(true)
+    if (isGoalMet(activeLesson, pattern)) {
+      setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
+    }
   }, [pattern, activeLesson, lessonCompleted])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
@@ -57,11 +117,11 @@ export default function App() {
   }, [])
 
   const handleToggleStep = (laneId: DrumLaneId, stepIndex: number) => {
-    setPattern((p) => toggleStep(p, laneId, stepIndex))
+    setProject((p) => toggleActivePatternStep(p, laneId, stepIndex))
   }
 
   const handleBpmChange = (next: number) => {
-    setBpm(next)
+    setProject((p) => setTransportBpm(p, next))
     engine.setBpm(next)
   }
 
@@ -73,6 +133,11 @@ export default function App() {
       await engine.play()
       setIsPlaying(true)
     }
+  }
+
+  const handleSetLessonDismissed = (dismissed: boolean) => {
+    if (!activeLesson) return
+    setProject((p) => updateLessonProgress(p, activeLesson.id, { dismissed }))
   }
 
   return (
@@ -89,7 +154,7 @@ export default function App() {
           <button
             type="button"
             className="lesson-resume"
-            onClick={() => setLessonDismissed(false)}
+            onClick={() => handleSetLessonDismissed(false)}
           >
             <span className="lesson-resume-led" aria-hidden="true" />
             Resume lesson · {activeLesson.title}
@@ -98,7 +163,7 @@ export default function App() {
           <LessonPanel
             lesson={activeLesson}
             completed={lessonCompleted}
-            onDismiss={() => setLessonDismissed(true)}
+            onDismiss={() => handleSetLessonDismissed(true)}
           />
         ))}
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createInitialPattern, cycleStep } from '../model/pattern'
 import type { Pattern } from '../model/types'
-import { ACCENT_GAIN, UNACCENTED_GAIN, hitsAtStep } from './hits'
+import { ACCENT_GAIN, UNACCENTED_GAIN, hitsAtStep, voiceStep } from './hits'
 
 /** Turn steps on (one click) or on+accented (two clicks). */
 function program(
@@ -49,5 +49,71 @@ describe('hitsAtStep', () => {
       { laneId: 'kick', gain: ACCENT_GAIN },
       { laneId: 'closedHat', gain: UNACCENTED_GAIN },
     ])
+  })
+
+  it('does not fire a muted lane', () => {
+    const pattern = program(createInitialPattern(), [
+      ['kick', 0],
+      ['closedHat', 0],
+    ])
+
+    const hits = hitsAtStep(pattern, 0, { closedHat: { muted: true, soloed: false } })
+    expect(hits.map((h) => h.laneId)).toEqual(['kick'])
+  })
+
+  it('with a lane soloed, only the soloed lane fires', () => {
+    const pattern = program(createInitialPattern(), [
+      ['kick', 0],
+      ['closedHat', 0],
+    ])
+
+    const hits = hitsAtStep(pattern, 0, { closedHat: { muted: false, soloed: true } })
+    expect(hits.map((h) => h.laneId)).toEqual(['closedHat'])
+  })
+})
+
+describe('voiceStep — open-hat choke (909 behavior)', () => {
+  it('cuts a ringing open hat when the closed hat fires on a later step', () => {
+    // open hat on step 0, closed hat on step 2 — at step 2 the still-ringing
+    // open hat must be choked even though it is not firing then.
+    const pattern = program(createInitialPattern(), [
+      ['openHat', 0],
+      ['closedHat', 2],
+    ])
+
+    expect(voiceStep(pattern, 2).chokes).toContain('openHat')
+    expect(voiceStep(pattern, 2).starts.map((h) => h.laneId)).toEqual(['closedHat'])
+  })
+
+  it('when closed and open hat share a step, the closed hat wins and the open hat does not sound', () => {
+    const pattern = program(createInitialPattern(), [
+      ['closedHat', 4],
+      ['openHat', 4],
+    ])
+
+    const { starts, chokes } = voiceStep(pattern, 4)
+    expect(starts.map((h) => h.laneId)).toEqual(['closedHat'])
+    expect(chokes).toContain('openHat')
+  })
+
+  it('lets the open hat ring when no closed hat fires', () => {
+    const pattern = program(createInitialPattern(), [['openHat', 0]])
+
+    const { starts, chokes } = voiceStep(pattern, 0)
+    expect(starts.map((h) => h.laneId)).toEqual(['openHat'])
+    expect(chokes).toEqual([])
+  })
+
+  it('does not choke the open hat when the closed hat is muted', () => {
+    const pattern = program(createInitialPattern(), [
+      ['closedHat', 4],
+      ['openHat', 4],
+    ])
+
+    const { starts, chokes } = voiceStep(pattern, 4, {
+      closedHat: { muted: true, soloed: false },
+    })
+    expect(starts.map((h) => h.laneId)).toEqual(['openHat'])
+    expect(chokes).toEqual([])
   })
 })

@@ -1,3 +1,4 @@
+import { audibleLaneIds, type Mixer } from '../model/mixer'
 import type { DrumLaneId, Pattern } from '../model/types'
 
 /**
@@ -17,13 +18,53 @@ export interface Hit {
   gain: number
 }
 
-/** Every lane sounding on `stepIndex`, in deck order, with its velocity. */
-export function hitsAtStep(pattern: Pattern, stepIndex: number): Hit[] {
+/**
+ * Choke groups: firing the key lane cuts the ringing value lane. The classic
+ * 909 has one — a closed hat chokes the open hat — but the map keeps the rule
+ * as data so more voices (e.g. a rim/clave pair) are a one-line addition.
+ */
+const CHOKES: Partial<Record<DrumLaneId, DrumLaneId>> = {
+  closedHat: 'openHat',
+}
+
+/**
+ * Every lane sounding on `stepIndex`, in deck order, with its velocity. The
+ * mixer filters the result so muted lanes stay silent and, when any lane is
+ * soloed, only soloed lanes sound (defaults to an all-audible mixer).
+ */
+export function hitsAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer = {}): Hit[] {
+  const audible = new Set(audibleLaneIds(pattern.lanes.map((lane) => lane.id), mixer))
   const hits: Hit[] = []
   for (const lane of pattern.lanes) {
+    if (!audible.has(lane.id)) continue
     const step = lane.steps[stepIndex]
     if (!step?.on) continue
     hits.push({ laneId: lane.id, gain: step.accent ? ACCENT_GAIN : UNACCENTED_GAIN })
   }
   return hits
+}
+
+/** How a single 16th should be voiced: what to trigger and what ring to cut. */
+export interface StepVoicing {
+  /** Lanes to trigger this step, each at its velocity, choked lanes removed. */
+  starts: Hit[]
+  /** Ringing lanes to silence at this step because a choker fired. */
+  chokes: DrumLaneId[]
+}
+
+/**
+ * Resolve one 16th into starts and chokes. When a choker lane fires (after the
+ * mixer is applied), its choke target is cut — silencing a still-ringing voice
+ * from an earlier step and preventing a same-step target from sounding, so the
+ * open hat behaves like real 909 hardware under the closed hat.
+ */
+export function voiceStep(pattern: Pattern, stepIndex: number, mixer: Mixer = {}): StepVoicing {
+  const hits = hitsAtStep(pattern, stepIndex, mixer)
+  const firing = new Set(hits.map((hit) => hit.laneId))
+  const chokes: DrumLaneId[] = []
+  for (const [choker, target] of Object.entries(CHOKES) as [DrumLaneId, DrumLaneId][]) {
+    if (firing.has(choker)) chokes.push(target)
+  }
+  const choked = new Set(chokes)
+  return { starts: hits.filter((hit) => !choked.has(hit.laneId)), chokes }
 }

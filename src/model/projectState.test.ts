@@ -8,6 +8,8 @@ import {
   migrateProjectState,
   setTransportBpm,
   cycleActivePatternStep,
+  toggleLaneMute,
+  toggleLaneSolo,
   updateLessonProgress,
 } from './projectState'
 
@@ -31,6 +33,28 @@ describe('cycleActivePatternStep', () => {
     expect(activePattern(next).lanes[0].steps[4].on).toBe(true)
     expect(activePattern(state).lanes[0].steps[4].on).toBe(false)
     expect(next).not.toBe(state)
+  })
+})
+
+describe('mixer', () => {
+  it('starts with an empty mixer — every lane audible', () => {
+    expect(createInitialProjectState().mixer).toEqual({})
+  })
+
+  it('toggles a lane mute immutably in the document', () => {
+    const state = createInitialProjectState()
+    const muted = toggleLaneMute(state, 'closedHat')
+    expect(muted.mixer.closedHat).toEqual({ muted: true, soloed: false })
+    expect(state.mixer.closedHat).toBeUndefined()
+
+    const unmuted = toggleLaneMute(muted, 'closedHat')
+    expect(unmuted.mixer.closedHat?.muted).toBe(false)
+  })
+
+  it('toggles a lane solo without clearing its mute flag', () => {
+    const state = toggleLaneMute(createInitialProjectState(), 'kick')
+    const soloed = toggleLaneSolo(state, 'kick')
+    expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true })
   })
 })
 
@@ -84,7 +108,16 @@ describe('migrateProjectState', () => {
       instrumentSettings: {},
       lessonProgress: {},
       prefs: {},
+      mixer: {},
     })
+  })
+
+  it('gives a v2 document (no mixer) an empty mixer on load', () => {
+    const v2 = { ...createInitialProjectState(), version: 2 } as Record<string, unknown>
+    delete v2.mixer
+    const migrated = migrateProjectState(v2)!
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.mixer).toEqual({})
   })
 
   it('fills in the full kit when loading a v1 document saved with only a kick lane', () => {

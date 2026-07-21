@@ -1,7 +1,8 @@
 import * as Tone from 'tone'
+import type { Mixer } from '../model/mixer'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
-import { hitsAtStep } from './hits'
+import { voiceStep } from './hits'
 import { KIT_SAMPLES } from './kit'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -19,6 +20,7 @@ const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
 let bpm = DEFAULT_BPM
 let currentPattern: Pattern | null = null
+let currentMixer: Mixer = {}
 let repeatScheduled = false
 
 /**
@@ -35,6 +37,11 @@ let samplesLoaded: Promise<void> | null = null
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {
   currentPattern = pattern
+}
+
+/** Point the scheduler at the latest mute/solo state. Cheap; call on every edit. */
+export function setMixer(mixer: Mixer): void {
+  currentMixer = mixer
 }
 
 export function setBpm(next: number): void {
@@ -78,6 +85,7 @@ export async function unlockAudio(): Promise<void> {
       ;(window as unknown as Record<string, unknown>).__ebpm = {
         transport: Tone.getTransport(),
         meter,
+        voices,
       }
     }
   }
@@ -94,9 +102,16 @@ export async function play(): Promise<void> {
       const ticks = transport.getTicksAtTime(time)
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
       if (!currentPattern || !voices) return
-      // Every lane's hits on this 16th, each at its own velocity — all voices
-      // share the transport, so lanes stay independent and sample-locked.
-      for (const hit of hitsAtStep(currentPattern, stepIndex)) {
+      // Resolve the 16th through the mixer and choke groups: muted/soloed
+      // lanes are filtered out and a firing closed hat cuts the open hat.
+      const { starts, chokes } = voiceStep(currentPattern, stepIndex, currentMixer)
+      // Cut ringing choked voices first so a same-time restart isn't clipped.
+      for (const laneId of chokes) {
+        voices[laneId].player.stop(time)
+      }
+      // All voices share the transport, so lanes stay independent and
+      // sample-locked; each fires at its own accent velocity.
+      for (const hit of starts) {
         const voice = voices[hit.laneId]
         voice.gain.gain.setValueAtTime(hit.gain, time)
         voice.player.start(time)

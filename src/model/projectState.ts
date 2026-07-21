@@ -1,4 +1,4 @@
-import { createInitialPattern, toggleStep } from './pattern'
+import { createInitialPattern, cycleStep, withFullKit } from './pattern'
 import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
 import type { DrumLaneId, Pattern } from './types'
 
@@ -9,7 +9,8 @@ import type { DrumLaneId, Pattern } from './types'
  * the future URL-sharing/sync document.
  */
 
-export const PROJECT_STATE_VERSION = 1
+// v2 grew the pattern from the single Phase 1 kick lane to the full kit.
+export const PROJECT_STATE_VERSION = 2
 
 /** Per-lesson progress; keyed by lesson id in the document. */
 export interface LessonProgress {
@@ -47,8 +48,8 @@ export function activePattern(state: ProjectState): Pattern {
   return pattern
 }
 
-/** Immutably toggle one step of the active pattern. */
-export function toggleActivePatternStep(
+/** Immutably advance one step of the active pattern (off → on → accent → off). */
+export function cycleActivePatternStep(
   state: ProjectState,
   laneId: DrumLaneId,
   stepIndex: number,
@@ -56,7 +57,7 @@ export function toggleActivePatternStep(
   return {
     ...state,
     patterns: state.patterns.map((p) =>
-      p.id === state.activePatternId ? toggleStep(p, laneId, stepIndex) : p,
+      p.id === state.activePatternId ? cycleStep(p, laneId, stepIndex) : p,
     ),
   }
 }
@@ -89,7 +90,10 @@ export function updateLessonProgress(
 export function migrateProjectState(raw: unknown): ProjectState | null {
   if (raw === null || typeof raw !== 'object') return null
   const doc = raw as { version?: unknown }
-  if (doc.version === 0) return migrateV0(doc)
+  // Each step lifts the document one version; they chain so an ancient save
+  // reaches the current shape through the same path a recent one takes.
+  if (doc.version === 0) return migrateV1ToV2(migrateV0ToV1(doc))
+  if (doc.version === 1) return migrateV1ToV2(doc as ProjectStateV1)
   if (doc.version === PROJECT_STATE_VERSION) return raw as ProjectState
   return null
 }
@@ -101,10 +105,13 @@ interface ProjectStateV0 {
   bpm: number
 }
 
-function migrateV0(doc: object): ProjectState {
+/** v1 was the document, but patterns carried only the Phase 1 kick lane. */
+type ProjectStateV1 = Omit<ProjectState, 'version'> & { version: 1 }
+
+function migrateV0ToV1(doc: object): ProjectStateV1 {
   const { pattern, bpm } = doc as ProjectStateV0
   return {
-    version: PROJECT_STATE_VERSION,
+    version: 1,
     patterns: [pattern],
     activePatternId: pattern.id,
     transport: { bpm: clampBpm(bpm) },
@@ -112,4 +119,8 @@ function migrateV0(doc: object): ProjectState {
     lessonProgress: {},
     prefs: {},
   }
+}
+
+function migrateV1ToV2(doc: ProjectStateV1): ProjectState {
+  return { ...doc, version: 2, patterns: doc.patterns.map(withFullKit) }
 }

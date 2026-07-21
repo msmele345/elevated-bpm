@@ -7,8 +7,8 @@ import { isGoalMet, parseLesson, spotlitLaneIds, type Lesson } from './model/les
 import {
   activePattern,
   createInitialProjectState,
+  cycleActivePatternStep,
   setTransportBpm,
-  toggleActivePatternStep,
   updateLessonProgress,
 } from './model/projectState'
 import type { DrumLaneId } from './model/types'
@@ -116,8 +116,8 @@ export default function App() {
     }
   }, [])
 
-  const handleToggleStep = (laneId: DrumLaneId, stepIndex: number) => {
-    setProject((p) => toggleActivePatternStep(p, laneId, stepIndex))
+  const handleCycleStep = (laneId: DrumLaneId, stepIndex: number) => {
+    setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
   }
 
   const handleBpmChange = (next: number) => {
@@ -179,10 +179,10 @@ export default function App() {
             key={lane.id}
             lane={lane}
             spotlit={spotlitLanes.includes(lane.id)}
-            onToggleStep={(stepIndex) => handleToggleStep(lane.id, stepIndex)}
+            onCycleStep={(stepIndex) => handleCycleStep(lane.id, stepIndex)}
           />
         ))}
-        <p className="panel-hint">Tap steps to program the kick — 1 · 5 · 9 · 13 is four-on-the-floor.</p>
+        <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
       </section>
     </main>
   )

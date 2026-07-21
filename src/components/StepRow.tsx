@@ -2,7 +2,7 @@ import type { DrumLane } from '../model/types'
 
 interface StepRowProps {
   lane: DrumLane
-  onToggleStep: (stepIndex: number) => void
+  onCycleStep: (stepIndex: number) => void
   spotlit?: boolean
 }
 
@@ -11,7 +11,7 @@ interface StepRowProps {
  * classic 909 color quads. Steps are plain DOM buttons (per the rendering
  * split: pads/keys/steps are DOM/CSS, never canvas).
  */
-export function StepRow({ lane, onToggleStep, spotlit = false }: StepRowProps) {
+export function StepRow({ lane, onCycleStep, spotlit = false }: StepRowProps) {
   return (
     <div className={spotlit ? 'step-row is-spotlit' : 'step-row'}>
       <div className="lane-label">
@@ -26,9 +26,10 @@ export function StepRow({ lane, onToggleStep, spotlit = false }: StepRowProps) {
             className="step"
             data-quad={Math.floor(i / 4)}
             data-step-index={i}
+            data-accent={step.accent || undefined}
             aria-pressed={step.on}
-            aria-label={`${lane.label} step ${i + 1}`}
-            onClick={() => onToggleStep(i)}
+            aria-label={`${lane.label} step ${i + 1}${step.accent ? ' (accent)' : ''}`}
+            onClick={() => onCycleStep(i)}
           >
             <span className="step-led" aria-hidden="true" />
             <span className="step-num" aria-hidden="true">

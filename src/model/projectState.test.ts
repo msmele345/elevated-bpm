@@ -7,7 +7,7 @@ import {
   PROJECT_STATE_VERSION,
   migrateProjectState,
   setTransportBpm,
-  toggleActivePatternStep,
+  cycleActivePatternStep,
   updateLessonProgress,
 } from './projectState'
 
@@ -24,10 +24,10 @@ describe('createInitialProjectState', () => {
   })
 })
 
-describe('toggleActivePatternStep', () => {
+describe('cycleActivePatternStep', () => {
   it('toggles a step of the active pattern immutably through the document', () => {
     const state = createInitialProjectState()
-    const next = toggleActivePatternStep(state, 'kick', 4)
+    const next = cycleActivePatternStep(state, 'kick', 4)
     expect(activePattern(next).lanes[0].steps[4].on).toBe(true)
     expect(activePattern(state).lanes[0].steps[4].on).toBe(false)
     expect(next).not.toBe(state)
@@ -65,7 +65,7 @@ describe('updateLessonProgress', () => {
 describe('migrateProjectState', () => {
   it('returns a current-version document unchanged', () => {
     const state = updateLessonProgress(
-      setTransportBpm(toggleActivePatternStep(createInitialProjectState(), 'kick', 0), 137),
+      setTransportBpm(cycleActivePatternStep(createInitialProjectState(), 'kick', 0), 137),
       'four-on-the-floor',
       { completed: true },
     )
@@ -85,6 +85,50 @@ describe('migrateProjectState', () => {
       lessonProgress: {},
       prefs: {},
     })
+  })
+
+  it('fills in the full kit when loading a v1 document saved with only a kick lane', () => {
+    const kickOnly = {
+      version: 1,
+      patterns: [
+        {
+          id: 'pattern-1',
+          name: 'Pattern 1',
+          lanes: [
+            {
+              id: 'kick',
+              label: 'Kick',
+              steps: Array.from({ length: 16 }, (_, i) => ({
+                on: i % 4 === 0,
+                accent: false,
+              })),
+            },
+          ],
+        },
+      ],
+      activePatternId: 'pattern-1',
+      transport: { bpm: 128 },
+      instrumentSettings: {},
+      lessonProgress: { 'four-on-the-floor': { completed: true, dismissed: false } },
+      prefs: {},
+    }
+
+    const migrated = migrateProjectState(kickOnly)!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    // The user's programmed kick survives; the new lanes arrive empty.
+    const lanes = migrated.patterns[0].lanes
+    expect(lanes.map((lane) => lane.id)).toEqual([
+      'kick',
+      'snare',
+      'closedHat',
+      'openHat',
+      'perc',
+    ])
+    expect(lanes[0].steps.filter((s) => s.on)).toHaveLength(4)
+    expect(lanes.slice(1).every((lane) => lane.steps.every((s) => !s.on))).toBe(true)
+    expect(migrated.transport.bpm).toBe(128)
+    expect(migrated.lessonProgress['four-on-the-floor'].completed).toBe(true)
   })
 
   it('returns null for corrupt or unknown-version input', () => {

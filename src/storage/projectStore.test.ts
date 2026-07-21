@@ -6,7 +6,7 @@ import {
   createInitialProjectState,
   PROJECT_STATE_VERSION,
   setTransportBpm,
-  toggleActivePatternStep,
+  cycleActivePatternStep,
   type ProjectState,
 } from '../model/projectState'
 import { loadProjectState, saveProjectState } from './projectStore'
@@ -19,7 +19,7 @@ beforeEach(() => {
 describe('projectStore', () => {
   it('round-trips a ProjectState document through IndexedDB', async () => {
     const state = setTransportBpm(
-      toggleActivePatternStep(createInitialProjectState(), 'kick', 8),
+      cycleActivePatternStep(createInitialProjectState(), 'kick', 8),
       124,
     )
     await saveProjectState(state)

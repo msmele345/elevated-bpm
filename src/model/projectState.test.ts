@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { BASS_PARAMS, DEFAULT_BASS_SETTINGS } from './bass'
+import { DEFAULT_PITCH, MIN_NOTE_LENGTH } from './note'
 import { createDemoPattern, createInitialPattern } from './pattern'
 import { DEFAULT_BPM } from './transport'
 import {
@@ -7,10 +9,14 @@ import {
   openingProjectState,
   PROJECT_STATE_VERSION,
   migrateProjectState,
+  resizeActivePatternNote,
+  setBassParamValue,
   setTransportBpm,
   cycleActivePatternStep,
+  toggleActivePatternNoteStep,
   toggleLaneMute,
   toggleLaneSolo,
+  transposeActivePatternNote,
   updateLessonProgress,
 } from './projectState'
 
@@ -22,7 +28,7 @@ describe('createInitialProjectState', () => {
     expect(state.activePatternId).toBe(state.patterns[0].id)
     expect(state.transport.bpm).toBe(DEFAULT_BPM)
     expect(state.lessonProgress).toEqual({})
-    expect(state.instrumentSettings).toEqual({})
+    expect(state.instrumentSettings).toEqual({ bass: DEFAULT_BASS_SETTINGS })
     expect(state.prefs).toEqual({})
   })
 })
@@ -48,6 +54,56 @@ describe('cycleActivePatternStep', () => {
     expect(activePattern(next).lanes[0].steps[4].on).toBe(true)
     expect(activePattern(state).lanes[0].steps[4].on).toBe(false)
     expect(next).not.toBe(state)
+  })
+})
+
+describe('bass note editing', () => {
+  function bassSteps(state: ReturnType<typeof createInitialProjectState>) {
+    return activePattern(state).noteLanes.find((lane) => lane.id === 'bass')!.steps
+  }
+
+  it('toggles a bass note of the active pattern immutably through the document', () => {
+    const state = createInitialProjectState()
+    const next = toggleActivePatternNoteStep(state, 'bass', 4)
+
+    expect(bassSteps(next)[4]).toEqual({
+      on: true,
+      pitch: DEFAULT_PITCH,
+      length: MIN_NOTE_LENGTH,
+    })
+    expect(bassSteps(state)[4].on).toBe(false)
+  })
+
+  it('transposes and resizes a note through the document', () => {
+    const state = toggleActivePatternNoteStep(createInitialProjectState(), 'bass', 0)
+    const shaped = resizeActivePatternNote(transposeActivePatternNote(state, 'bass', 0, 4), 'bass', 0, 1)
+
+    expect(bassSteps(shaped)[0].pitch).toBe(DEFAULT_PITCH + 4)
+    expect(bassSteps(shaped)[0].length).toBe(MIN_NOTE_LENGTH + 1)
+  })
+
+  it('leaves the drum lanes of the pattern untouched', () => {
+    const state = cycleActivePatternStep(createInitialProjectState(), 'kick', 0)
+    const next = toggleActivePatternNoteStep(state, 'bass', 8)
+
+    expect(activePattern(next).lanes[0].steps[0].on).toBe(true)
+  })
+})
+
+describe('setBassParamValue', () => {
+  it('stores a knob value in instrumentSettings, clamped, without touching the pattern', () => {
+    const state = createInitialProjectState()
+    const swept = setBassParamValue(state, 'cutoff', 2400)
+
+    expect(swept.instrumentSettings.bass.cutoff).toBe(2400)
+    expect(swept.instrumentSettings.bass.resonance).toBe(DEFAULT_BASS_SETTINGS.resonance)
+    expect(activePattern(swept)).toBe(activePattern(state))
+    expect(state.instrumentSettings.bass.cutoff).toBe(DEFAULT_BASS_SETTINGS.cutoff)
+
+    const resonance = BASS_PARAMS.find((param) => param.id === 'resonance')!
+    expect(setBassParamValue(state, 'resonance', 1e6).instrumentSettings.bass.resonance).toBe(
+      resonance.max,
+    )
   })
 })
 
@@ -120,11 +176,47 @@ describe('migrateProjectState', () => {
       patterns: [pattern],
       activePatternId: pattern.id,
       transport: { bpm: 125 },
-      instrumentSettings: {},
+      instrumentSettings: { bass: DEFAULT_BASS_SETTINGS },
       lessonProgress: {},
       prefs: {},
       mixer: {},
     })
+  })
+
+  it('gives a v3 document (drums only) an empty bass lane and the default patch', () => {
+    const v3 = {
+      ...createInitialProjectState(),
+      version: 3,
+      instrumentSettings: {},
+      patterns: [{ ...createInitialPattern(), noteLanes: undefined }],
+    } as unknown
+
+    const migrated = migrateProjectState(JSON.parse(JSON.stringify(v3)))!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.instrumentSettings.bass).toEqual(DEFAULT_BASS_SETTINGS)
+    const bass = migrated.patterns[0].noteLanes.find((lane) => lane.id === 'bass')!
+    expect(bass.steps).toHaveLength(16)
+    expect(bass.steps.every((step) => !step.on)).toBe(true)
+  })
+
+  it('keeps a saved bassline and patch when loading a current-version document', () => {
+    const saved = setBassParamValue(
+      transposeActivePatternNote(
+        toggleActivePatternNoteStep(createInitialProjectState(), 'bass', 2),
+        'bass',
+        2,
+        3,
+      ),
+      'cutoff',
+      2400,
+    )
+
+    const migrated = migrateProjectState(JSON.parse(JSON.stringify(saved)))!
+
+    expect(migrated.instrumentSettings.bass.cutoff).toBe(2400)
+    const bass = migrated.patterns[0].noteLanes.find((lane) => lane.id === 'bass')!
+    expect(bass.steps[2]).toEqual({ on: true, pitch: DEFAULT_PITCH + 3, length: MIN_NOTE_LENGTH })
   })
 
   it('gives a v2 document (no mixer) an empty mixer on load', () => {

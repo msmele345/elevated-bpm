@@ -1,3 +1,4 @@
+import { NO_PARAM_MOTION, paramTravel, type ParamMotion } from './paramMotion'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from './types'
 
 /**
@@ -16,7 +17,19 @@ export interface StepsActiveGoal {
   steps: number[]
 }
 
-export type GoalAssertion = StepsActiveGoal
+/**
+ * Sound-design goal: the user moved a knob across at least `minTravel` of its
+ * range (0..1) while the loop was running. Motion, not a final value — the
+ * lesson is "hear what the filter does", and any single cutoff setting would
+ * be a poor proxy for that.
+ */
+export interface ParamSweptGoal {
+  type: 'paramSwept'
+  param: string
+  minTravel: number
+}
+
+export type GoalAssertion = StepsActiveGoal | ParamSweptGoal
 
 export interface Lesson {
   id: string
@@ -26,15 +39,36 @@ export interface Lesson {
   goal: GoalAssertion[]
 }
 
-/** Lane ids the active lesson spotlights; empty when no lesson is active. */
-export function spotlitLaneIds(lesson: Lesson | null): DrumLaneId[] {
+/** Ids of one kind of spotlight target, e.g. the "kick" of "lane:kick". */
+function spotlitIds(lesson: Lesson | null, prefix: string): string[] {
   if (!lesson) return []
   return lesson.spotlight
-    .filter((target) => target.startsWith('lane:'))
-    .map((target) => target.slice('lane:'.length) as DrumLaneId)
+    .filter((target) => target.startsWith(prefix))
+    .map((target) => target.slice(prefix.length))
 }
 
-function isAssertionMet(goal: GoalAssertion, pattern: Pattern): boolean {
+/** Lane ids the active lesson spotlights; empty when no lesson is active. */
+export function spotlitLaneIds(lesson: Lesson | null): DrumLaneId[] {
+  return spotlitIds(lesson, 'lane:') as DrumLaneId[]
+}
+
+/** Knob ids the active lesson spotlights, e.g. "knob:cutoff" → "cutoff". */
+export function spotlitParamIds(lesson: Lesson | null): string[] {
+  return spotlitIds(lesson, 'knob:')
+}
+
+/**
+ * Everything a goal can be asserted against: the document as it stands, plus
+ * what the user has done to it this session. Goals stay declarative; the
+ * context is the only thing that grows as the vocabulary does.
+ */
+export interface GoalContext {
+  pattern: Pattern
+  /** Knob motion observed during playback; absent for a session that has moved nothing. */
+  motion?: ParamMotion
+}
+
+function isStepsActiveMet(goal: StepsActiveGoal, pattern: Pattern): boolean {
   const lane = pattern.lanes.find((l) => l.id === goal.lane)
   if (!lane) return false
   const wanted = new Set(goal.steps)
@@ -43,21 +77,29 @@ function isAssertionMet(goal: GoalAssertion, pattern: Pattern): boolean {
   return lane.steps.every((step, i) => step.on === wanted.has(i))
 }
 
-/** True when every goal assertion of the lesson holds against the live pattern. */
-export function isGoalMet(lesson: Lesson, pattern: Pattern): boolean {
-  return lesson.goal.every((goal) => isAssertionMet(goal, pattern))
+function isAssertionMet(goal: GoalAssertion, context: GoalContext): boolean {
+  switch (goal.type) {
+    case 'stepsActive':
+      return isStepsActiveMet(goal, context.pattern)
+    case 'paramSwept':
+      return paramTravel(context.motion ?? NO_PARAM_MOTION, goal.param) >= goal.minTravel
+  }
+}
+
+/** True when every goal assertion of the lesson holds against the live session. */
+export function isGoalMet(lesson: Lesson, context: GoalContext): boolean {
+  return lesson.goal.every((goal) => isAssertionMet(goal, context))
 }
 
 function fail(lessonId: string, message: string): never {
   throw new Error(`Invalid lesson${lessonId ? ` "${lessonId}"` : ''}: ${message}`)
 }
 
-function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion {
-  const goal = raw as Partial<StepsActiveGoal> | null
-  if (goal === null || typeof goal !== 'object') fail(lessonId, `goal[${index}] must be an object`)
-  if (goal.type !== 'stepsActive') {
-    fail(lessonId, `goal[${index}] has unknown type "${String(goal.type)}"`)
-  }
+function parseStepsActiveGoal(
+  goal: Partial<StepsActiveGoal>,
+  lessonId: string,
+  index: number,
+): StepsActiveGoal {
   if (typeof goal.lane !== 'string') fail(lessonId, `goal[${index}] is missing a lane`)
   if (
     !Array.isArray(goal.steps) ||
@@ -66,6 +108,35 @@ function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion
     fail(lessonId, `goal[${index}] steps must be integers in [0, ${STEP_COUNT})`)
   }
   return { type: 'stepsActive', lane: goal.lane as DrumLaneId, steps: goal.steps }
+}
+
+function parseParamSweptGoal(
+  goal: Partial<ParamSweptGoal>,
+  lessonId: string,
+  index: number,
+): ParamSweptGoal {
+  if (typeof goal.param !== 'string' || goal.param === '') {
+    fail(lessonId, `goal[${index}] is missing a param`)
+  }
+  // Travel is a fraction of the knob's range, so anything outside (0, 1] is
+  // either a no-op goal or one no amount of knob turning can ever satisfy.
+  if (typeof goal.minTravel !== 'number' || !(goal.minTravel > 0 && goal.minTravel <= 1)) {
+    fail(lessonId, `goal[${index}] minTravel must be a number in (0, 1]`)
+  }
+  return { type: 'paramSwept', param: goal.param, minTravel: goal.minTravel }
+}
+
+function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion {
+  const goal = raw as Partial<GoalAssertion> | null
+  if (goal === null || typeof goal !== 'object') fail(lessonId, `goal[${index}] must be an object`)
+  switch (goal.type) {
+    case 'stepsActive':
+      return parseStepsActiveGoal(goal, lessonId, index)
+    case 'paramSwept':
+      return parseParamSweptGoal(goal, lessonId, index)
+    default:
+      fail(lessonId, `goal[${index}] has unknown type "${String(goal.type)}"`)
+  }
 }
 
 /** Parse an untrusted JSON value into a Lesson, throwing a descriptive error if malformed. */

@@ -1,0 +1,3 @@
+[  218812ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5173/@vite/client:864
+[14382667ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/react-dom_client.js?v=3321db96:20102
+[14382669ms] [LOG] %c * Tone.js v15.1.22 *  background: #000; color: #fff @ http://localhost:5173/node_modules/.vite/deps/tone.js?v=3321db96:9690

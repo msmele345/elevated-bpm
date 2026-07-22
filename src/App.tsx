@@ -1,27 +1,37 @@
 import { useEffect, useRef, useState } from 'react'
+import { BassPanel } from './components/BassPanel'
 import { LessonPanel } from './components/LessonPanel'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
-import { isGoalMet, parseLesson, spotlitLaneIds, type Lesson } from './model/lesson'
+import { bassParamSpec, type BassParamId } from './model/bass'
+import { isGoalMet, parseLesson, spotlitLaneIds, spotlitParamIds } from './model/lesson'
+import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activePattern,
   createInitialProjectState,
   cycleActivePatternStep,
   openingProjectState,
+  resizeActivePatternNote,
+  setBassParamValue,
   setTransportBpm,
+  toggleActivePatternNoteStep,
   toggleLaneMute,
   toggleLaneSolo,
+  transposeActivePatternNote,
   updateLessonProgress,
 } from './model/projectState'
 import type { DrumLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
+import filterSweepJson from './lessons/filter-sweep.json'
 import fourOnTheFloorJson from './lessons/four-on-the-floor.json'
 
-// Lessons are pure data: the definition is JSON, parsed once at module load.
-const fourOnTheFloor = parseLesson(fourOnTheFloorJson)
+// Lessons are pure data: the definitions are JSON, parsed once at module load.
+// The order is the arc — rhythm first, then sound design. Full arc navigation
+// (jumping between lessons) lands in Phase 7.
+const LESSONS = [fourOnTheFloorJson, filterSweepJson].map(parseLesson)
 
 // Long enough to coalesce a burst of step taps into one IndexedDB write,
 // short enough that a save has almost always landed before a refresh.
@@ -33,22 +43,41 @@ export default function App() {
   const [project, setProject] = useState(createInitialProjectState)
   const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [activeLesson] = useState<Lesson | null>(fourOnTheFloor)
-  const panelRef = useRef<HTMLElement>(null)
+  // Knob motion is a claim about this session, not about the saved document:
+  // it is what the user just did to a running loop, so it lives in memory and
+  // never dirties the autosave. Completion itself is still latched in the
+  // document, so an earned sweep survives a reload.
+  const [paramMotion, setParamMotion] = useState(NO_PARAM_MOTION)
+  // The playhead sweeps every grid on the deck — drums and bass alike — so
+  // its root is the deck, not one panel.
+  const deckRef = useRef<HTMLElement>(null)
   const autosaverRef = useRef(createAutosaver(saveProjectState, AUTOSAVE_DELAY_MS))
 
   const pattern = activePattern(project)
+  const bassLane = pattern.noteLanes[0]
+  const bassSettings = project.instrumentSettings.bass
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
-  const lessonProgress = activeLesson ? project.lessonProgress[activeLesson.id] : undefined
+
+  // The arc advances only once a finished lesson is put away, so the
+  // celebration is never cut short by the next lesson appearing over it.
+  const activeLesson =
+    LESSONS.find((lesson) => {
+      const progress = project.lessonProgress[lesson.id]
+      return !(progress?.completed && progress.dismissed)
+    }) ?? LESSONS[LESSONS.length - 1]
+
+  const lessonProgress = project.lessonProgress[activeLesson.id]
   const lessonCompleted = lessonProgress?.completed ?? false
   const lessonDismissed = lessonProgress?.dismissed ?? false
 
   // Spotlight guides toward the goal, so it rests once the goal is met or
   // the lesson is put away.
-  const spotlitLanes = lessonCompleted || lessonDismissed ? [] : spotlitLaneIds(activeLesson)
+  const spotlitResting = lessonCompleted || lessonDismissed
+  const spotlitLanes = spotlitResting ? [] : spotlitLaneIds(activeLesson)
+  const spotlitParams = spotlitResting ? [] : spotlitParamIds(activeLesson)
 
-  usePlayhead(panelRef, isPlaying)
+  usePlayhead(deckRef, isPlaying)
 
   // Hydrate from IndexedDB once on mount: a returning user gets their saved
   // beat back, a first-time one gets the demo groove so the deck is never
@@ -90,15 +119,16 @@ export default function App() {
     }
   }, [])
 
-  // Goal detection: re-evaluated on every pattern edit (never on the audio
-  // clock) and latched in the document — un-toggling a step later doesn't
-  // revoke completion, and completion survives a reload.
+  // Goal detection: re-evaluated on every user edit — a step tap or a knob
+  // move — and never on the audio clock. Completion is latched in the
+  // document, so undoing the work later doesn't revoke it and the earned
+  // lesson survives a reload.
   useEffect(() => {
-    if (!activeLesson || lessonCompleted) return
-    if (isGoalMet(activeLesson, pattern)) {
+    if (lessonCompleted) return
+    if (isGoalMet(activeLesson, { pattern, motion: paramMotion })) {
       setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
     }
-  }, [pattern, activeLesson, lessonCompleted])
+  }, [pattern, paramMotion, activeLesson, lessonCompleted])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -111,6 +141,12 @@ export default function App() {
   useEffect(() => {
     engine.setMixer(project.mixer)
   }, [project.mixer])
+
+  // And the bass patch: the engine ramps cutoff/resonance, so a knob dragged
+  // mid-loop reshapes the sound as it moves rather than on the next note.
+  useEffect(() => {
+    engine.setBassSettings(bassSettings)
+  }, [bassSettings])
 
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
@@ -139,6 +175,25 @@ export default function App() {
     setProject((p) => toggleLaneSolo(p, laneId))
   }
 
+  const handleToggleNoteStep = (stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteStep(p, 'bass', stepIndex))
+  }
+
+  const handleTransposeNote = (stepIndex: number, semitones: number) => {
+    setProject((p) => transposeActivePatternNote(p, 'bass', stepIndex, semitones))
+  }
+
+  const handleResizeNote = (stepIndex: number, steps: number) => {
+    setProject((p) => resizeActivePatternNote(p, 'bass', stepIndex, steps))
+  }
+
+  const handleBassParamChange = (id: BassParamId, value: number) => {
+    setProject((p) => setBassParamValue(p, id, value))
+    // Sound design is something you do to a running loop, so only motion over
+    // playing audio counts toward a sweep goal.
+    setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlaying))
+  }
+
   const handleBpmChange = (next: number) => {
     setProject((p) => setTransportBpm(p, next))
     engine.setBpm(next)
@@ -155,12 +210,11 @@ export default function App() {
   }
 
   const handleSetLessonDismissed = (dismissed: boolean) => {
-    if (!activeLesson) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { dismissed }))
   }
 
   return (
-    <main className="deck">
+    <main className="deck" ref={deckRef}>
       <header className="deck-header">
         <h1 className="brand">
           Elevated <em>BPM</em>
@@ -168,25 +222,24 @@ export default function App() {
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
       </header>
 
-      {activeLesson &&
-        (lessonDismissed ? (
-          <button
-            type="button"
-            className="lesson-resume"
-            onClick={() => handleSetLessonDismissed(false)}
-          >
-            <span className="lesson-resume-led" aria-hidden="true" />
-            Resume lesson · {activeLesson.title}
-          </button>
-        ) : (
-          <LessonPanel
-            lesson={activeLesson}
-            completed={lessonCompleted}
-            onDismiss={() => handleSetLessonDismissed(true)}
-          />
-        ))}
+      {lessonDismissed ? (
+        <button
+          type="button"
+          className="lesson-resume"
+          onClick={() => handleSetLessonDismissed(false)}
+        >
+          <span className="lesson-resume-led" aria-hidden="true" />
+          Resume lesson · {activeLesson.title}
+        </button>
+      ) : (
+        <LessonPanel
+          lesson={activeLesson}
+          completed={lessonCompleted}
+          onDismiss={() => handleSetLessonDismissed(true)}
+        />
+      )}
 
-      <section className="panel" aria-label="Drum machine" ref={panelRef}>
+      <section className="panel" aria-label="Drum machine">
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}
@@ -214,6 +267,16 @@ export default function App() {
         })}
         <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
       </section>
+
+      <BassPanel
+        lane={bassLane}
+        settings={bassSettings}
+        spotlitParams={spotlitParams}
+        onToggleStep={handleToggleNoteStep}
+        onTranspose={handleTransposeNote}
+        onResize={handleResizeNote}
+        onParamChange={handleBassParamChange}
+      />
     </main>
   )
 }

@@ -278,7 +278,10 @@ body::before {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 132px;
+  /* Fixed, not a floor: every lane's grid must start at the same x or the step
+     columns stop lining up and a beat can no longer be read down the column.
+     Sized to the longest label + its mute/solo buttons ("Closed Hat", 170px). */
+  flex: 0 0 176px;
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 0.8rem;

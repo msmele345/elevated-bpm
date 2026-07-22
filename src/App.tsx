@@ -1,17 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
+import { BassPanel } from './components/BassPanel'
 import { LessonPanel } from './components/LessonPanel'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
+import type { BassParamId } from './model/bass'
 import { isGoalMet, parseLesson, spotlitLaneIds, type Lesson } from './model/lesson'
 import {
   activePattern,
   createInitialProjectState,
   cycleActivePatternStep,
   openingProjectState,
+  resizeActivePatternNote,
+  setBassParamValue,
   setTransportBpm,
+  toggleActivePatternNoteStep,
   toggleLaneMute,
   toggleLaneSolo,
+  transposeActivePatternNote,
   updateLessonProgress,
 } from './model/projectState'
 import type { DrumLaneId } from './model/types'
@@ -34,10 +40,14 @@ export default function App() {
   const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [activeLesson] = useState<Lesson | null>(fourOnTheFloor)
-  const panelRef = useRef<HTMLElement>(null)
+  // The playhead sweeps every grid on the deck — drums and bass alike — so
+  // its root is the deck, not one panel.
+  const deckRef = useRef<HTMLElement>(null)
   const autosaverRef = useRef(createAutosaver(saveProjectState, AUTOSAVE_DELAY_MS))
 
   const pattern = activePattern(project)
+  const bassLane = pattern.noteLanes[0]
+  const bassSettings = project.instrumentSettings.bass
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
   const lessonProgress = activeLesson ? project.lessonProgress[activeLesson.id] : undefined
@@ -48,7 +58,7 @@ export default function App() {
   // the lesson is put away.
   const spotlitLanes = lessonCompleted || lessonDismissed ? [] : spotlitLaneIds(activeLesson)
 
-  usePlayhead(panelRef, isPlaying)
+  usePlayhead(deckRef, isPlaying)
 
   // Hydrate from IndexedDB once on mount: a returning user gets their saved
   // beat back, a first-time one gets the demo groove so the deck is never
@@ -112,6 +122,12 @@ export default function App() {
     engine.setMixer(project.mixer)
   }, [project.mixer])
 
+  // And the bass patch: the engine ramps cutoff/resonance, so a knob dragged
+  // mid-loop reshapes the sound as it moves rather than on the next note.
+  useEffect(() => {
+    engine.setBassSettings(bassSettings)
+  }, [bassSettings])
+
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
   // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
@@ -139,6 +155,22 @@ export default function App() {
     setProject((p) => toggleLaneSolo(p, laneId))
   }
 
+  const handleToggleNoteStep = (stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteStep(p, 'bass', stepIndex))
+  }
+
+  const handleTransposeNote = (stepIndex: number, semitones: number) => {
+    setProject((p) => transposeActivePatternNote(p, 'bass', stepIndex, semitones))
+  }
+
+  const handleResizeNote = (stepIndex: number, steps: number) => {
+    setProject((p) => resizeActivePatternNote(p, 'bass', stepIndex, steps))
+  }
+
+  const handleBassParamChange = (id: BassParamId, value: number) => {
+    setProject((p) => setBassParamValue(p, id, value))
+  }
+
   const handleBpmChange = (next: number) => {
     setProject((p) => setTransportBpm(p, next))
     engine.setBpm(next)
@@ -160,7 +192,7 @@ export default function App() {
   }
 
   return (
-    <main className="deck">
+    <main className="deck" ref={deckRef}>
       <header className="deck-header">
         <h1 className="brand">
           Elevated <em>BPM</em>
@@ -186,7 +218,7 @@ export default function App() {
           />
         ))}
 
-      <section className="panel" aria-label="Drum machine" ref={panelRef}>
+      <section className="panel" aria-label="Drum machine">
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}
@@ -214,6 +246,15 @@ export default function App() {
         })}
         <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
       </section>
+
+      <BassPanel
+        lane={bassLane}
+        settings={bassSettings}
+        onToggleStep={handleToggleNoteStep}
+        onTranspose={handleTransposeNote}
+        onResize={handleResizeNote}
+        onParamChange={handleBassParamChange}
+      />
     </main>
   )
 }

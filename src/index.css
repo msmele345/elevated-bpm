@@ -717,3 +717,153 @@ body::before {
     animation: none;
   }
 }
+
+/* ── Bass panel ────────────────────────────────────────────────────── */
+.bass-panel {
+  margin-top: 18px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.panel-title-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--silkscreen);
+}
+
+.panel-title-model {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  color: var(--ink-dim);
+}
+
+/* A note step reads as a key with a note name on it; a longer note lights
+   more dots, so pitch and length are both visible without opening an editor. */
+.note-step {
+  justify-content: center;
+  gap: 4%;
+  padding: 12% 0 8%;
+}
+
+.note-name {
+  font-family: var(--font-mono);
+  font-size: clamp(0.45rem, 1.1vw, 0.6rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-dim);
+  user-select: none;
+}
+
+.note-step[aria-pressed='true'] .note-name {
+  color: var(--ink);
+}
+
+.note-length {
+  height: 0.5em;
+  font-family: var(--font-mono);
+  font-size: clamp(0.5rem, 1.2vw, 0.7rem);
+  line-height: 0.5;
+  letter-spacing: 0.06em;
+  color: var(--led);
+  user-select: none;
+}
+
+/* ── Knobs ─────────────────────────────────────────────────────────── */
+.knob-row {
+  display: flex;
+  gap: 34px;
+  padding-top: 20px;
+  margin-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 74px;
+}
+
+.knob-dial {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.knob-dial:focus-visible {
+  outline: 2px solid var(--quad-2);
+  outline-offset: 2px;
+}
+
+.knob-dial svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.knob-track {
+  fill: none;
+  stroke: #0d0f10;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.knob-value {
+  fill: none;
+  stroke: var(--quad-1);
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--quad-1) 70%, transparent));
+}
+
+.knob-cap {
+  fill: var(--steel);
+  stroke: #000;
+  stroke-width: 1;
+}
+
+.knob-pointer {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.knob-label {
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--silkscreen);
+}
+
+.knob-readout {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: var(--quad-1);
+  text-shadow: 0 0 8px rgba(255, 157, 46, 0.4);
+}
+
+@media (max-width: 640px) {
+  .knob-row {
+    gap: 16px;
+    justify-content: space-between;
+  }
+}

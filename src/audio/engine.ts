@@ -1,5 +1,7 @@
 import * as Tone from 'tone'
+import { DEFAULT_BASS_SETTINGS, type BassSettings } from '../model/bass'
 import type { Mixer } from '../model/mixer'
+import { noteEventAtStep } from '../model/note'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
 import { voiceStep } from './hits'
@@ -34,6 +36,19 @@ interface Voice {
 let voices: Record<DrumLaneId, Voice> | null = null
 let samplesLoaded: Promise<void> | null = null
 
+/**
+ * The bass instrument: one sawtooth oscillator through a resonant lowpass.
+ * A single Tone.Synth is monophonic by construction — a new note takes the
+ * voice from the one still ringing — and the filter sits after it so cutoff
+ * and resonance shape the sound continuously, audible even mid-note.
+ */
+interface BassVoice {
+  synth: Tone.Synth
+  filter: Tone.Filter
+}
+let bass: BassVoice | null = null
+let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
+
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {
   currentPattern = pattern
@@ -44,6 +59,19 @@ export function setMixer(mixer: Mixer): void {
   currentMixer = mixer
 }
 
+/**
+ * Apply the bass patch. Cheap and idempotent, so knob motion can call it on
+ * every pointer move: cutoff ramps over a few milliseconds (a jump in filter
+ * frequency zippers audibly), the rest take effect on the next note.
+ */
+export function setBassSettings(next: BassSettings): void {
+  bassSettings = next
+  if (!bass) return
+  bass.filter.frequency.rampTo(next.cutoff, 0.02)
+  bass.filter.Q.rampTo(next.resonance, 0.02)
+  bass.synth.envelope.decay = next.decay
+}
+
 export function setBpm(next: number): void {
   bpm = clampBpm(next)
   // Ramp instead of jumping so mid-playback tempo changes are click-free;
@@ -52,11 +80,32 @@ export function setBpm(next: number): void {
   Tone.getTransport().bpm.rampTo(bpm, 0.1)
 }
 
+/** One 16th in seconds at the current tempo — a note length in steps × this. */
+function secondsPer16th(): number {
+  return 15 / Tone.getTransport().bpm.value
+}
+
 /** Step the transport is currently on (for the rAF playhead in AC4). */
 export function getCurrentStep(): number {
   const transport = Tone.getTransport()
   if (transport.state !== 'started') return -1
   return stepIndexAtTicks(transport.ticks, TICKS_PER_16TH, STEP_COUNT)
+}
+
+/** Bass level: sits under the kit so the drums keep the front of the mix. */
+const BASS_GAIN = 0.55
+
+function createBassVoice(): BassVoice {
+  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 })
+  const synth = new Tone.Synth({
+    oscillator: { type: 'sawtooth' },
+    // Short attack + low sustain: a plucked 303-style note whose tail the
+    // decay knob stretches from a stab to a rolling line.
+    envelope: { attack: 0.004, decay: DEFAULT_BASS_SETTINGS.decay, sustain: 0.25, release: 0.08 },
+    volume: Tone.gainToDb(BASS_GAIN),
+  }).connect(filter)
+  filter.toDestination()
+  return { synth, filter }
 }
 
 /**
@@ -76,6 +125,8 @@ export async function unlockAudio(): Promise<void> {
         return [laneId, { player, gain }]
       }),
     ) as Record<DrumLaneId, Voice>
+    bass = createBassVoice()
+    setBassSettings(bassSettings)
     samplesLoaded = Tone.loaded()
     Tone.getTransport().bpm.value = bpm
     if (import.meta.env.DEV) {
@@ -86,6 +137,7 @@ export async function unlockAudio(): Promise<void> {
         transport: Tone.getTransport(),
         meter,
         voices,
+        bass,
       }
     }
   }
@@ -115,6 +167,17 @@ export async function play(): Promise<void> {
         const voice = voices[hit.laneId]
         voice.gain.gain.setValueAtTime(hit.gain, time)
         voice.player.start(time)
+      }
+      // The bass rides the same scheduled 16th as the drums, so it is locked
+      // to them by construction. Its length is already clipped to the next
+      // note, keeping the single voice monophonic.
+      const note = noteEventAtStep(currentPattern, 'bass', stepIndex)
+      if (note && bass) {
+        bass.synth.triggerAttackRelease(
+          note.frequency,
+          note.lengthSteps * secondsPer16th(),
+          time,
+        )
       }
     }, '16n')
     repeatScheduled = true

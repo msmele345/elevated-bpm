@@ -110,7 +110,7 @@ Expand the single kick lane to the full sample-based drum machine: ~5 lanes (kic
 - [ ] Accented steps are audibly louder/harder than unaccented ones
 - [ ] Mute/solo per lane behaves like hardware (solo overrides mutes; multiple solos allowed)
 - [ ] Open hat is choked by closed hat (classic 909 behavior)
-- [ ] A default demo pattern ships so first play sounds like techno immediately
+- [x] A default demo pattern ships so first play sounds like techno immediately — `createDemoPattern()` (`src/model/pattern.ts`) ships a backbeat clap (5/13, accented), offbeat closed hats (3/7/11), an accented open hat (15) and syncopated perc (6/12); `openingProjectState()` seeds it only when `loadProjectState()` returns null, so a returning user's saved beat is never overwritten (Vitest + verified in-browser: edited beat survived reload intact). The kick lane ships empty by design so the four-on-the-floor lesson stays unearned — guarded by a test asserting the shipped demo does not satisfy the shipped lesson goal; confirmed in-browser that programming 1/5/9/13 still fires the celebration. Playback verified over two loops: hits per lane exactly match the grid, kick silent, open hat choked only at closed-hat steps
 
 ---
 

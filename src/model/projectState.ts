@@ -1,5 +1,5 @@
 import type { LaneMix, Mixer } from './mixer'
-import { createInitialPattern, cycleStep, withFullKit } from './pattern'
+import { createDemoPattern, createInitialPattern, cycleStep, withFullKit } from './pattern'
 import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
 import type { DrumLaneId, Pattern } from './types'
 
@@ -43,6 +43,24 @@ export function createInitialProjectState(): ProjectState {
     prefs: {},
     mixer: {},
   }
+}
+
+/**
+ * A fresh document pre-loaded with the demo groove, so the very first press
+ * of play sounds like techno instead of silence.
+ */
+export function createDemoProjectState(): ProjectState {
+  const pattern = createDemoPattern()
+  return { ...createInitialProjectState(), patterns: [pattern], activePatternId: pattern.id }
+}
+
+/**
+ * The document the deck opens with, given whatever was loaded from storage.
+ * The demo seeds genuinely new projects only — a returning user's saved beat
+ * comes back exactly as they left it, never overwritten by the starter.
+ */
+export function openingProjectState(saved: ProjectState | null): ProjectState {
+  return saved ?? createDemoProjectState()
 }
 
 /** The pattern the deck is editing/playing. The document guarantees it exists. */

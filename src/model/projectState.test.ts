@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createInitialPattern } from './pattern'
+import { createDemoPattern, createInitialPattern } from './pattern'
 import { DEFAULT_BPM } from './transport'
 import {
   activePattern,
   createInitialProjectState,
+  openingProjectState,
   PROJECT_STATE_VERSION,
   migrateProjectState,
   setTransportBpm,
@@ -23,6 +24,20 @@ describe('createInitialProjectState', () => {
     expect(state.lessonProgress).toEqual({})
     expect(state.instrumentSettings).toEqual({})
     expect(state.prefs).toEqual({})
+  })
+})
+
+describe('openingProjectState', () => {
+  it('seeds the demo groove when nothing is saved', () => {
+    const opening = openingProjectState(null)
+    expect(opening.version).toBe(PROJECT_STATE_VERSION)
+    expect(activePattern(opening)).toEqual(createDemoPattern())
+    expect(opening.lessonProgress).toEqual({})
+  })
+
+  it('returns a saved document untouched — a returning beat is never replaced', () => {
+    const saved = cycleActivePatternStep(createInitialProjectState(), 'kick', 3)
+    expect(openingProjectState(saved)).toBe(saved)
   })
 })
 

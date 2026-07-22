@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { STEP_COUNT } from './types'
-import { createInitialPattern, cycleStep, toggleStep } from './pattern'
+import { STEP_COUNT, type Pattern } from './types'
+import { createDemoPattern, createInitialPattern, cycleStep, toggleStep } from './pattern'
 
 function kickSteps(pattern: ReturnType<typeof createInitialPattern>) {
   return pattern.lanes.find((lane) => lane.id === 'kick')!.steps
+}
+
+/** The step indexes a lane is programmed on, for readable groove assertions. */
+function onSteps(pattern: Pattern, laneId: string) {
+  const lane = pattern.lanes.find((l) => l.id === laneId)!
+  return lane.steps.flatMap((step, i) => (step.on ? [i] : []))
 }
 
 describe('cycleStep', () => {
@@ -46,6 +52,17 @@ describe('createInitialPattern', () => {
       expect(lane.steps.every((step) => step.on === false && step.accent === false)).toBe(true)
       expect(lane.label.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('createDemoPattern', () => {
+  it('ships a techno groove: backbeat clap, offbeat hats, syncopated perc', () => {
+    const demo = createDemoPattern()
+
+    expect(onSteps(demo, 'snare')).toEqual([4, 12])
+    expect(onSteps(demo, 'closedHat')).toEqual([2, 6, 10])
+    expect(onSteps(demo, 'openHat')).toEqual([14])
+    expect(onSteps(demo, 'perc')).toEqual([5, 11])
   })
 })
 

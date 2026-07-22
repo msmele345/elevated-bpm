@@ -27,6 +27,40 @@ export function createInitialPattern(): Pattern {
 }
 
 /**
+ * The starter groove a first-time deck opens with, as step indexes per lane;
+ * `accent` steps hit at accent velocity. Deliberately kick-less: the clap,
+ * hats and perc already sound like techno on the first press of play, and
+ * dropping the kick in is the four-on-the-floor lesson's payoff.
+ *
+ * The closed hat stops short of step 14 so the open hat there rings out
+ * instead of being choked (see CHOKES in audio/hits.ts).
+ */
+const DEMO_GROOVE: Partial<Record<DrumLaneId, { on: number[]; accent?: number[] }>> = {
+  snare: { on: [4, 12], accent: [4, 12] },
+  closedHat: { on: [2, 6, 10] },
+  openHat: { on: [14], accent: [14] },
+  perc: { on: [5, 11] },
+}
+
+/** The pattern a fresh project starts from: playable techno on first press. */
+export function createDemoPattern(): Pattern {
+  return {
+    ...createInitialPattern(),
+    lanes: KIT_LANES.map(({ id, label }) => {
+      const groove = DEMO_GROOVE[id]
+      return {
+        id,
+        label,
+        steps: Array.from({ length: STEP_COUNT }, (_, i) => ({
+          on: groove?.on.includes(i) ?? false,
+          accent: groove?.accent?.includes(i) ?? false,
+        })),
+      }
+    }),
+  }
+}
+
+/**
  * Return the pattern with every kit lane present, in deck order. Lanes the
  * pattern already has keep their programmed steps; missing ones arrive empty.
  * This is what lets a document saved before a lane existed load intact.

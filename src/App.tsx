@@ -8,6 +8,7 @@ import {
   activePattern,
   createInitialProjectState,
   cycleActivePatternStep,
+  openingProjectState,
   setTransportBpm,
   toggleLaneMute,
   toggleLaneSolo,
@@ -49,16 +50,17 @@ export default function App() {
 
   usePlayhead(panelRef, isPlaying)
 
-  // Hydrate from IndexedDB once on mount; until then the deck shows a fresh
-  // document. Saved state also re-points the audio engine's tempo.
+  // Hydrate from IndexedDB once on mount: a returning user gets their saved
+  // beat back, a first-time one gets the demo groove so the deck is never
+  // silent on the first press of play. Either way the engine's tempo follows
+  // the document that won.
   useEffect(() => {
     let cancelled = false
     void loadProjectState().then((saved) => {
       if (cancelled) return
-      if (saved) {
-        setProject(saved)
-        engine.setBpm(saved.transport.bpm)
-      }
+      const opening = openingProjectState(saved)
+      setProject(opening)
+      engine.setBpm(opening.transport.bpm)
       setHydrated(true)
     })
     return () => {

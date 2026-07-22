@@ -7,8 +7,11 @@ import { isGoalMet, parseLesson, spotlitLaneIds, type Lesson } from './model/les
 import {
   activePattern,
   createInitialProjectState,
+  cycleActivePatternStep,
+  openingProjectState,
   setTransportBpm,
-  toggleActivePatternStep,
+  toggleLaneMute,
+  toggleLaneSolo,
   updateLessonProgress,
 } from './model/projectState'
 import type { DrumLaneId } from './model/types'
@@ -36,6 +39,7 @@ export default function App() {
 
   const pattern = activePattern(project)
   const bpm = project.transport.bpm
+  const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
   const lessonProgress = activeLesson ? project.lessonProgress[activeLesson.id] : undefined
   const lessonCompleted = lessonProgress?.completed ?? false
   const lessonDismissed = lessonProgress?.dismissed ?? false
@@ -46,16 +50,17 @@ export default function App() {
 
   usePlayhead(panelRef, isPlaying)
 
-  // Hydrate from IndexedDB once on mount; until then the deck shows a fresh
-  // document. Saved state also re-points the audio engine's tempo.
+  // Hydrate from IndexedDB once on mount: a returning user gets their saved
+  // beat back, a first-time one gets the demo groove so the deck is never
+  // silent on the first press of play. Either way the engine's tempo follows
+  // the document that won.
   useEffect(() => {
     let cancelled = false
     void loadProjectState().then((saved) => {
       if (cancelled) return
-      if (saved) {
-        setProject(saved)
-        engine.setBpm(saved.transport.bpm)
-      }
+      const opening = openingProjectState(saved)
+      setProject(opening)
+      engine.setBpm(opening.transport.bpm)
       setHydrated(true)
     })
     return () => {
@@ -101,6 +106,12 @@ export default function App() {
     engine.setPattern(pattern)
   }, [pattern])
 
+  // Same for mute/solo: the engine reads the live mixer per 16th, so toggling
+  // a lane silences or solos it on the next step with no restart.
+  useEffect(() => {
+    engine.setMixer(project.mixer)
+  }, [project.mixer])
+
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
   // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
@@ -116,8 +127,16 @@ export default function App() {
     }
   }, [])
 
-  const handleToggleStep = (laneId: DrumLaneId, stepIndex: number) => {
-    setProject((p) => toggleActivePatternStep(p, laneId, stepIndex))
+  const handleCycleStep = (laneId: DrumLaneId, stepIndex: number) => {
+    setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
+  }
+
+  const handleToggleMute = (laneId: DrumLaneId) => {
+    setProject((p) => toggleLaneMute(p, laneId))
+  }
+
+  const handleToggleSolo = (laneId: DrumLaneId) => {
+    setProject((p) => toggleLaneSolo(p, laneId))
   }
 
   const handleBpmChange = (next: number) => {
@@ -174,15 +193,26 @@ export default function App() {
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
         />
-        {pattern.lanes.map((lane) => (
-          <StepRow
-            key={lane.id}
-            lane={lane}
-            spotlit={spotlitLanes.includes(lane.id)}
-            onToggleStep={(stepIndex) => handleToggleStep(lane.id, stepIndex)}
-          />
-        ))}
-        <p className="panel-hint">Tap steps to program the kick — 1 · 5 · 9 · 13 is four-on-the-floor.</p>
+        {pattern.lanes.map((lane) => {
+          const mix = project.mixer[lane.id]
+          // With any solo engaged, a lane that is not soloed is silenced —
+          // shown dimmed so the deck reflects what is actually sounding.
+          const silenced = soloing ? !mix?.soloed : (mix?.muted ?? false)
+          return (
+            <StepRow
+              key={lane.id}
+              lane={lane}
+              spotlit={spotlitLanes.includes(lane.id)}
+              muted={mix?.muted ?? false}
+              soloed={mix?.soloed ?? false}
+              silenced={silenced}
+              onCycleStep={(stepIndex) => handleCycleStep(lane.id, stepIndex)}
+              onToggleMute={() => handleToggleMute(lane.id)}
+              onToggleSolo={() => handleToggleSolo(lane.id)}
+            />
+          )
+        })}
+        <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
       </section>
     </main>
   )

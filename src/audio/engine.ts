@@ -1,6 +1,9 @@
 import * as Tone from 'tone'
+import type { Mixer } from '../model/mixer'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
-import { STEP_COUNT, type Pattern } from '../model/types'
+import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
+import { voiceStep } from './hits'
+import { KIT_SAMPLES } from './kit'
 import { stepIndexAtTicks } from './stepIndex'
 
 /**
@@ -17,13 +20,28 @@ const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
 let bpm = DEFAULT_BPM
 let currentPattern: Pattern | null = null
-let kick: Tone.Player | null = null
-let kickLoaded: Promise<void> | null = null
+let currentMixer: Mixer = {}
 let repeatScheduled = false
+
+/**
+ * One voice per lane: a Player through its own Gain so each 16th can be fired
+ * at its step's velocity (accent vs. not). Created lazily on unlock.
+ */
+interface Voice {
+  player: Tone.Player
+  gain: Tone.Gain
+}
+let voices: Record<DrumLaneId, Voice> | null = null
+let samplesLoaded: Promise<void> | null = null
 
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {
   currentPattern = pattern
+}
+
+/** Point the scheduler at the latest mute/solo state. Cheap; call on every edit. */
+export function setMixer(mixer: Mixer): void {
+  currentMixer = mixer
 }
 
 export function setBpm(next: number): void {
@@ -50,9 +68,15 @@ export function getCurrentStep(): number {
  */
 export async function unlockAudio(): Promise<void> {
   await Tone.start()
-  if (!kickLoaded) {
-    kick = new Tone.Player('/samples/kick-909.wav').toDestination()
-    kickLoaded = Tone.loaded()
+  if (!samplesLoaded) {
+    voices = Object.fromEntries(
+      (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(([laneId, url]) => {
+        const gain = new Tone.Gain(1).toDestination()
+        const player = new Tone.Player(url).connect(gain)
+        return [laneId, { player, gain }]
+      }),
+    ) as Record<DrumLaneId, Voice>
+    samplesLoaded = Tone.loaded()
     Tone.getTransport().bpm.value = bpm
     if (import.meta.env.DEV) {
       // Debug handle for tooling/tests; never used by app code.
@@ -61,10 +85,11 @@ export async function unlockAudio(): Promise<void> {
       ;(window as unknown as Record<string, unknown>).__ebpm = {
         transport: Tone.getTransport(),
         meter,
+        voices,
       }
     }
   }
-  await kickLoaded
+  await samplesLoaded
 }
 
 export async function play(): Promise<void> {
@@ -76,9 +101,20 @@ export async function play(): Promise<void> {
       // sequence stays locked across stop/start and BPM changes.
       const ticks = transport.getTicksAtTime(time)
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
-      const lane = currentPattern?.lanes.find((l) => l.id === 'kick')
-      if (lane?.steps[stepIndex]?.on) {
-        kick?.start(time)
+      if (!currentPattern || !voices) return
+      // Resolve the 16th through the mixer and choke groups: muted/soloed
+      // lanes are filtered out and a firing closed hat cuts the open hat.
+      const { starts, chokes } = voiceStep(currentPattern, stepIndex, currentMixer)
+      // Cut ringing choked voices first so a same-time restart isn't clipped.
+      for (const laneId of chokes) {
+        voices[laneId].player.stop(time)
+      }
+      // All voices share the transport, so lanes stay independent and
+      // sample-locked; each fires at its own accent velocity.
+      for (const hit of starts) {
+        const voice = voices[hit.laneId]
+        voice.gain.gain.setValueAtTime(hit.gain, time)
+        voice.player.start(time)
       }
     }, '16n')
     repeatScheduled = true

@@ -10,6 +10,8 @@ import {
 interface KnobProps {
   spec: ParamSpec
   value: number
+  /** Highlighted while a lesson is pointing the user at this knob. */
+  spotlit?: boolean
   onChange: (value: number) => void
 }
 
@@ -46,7 +48,7 @@ function dialArc(normalized: number): string {
  * requires a mouse. Values move in knob-travel space, so a log-tapered
  * parameter like cutoff responds evenly across its whole range.
  */
-export function Knob({ spec, value, onChange }: KnobProps) {
+export function Knob({ spec, value, spotlit = false, onChange }: KnobProps) {
   const dragRef = useRef<{ startY: number; startNormalized: number } | null>(null)
   const normalized = normalizeParam(spec, value)
   const [pointerX, pointerY] = pointOnDial(normalized, RADIUS - 5)
@@ -103,7 +105,7 @@ export function Knob({ spec, value, onChange }: KnobProps) {
   }
 
   return (
-    <div className="knob">
+    <div className={spotlit ? 'knob is-spotlit' : 'knob'}>
       <div
         className="knob-dial"
         role="slider"

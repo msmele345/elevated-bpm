@@ -6,6 +6,8 @@ import { NoteRow } from './NoteRow'
 interface BassPanelProps {
   lane: NoteLane
   settings: BassSettings
+  /** Knob ids the active lesson is pointing at. */
+  spotlitParams: string[]
   onToggleStep: (stepIndex: number) => void
   onTranspose: (stepIndex: number, semitones: number) => void
   onResize: (stepIndex: number, steps: number) => void
@@ -20,6 +22,7 @@ interface BassPanelProps {
 export function BassPanel({
   lane,
   settings,
+  spotlitParams,
   onToggleStep,
   onTranspose,
   onResize,
@@ -43,6 +46,7 @@ export function BassPanel({
             key={param.id}
             spec={param}
             value={settings[param.id]}
+            spotlit={spotlitParams.includes(param.id)}
             onChange={(value) => onParamChange(param.id, value)}
           />
         ))}

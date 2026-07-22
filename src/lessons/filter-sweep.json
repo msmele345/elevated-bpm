@@ -1,0 +1,7 @@
+{
+  "id": "filter-sweep",
+  "title": "Sweep the Filter",
+  "intro": "The filter is where techno gets its movement. Press play, then grab the Cutoff knob and drag it slowly from closed to wide open — dark and muffled up to bright and buzzing. Listen to the bassline change shape under your hand. Take it across most of its range.",
+  "spotlight": ["knob:cutoff"],
+  "goal": [{ "type": "paramSwept", "param": "cutoff", "minTravel": 0.5 }]
+}

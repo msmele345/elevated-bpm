@@ -861,6 +861,35 @@ body::before {
   text-shadow: 0 0 8px rgba(255, 157, 46, 0.4);
 }
 
+/* Lesson spotlight on a knob — the same amber ring the drum lanes get, wrapped
+   around the dial so the eye lands on the control the lesson is talking about. */
+.knob.is-spotlit .knob-dial {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--quad-2) 6%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 55%, transparent),
+    0 0 22px color-mix(in srgb, var(--quad-2) 22%, transparent);
+  animation: knob-spotlight-breathe 2.4s ease-in-out infinite;
+}
+
+.knob.is-spotlit .knob-label {
+  color: var(--quad-2);
+}
+
+@keyframes knob-spotlight-breathe {
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--quad-2) 85%, transparent),
+      0 0 30px color-mix(in srgb, var(--quad-2) 38%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knob.is-spotlit .knob-dial {
+    animation: none;
+  }
+}
+
 @media (max-width: 640px) {
   .knob-row {
     gap: 16px;

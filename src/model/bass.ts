@@ -31,14 +31,15 @@ export const BASS_PARAMS: ReadonlyArray<ParamSpec & { id: BassParamId }> = [
   { id: 'decay', label: 'Decay', min: 0.05, max: 0.8, default: 0.22, unit: 's' },
 ]
 
-function paramSpec(id: BassParamId): ParamSpec {
+/** The spec behind one bass knob — its range, default, and taper. */
+export function bassParamSpec(id: BassParamId): ParamSpec {
   return BASS_PARAMS.find((param) => param.id === id)!
 }
 
 export const DEFAULT_BASS_SETTINGS: BassSettings = {
-  cutoff: paramSpec('cutoff').default,
-  resonance: paramSpec('resonance').default,
-  decay: paramSpec('decay').default,
+  cutoff: bassParamSpec('cutoff').default,
+  resonance: bassParamSpec('resonance').default,
+  decay: bassParamSpec('decay').default,
 }
 
 /** Immutably set one knob, clamped to its range. */
@@ -47,7 +48,7 @@ export function setBassParam(
   id: BassParamId,
   value: number,
 ): BassSettings {
-  return { ...settings, [id]: clampParam(paramSpec(id), value) }
+  return { ...settings, [id]: clampParam(bassParamSpec(id), value) }
 }
 
 /**

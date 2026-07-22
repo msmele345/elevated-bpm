@@ -1,4 +1,5 @@
-import { createInitialPattern, toggleStep } from './pattern'
+import type { LaneMix, Mixer } from './mixer'
+import { createDemoPattern, createInitialPattern, cycleStep, withFullKit } from './pattern'
 import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
 import type { DrumLaneId, Pattern } from './types'
 
@@ -9,7 +10,8 @@ import type { DrumLaneId, Pattern } from './types'
  * the future URL-sharing/sync document.
  */
 
-export const PROJECT_STATE_VERSION = 1
+// v2 grew the pattern to the full kit; v3 added the per-lane mute/solo mixer.
+export const PROJECT_STATE_VERSION = 3
 
 /** Per-lesson progress; keyed by lesson id in the document. */
 export interface LessonProgress {
@@ -25,6 +27,8 @@ export interface ProjectState {
   instrumentSettings: Record<string, unknown>
   lessonProgress: Record<string, LessonProgress>
   prefs: Record<string, unknown>
+  /** Per-lane mute/solo. Absent lanes are audible and un-soloed. */
+  mixer: Mixer
 }
 
 export function createInitialProjectState(): ProjectState {
@@ -37,7 +41,26 @@ export function createInitialProjectState(): ProjectState {
     instrumentSettings: {},
     lessonProgress: {},
     prefs: {},
+    mixer: {},
   }
+}
+
+/**
+ * A fresh document pre-loaded with the demo groove, so the very first press
+ * of play sounds like techno instead of silence.
+ */
+export function createDemoProjectState(): ProjectState {
+  const pattern = createDemoPattern()
+  return { ...createInitialProjectState(), patterns: [pattern], activePatternId: pattern.id }
+}
+
+/**
+ * The document the deck opens with, given whatever was loaded from storage.
+ * The demo seeds genuinely new projects only — a returning user's saved beat
+ * comes back exactly as they left it, never overwritten by the starter.
+ */
+export function openingProjectState(saved: ProjectState | null): ProjectState {
+  return saved ?? createDemoProjectState()
 }
 
 /** The pattern the deck is editing/playing. The document guarantees it exists. */
@@ -47,8 +70,8 @@ export function activePattern(state: ProjectState): Pattern {
   return pattern
 }
 
-/** Immutably toggle one step of the active pattern. */
-export function toggleActivePatternStep(
+/** Immutably advance one step of the active pattern (off → on → accent → off). */
+export function cycleActivePatternStep(
   state: ProjectState,
   laneId: DrumLaneId,
   stepIndex: number,
@@ -56,7 +79,7 @@ export function toggleActivePatternStep(
   return {
     ...state,
     patterns: state.patterns.map((p) =>
-      p.id === state.activePatternId ? toggleStep(p, laneId, stepIndex) : p,
+      p.id === state.activePatternId ? cycleStep(p, laneId, stepIndex) : p,
     ),
   }
 }
@@ -81,6 +104,31 @@ export function updateLessonProgress(
   }
 }
 
+const AUDIBLE: LaneMix = { muted: false, soloed: false }
+
+/** Immutably flip one field of one lane's mixer strip. */
+function updateLaneMix(
+  state: ProjectState,
+  laneId: DrumLaneId,
+  patch: Partial<LaneMix>,
+): ProjectState {
+  const current = state.mixer[laneId] ?? AUDIBLE
+  return {
+    ...state,
+    mixer: { ...state.mixer, [laneId]: { ...current, ...patch } },
+  }
+}
+
+/** Immutably toggle a lane's mute. */
+export function toggleLaneMute(state: ProjectState, laneId: DrumLaneId): ProjectState {
+  return updateLaneMix(state, laneId, { muted: !(state.mixer[laneId]?.muted ?? false) })
+}
+
+/** Immutably toggle a lane's solo. */
+export function toggleLaneSolo(state: ProjectState, laneId: DrumLaneId): ProjectState {
+  return updateLaneMix(state, laneId, { soloed: !(state.mixer[laneId]?.soloed ?? false) })
+}
+
 /**
  * Migration hook: lift a persisted document of any known version to the
  * current shape. Returns null for unrecognized input so callers fall back to
@@ -89,10 +137,17 @@ export function updateLessonProgress(
 export function migrateProjectState(raw: unknown): ProjectState | null {
   if (raw === null || typeof raw !== 'object') return null
   const doc = raw as { version?: unknown }
-  if (doc.version === 0) return migrateV0(doc)
+  // Each step lifts the document one version; they chain so an ancient save
+  // reaches the current shape through the same path a recent one takes.
+  if (doc.version === 0) return migrateV2ToV3(migrateV1ToV2(migrateV0ToV1(doc)))
+  if (doc.version === 1) return migrateV2ToV3(migrateV1ToV2(doc as ProjectStateV1))
+  if (doc.version === 2) return migrateV2ToV3(doc as ProjectStateV2)
   if (doc.version === PROJECT_STATE_VERSION) return raw as ProjectState
   return null
 }
+
+/** Fields shared by every document version, before the version-specific bits. */
+type ProjectStateBase = Omit<ProjectState, 'version' | 'mixer'>
 
 /** v0 was the pre-document shape: one bare pattern and a flat bpm. */
 interface ProjectStateV0 {
@@ -101,10 +156,16 @@ interface ProjectStateV0 {
   bpm: number
 }
 
-function migrateV0(doc: object): ProjectState {
+/** v1 was the document, but patterns carried only the Phase 1 kick lane. */
+type ProjectStateV1 = ProjectStateBase & { version: 1 }
+
+/** v2 grew the full kit but had no mixer. */
+type ProjectStateV2 = ProjectStateBase & { version: 2 }
+
+function migrateV0ToV1(doc: object): ProjectStateV1 {
   const { pattern, bpm } = doc as ProjectStateV0
   return {
-    version: PROJECT_STATE_VERSION,
+    version: 1,
     patterns: [pattern],
     activePatternId: pattern.id,
     transport: { bpm: clampBpm(bpm) },
@@ -112,4 +173,12 @@ function migrateV0(doc: object): ProjectState {
     lessonProgress: {},
     prefs: {},
   }
+}
+
+function migrateV1ToV2(doc: ProjectStateV1): ProjectStateV2 {
+  return { ...doc, version: 2, patterns: doc.patterns.map(withFullKit) }
+}
+
+function migrateV2ToV3(doc: ProjectStateV2): ProjectState {
+  return { ...doc, version: 3, mixer: {} }
 }

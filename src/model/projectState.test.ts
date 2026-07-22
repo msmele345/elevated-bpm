@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { createInitialPattern } from './pattern'
+import { createDemoPattern, createInitialPattern } from './pattern'
 import { DEFAULT_BPM } from './transport'
 import {
   activePattern,
   createInitialProjectState,
+  openingProjectState,
   PROJECT_STATE_VERSION,
   migrateProjectState,
   setTransportBpm,
-  toggleActivePatternStep,
+  cycleActivePatternStep,
+  toggleLaneMute,
+  toggleLaneSolo,
   updateLessonProgress,
 } from './projectState'
 
@@ -24,13 +27,49 @@ describe('createInitialProjectState', () => {
   })
 })
 
-describe('toggleActivePatternStep', () => {
+describe('openingProjectState', () => {
+  it('seeds the demo groove when nothing is saved', () => {
+    const opening = openingProjectState(null)
+    expect(opening.version).toBe(PROJECT_STATE_VERSION)
+    expect(activePattern(opening)).toEqual(createDemoPattern())
+    expect(opening.lessonProgress).toEqual({})
+  })
+
+  it('returns a saved document untouched — a returning beat is never replaced', () => {
+    const saved = cycleActivePatternStep(createInitialProjectState(), 'kick', 3)
+    expect(openingProjectState(saved)).toBe(saved)
+  })
+})
+
+describe('cycleActivePatternStep', () => {
   it('toggles a step of the active pattern immutably through the document', () => {
     const state = createInitialProjectState()
-    const next = toggleActivePatternStep(state, 'kick', 4)
+    const next = cycleActivePatternStep(state, 'kick', 4)
     expect(activePattern(next).lanes[0].steps[4].on).toBe(true)
     expect(activePattern(state).lanes[0].steps[4].on).toBe(false)
     expect(next).not.toBe(state)
+  })
+})
+
+describe('mixer', () => {
+  it('starts with an empty mixer — every lane audible', () => {
+    expect(createInitialProjectState().mixer).toEqual({})
+  })
+
+  it('toggles a lane mute immutably in the document', () => {
+    const state = createInitialProjectState()
+    const muted = toggleLaneMute(state, 'closedHat')
+    expect(muted.mixer.closedHat).toEqual({ muted: true, soloed: false })
+    expect(state.mixer.closedHat).toBeUndefined()
+
+    const unmuted = toggleLaneMute(muted, 'closedHat')
+    expect(unmuted.mixer.closedHat?.muted).toBe(false)
+  })
+
+  it('toggles a lane solo without clearing its mute flag', () => {
+    const state = toggleLaneMute(createInitialProjectState(), 'kick')
+    const soloed = toggleLaneSolo(state, 'kick')
+    expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true })
   })
 })
 
@@ -65,7 +104,7 @@ describe('updateLessonProgress', () => {
 describe('migrateProjectState', () => {
   it('returns a current-version document unchanged', () => {
     const state = updateLessonProgress(
-      setTransportBpm(toggleActivePatternStep(createInitialProjectState(), 'kick', 0), 137),
+      setTransportBpm(cycleActivePatternStep(createInitialProjectState(), 'kick', 0), 137),
       'four-on-the-floor',
       { completed: true },
     )
@@ -84,7 +123,60 @@ describe('migrateProjectState', () => {
       instrumentSettings: {},
       lessonProgress: {},
       prefs: {},
+      mixer: {},
     })
+  })
+
+  it('gives a v2 document (no mixer) an empty mixer on load', () => {
+    const v2 = { ...createInitialProjectState(), version: 2 } as Record<string, unknown>
+    delete v2.mixer
+    const migrated = migrateProjectState(v2)!
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.mixer).toEqual({})
+  })
+
+  it('fills in the full kit when loading a v1 document saved with only a kick lane', () => {
+    const kickOnly = {
+      version: 1,
+      patterns: [
+        {
+          id: 'pattern-1',
+          name: 'Pattern 1',
+          lanes: [
+            {
+              id: 'kick',
+              label: 'Kick',
+              steps: Array.from({ length: 16 }, (_, i) => ({
+                on: i % 4 === 0,
+                accent: false,
+              })),
+            },
+          ],
+        },
+      ],
+      activePatternId: 'pattern-1',
+      transport: { bpm: 128 },
+      instrumentSettings: {},
+      lessonProgress: { 'four-on-the-floor': { completed: true, dismissed: false } },
+      prefs: {},
+    }
+
+    const migrated = migrateProjectState(kickOnly)!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    // The user's programmed kick survives; the new lanes arrive empty.
+    const lanes = migrated.patterns[0].lanes
+    expect(lanes.map((lane) => lane.id)).toEqual([
+      'kick',
+      'snare',
+      'closedHat',
+      'openHat',
+      'perc',
+    ])
+    expect(lanes[0].steps.filter((s) => s.on)).toHaveLength(4)
+    expect(lanes.slice(1).every((lane) => lane.steps.every((s) => !s.on))).toBe(true)
+    expect(migrated.transport.bpm).toBe(128)
+    expect(migrated.lessonProgress['four-on-the-floor'].completed).toBe(true)
   })
 
   it('returns null for corrupt or unknown-version input', () => {

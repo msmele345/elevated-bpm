@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BassPanel } from './components/BassPanel'
 import { LessonPanel } from './components/LessonPanel'
+import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
@@ -277,6 +278,8 @@ export default function App() {
         onResize={handleResizeNote}
         onParamChange={handleBassParamChange}
       />
+
+      <StabKeyboard onAttack={engine.attackStabNote} onRelease={engine.releaseStabNote} />
     </main>
   )
 }

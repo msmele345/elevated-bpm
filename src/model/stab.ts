@@ -30,6 +30,33 @@ export function stabKeyForCode(code: string): StabKey | undefined {
   return STAB_KEYS.find((key) => key.code === code)
 }
 
+interface StabKeyboardInput {
+  code: string
+  target: unknown
+  metaKey?: boolean
+  ctrlKey?: boolean
+  altKey?: boolean
+}
+
+/**
+ * Map a global keyboard event only when it belongs to the instrument. Text
+ * entry and browser/OS shortcuts keep their native behavior.
+ */
+export function stabKeyForKeyboardInput(input: StabKeyboardInput): StabKey | undefined {
+  if (input.metaKey || input.ctrlKey || input.altKey) return undefined
+  if (typeof input.target === 'object' && input.target !== null) {
+    const target = input.target as { tagName?: unknown; isContentEditable?: unknown }
+    if (target.isContentEditable === true) return undefined
+    if (typeof target.tagName === 'string') {
+      const tagName = target.tagName.toUpperCase()
+      if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+        return undefined
+      }
+    }
+  }
+  return stabKeyForCode(input.code)
+}
+
 export interface StabNoteAttack {
   midi: number
   /** Identifies this particular first hold, so late async attacks can be rejected. */
@@ -101,6 +128,59 @@ export function createStabNoteHolds(): StabNoteHolds {
         (noteHoldCounts.get(attack.midi) ?? 0) > 0 &&
         noteRequests.get(attack.midi) === attack.request
       )
+    },
+  }
+}
+
+interface SequencedStabNote {
+  midi: number
+  startsAt: number
+  endsAt: number
+}
+
+export interface StabSoundingNotes {
+  attackLive(midi: number): void
+  releaseLive(midi: number): void
+  schedule(midi: number, startsAt: number, endsAt: number): void
+  clearSequenced(): void
+  /** Notes audible at a monotonically increasing audio-context time. */
+  atTime(time: number): number[]
+}
+
+/**
+ * Clock-aware union of live holds and transport-scheduled notes. The audio
+ * engine owns this registry; the keyboard reads it from requestAnimationFrame
+ * so visual state follows Tone's clock without React rendering on every tick.
+ */
+export function createStabSoundingNotes(): StabSoundingNotes {
+  const live = new Set<number>()
+  let sequenced: SequencedStabNote[] = []
+
+  return {
+    attackLive(midi) {
+      live.add(midi)
+    },
+
+    releaseLive(midi) {
+      live.delete(midi)
+    },
+
+    schedule(midi, startsAt, endsAt) {
+      if (endsAt <= startsAt) return
+      sequenced.push({ midi, startsAt, endsAt })
+    },
+
+    clearSequenced() {
+      sequenced = []
+    },
+
+    atTime(time) {
+      sequenced = sequenced.filter((note) => note.endsAt > time)
+      const sounding = new Set(live)
+      for (const note of sequenced) {
+        if (note.startsAt <= time) sounding.add(note.midi)
+      }
+      return [...sounding].sort((a, b) => a - b)
     },
   }
 }

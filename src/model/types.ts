@@ -31,7 +31,7 @@ export interface NoteStep {
   length: number
 }
 
-export type NoteLaneId = 'bass'
+export type NoteLaneId = 'bass' | 'stab'
 
 /** A note lane: 16 steps of on/off + pitch + length. */
 export interface NoteLane {
@@ -43,7 +43,7 @@ export interface NoteLane {
 /**
  * A first-class 16-step loop. Drum lanes and note lanes are separate lists
  * because their steps carry different musical content, but both are sequenced
- * off the same step index, which is what keeps bass locked to the drums.
+ * off the same step index, which keeps bass and stabs locked to the drums.
  */
 export interface Pattern {
   id: string

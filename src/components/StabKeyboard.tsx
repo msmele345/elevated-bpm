@@ -6,11 +6,18 @@ import {
   type PointerEvent,
 } from 'react'
 import { midiToNoteName } from '../model/note'
-import { STAB_KEYS, stabKeyForCode, type StabKey } from '../model/stab'
+import { STAB_KEYS, stabKeyForKeyboardInput, type StabKey } from '../model/stab'
+import type { NoteLane } from '../model/types'
+import { NoteRow } from './NoteRow'
 
 interface StabKeyboardProps {
+  lane: NoteLane
   onAttack: (source: string, midi: number) => void
   onRelease: (source: string) => void
+  getSoundingNotes: () => readonly number[]
+  onToggleStep: (stepIndex: number) => void
+  onTranspose: (stepIndex: number, semitones: number) => void
+  onResize: (stepIndex: number, steps: number) => void
 }
 
 const WHITE_KEY_COUNT = STAB_KEYS.filter((key) => key.kind === 'white').length
@@ -28,30 +35,57 @@ function keyStyle(key: StabKey): CSSProperties {
 const STAB_KEY_LAYOUT = STAB_KEYS.map((key) => ({ key, style: keyStyle(key) }))
 
 /**
- * True when a keystroke is destined for a text/editable field, so the global
- * keyboard-to-notes mapping must stay out of its way (Phase 6 AC5).
- */
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  if (target.isContentEditable) return true
-  const tag = target.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
-}
-
-/**
  * One live octave of the stab synth. Pointer contacts and physical keyboard
  * codes are tracked separately, so several held keys form a chord and each
  * note releases only when its own input ends.
  */
-export function StabKeyboard({ onAttack, onRelease }: StabKeyboardProps) {
+export function StabKeyboard({
+  lane,
+  onAttack,
+  onRelease,
+  getSoundingNotes,
+  onToggleStep,
+  onTranspose,
+  onResize,
+}: StabKeyboardProps) {
   const heldSources = useRef(new Set<string>())
+  const keyboardRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const keyboard = keyboardRef.current
+    if (!keyboard) return
+
+    let frame = 0
+    let previous = ''
+
+    const renderSoundingKeys = () => {
+      const notes = getSoundingNotes()
+      const signature = notes.join(',')
+      if (signature !== previous) {
+        const sounding = new Set(notes)
+        keyboard.querySelectorAll<HTMLButtonElement>('.stab-key').forEach((key) => {
+          const active = sounding.has(Number(key.dataset.midi))
+          key.toggleAttribute('data-sounding', active)
+          key.setAttribute('aria-pressed', String(active))
+        })
+        previous = signature
+      }
+      frame = requestAnimationFrame(renderSoundingKeys)
+    }
+
+    frame = requestAnimationFrame(renderSoundingKeys)
+    return () => {
+      cancelAnimationFrame(frame)
+      keyboard.querySelectorAll<HTMLButtonElement>('.stab-key').forEach((key) => {
+        key.removeAttribute('data-sounding')
+        key.setAttribute('aria-pressed', 'false')
+      })
+    }
+  }, [getSoundingNotes])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Let browser/OS shortcuts and typing pass through untouched.
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (isEditableTarget(event.target)) return
-      const key = stabKeyForCode(event.code)
+      const key = stabKeyForKeyboardInput(event)
       const source = `computer:${event.code}`
       if (!key || heldSources.current.has(source)) return
       event.preventDefault()
@@ -126,13 +160,21 @@ export function StabKeyboard({ onAttack, onRelease }: StabKeyboardProps) {
         <span className="panel-title-name">Chord Stab</span>
         <span className="panel-title-model">POLY SYNTH · CS-08</span>
       </div>
-      <div className="stab-keyboard" aria-label="Live stab keyboard">
+      <NoteRow
+        lane={lane}
+        onToggleStep={onToggleStep}
+        onTranspose={onTranspose}
+        onResize={onResize}
+      />
+      <div ref={keyboardRef} className="stab-keyboard" aria-label="Live stab keyboard">
         {STAB_KEY_LAYOUT.map(({ key, style }) => (
           <button
             key={key.code}
             type="button"
             className={`stab-key stab-key-${key.kind}`}
             style={style}
+            data-midi={key.midi}
+            aria-pressed={false}
             aria-label={`${midiToNoteName(key.midi)} — ${key.label} key`}
             onKeyDown={(event) => handleButtonKeyDown(event, key.midi)}
             onPointerDown={(event) => handlePointerDown(event, key.midi)}
@@ -147,7 +189,8 @@ export function StabKeyboard({ onAttack, onRelease }: StabKeyboardProps) {
         ))}
       </div>
       <p className="panel-hint">
-        Play A–K for the white keys · W E T Y U play the sharps · hold several keys for chords
+        Tap a stab step to sequence it · use arrows to shape it · play A–K live, with W E T Y
+        U for sharps
       </p>
     </section>
   )

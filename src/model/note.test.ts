@@ -7,10 +7,14 @@ import {
   MAX_NOTE_LENGTH,
   MIN_PITCH,
   MIN_NOTE_LENGTH,
+  STAB_DEFAULT_PITCH,
+  STAB_MAX_PITCH,
+  STAB_MIN_PITCH,
   createNoteLanes,
   midiToFrequency,
   midiToNoteName,
   noteEventAtStep,
+  noteEventsAtStep,
   resizeNoteStep,
   toggleNoteStep,
   transposeNoteStep,
@@ -21,21 +25,31 @@ function bassSteps(pattern: Pattern) {
   return pattern.noteLanes.find((lane) => lane.id === 'bass')!.steps
 }
 
+function stabSteps(pattern: Pattern) {
+  return pattern.noteLanes.find((lane) => lane.id === 'stab')!.steps
+}
+
 describe('createNoteLanes', () => {
-  it('creates a bass lane of 16 off steps, each parked at the default pitch', () => {
+  it('creates bass and stab lanes parked at their instrument defaults', () => {
     const lanes = createNoteLanes()
 
-    expect(lanes.map((lane) => lane.id)).toEqual(['bass'])
-    for (const lane of lanes) {
-      expect(lane.steps).toHaveLength(STEP_COUNT)
-      expect(lane.label.length).toBeGreaterThan(0)
-      expect(
-        lane.steps.every(
-          (step) =>
-            step.on === false && step.pitch === DEFAULT_PITCH && step.length === MIN_NOTE_LENGTH,
-        ),
-      ).toBe(true)
-    }
+    expect(lanes.map((lane) => lane.id)).toEqual(['bass', 'stab'])
+    expect(bassSteps({ ...createInitialPattern(), noteLanes: lanes })).toHaveLength(STEP_COUNT)
+    expect(stabSteps({ ...createInitialPattern(), noteLanes: lanes })).toHaveLength(STEP_COUNT)
+    expect(
+      bassSteps({ ...createInitialPattern(), noteLanes: lanes }).every(
+        (step) =>
+          step.on === false && step.pitch === DEFAULT_PITCH && step.length === MIN_NOTE_LENGTH,
+      ),
+    ).toBe(true)
+    expect(
+      stabSteps({ ...createInitialPattern(), noteLanes: lanes }).every(
+        (step) =>
+          step.on === false &&
+          step.pitch === STAB_DEFAULT_PITCH &&
+          step.length === MIN_NOTE_LENGTH,
+      ),
+    ).toBe(true)
   })
 })
 
@@ -43,13 +57,26 @@ describe('withNoteLanes', () => {
   it('adds missing note lanes to a pattern saved before they existed', () => {
     const legacy = { ...createInitialPattern(), noteLanes: [] } as Pattern
 
-    expect(withNoteLanes(legacy).noteLanes.map((lane) => lane.id)).toEqual(['bass'])
+    expect(withNoteLanes(legacy).noteLanes.map((lane) => lane.id)).toEqual(['bass', 'stab'])
   })
 
   it('keeps programmed notes on lanes the pattern already has', () => {
     const programmed = toggleNoteStep(createInitialPattern(), 'bass', 3)
 
     expect(bassSteps(withNoteLanes(programmed))[3].on).toBe(true)
+  })
+
+  it('adds an empty stab lane without disturbing a saved bassline', () => {
+    const programmed = toggleNoteStep(createInitialPattern(), 'bass', 3)
+    const bassOnly = {
+      ...programmed,
+      noteLanes: programmed.noteLanes.filter((lane) => lane.id === 'bass'),
+    }
+
+    const upgraded = withNoteLanes(bassOnly)
+
+    expect(bassSteps(upgraded)[3].on).toBe(true)
+    expect(stabSteps(upgraded).every((step) => !step.on)).toBe(true)
   })
 })
 
@@ -98,6 +125,14 @@ describe('transposeNoteStep', () => {
     expect(bassSteps(high)[0].pitch).toBe(MAX_PITCH)
     expect(bassSteps(low)[0].pitch).toBe(MIN_PITCH)
   })
+
+  it('moves stab notes only across the visible C4–C5 keyboard', () => {
+    const raised = transposeNoteStep(createInitialPattern(), 'stab', 0, 7)
+    expect(stabSteps(raised)[0].pitch).toBe(STAB_DEFAULT_PITCH + 7)
+
+    expect(stabSteps(transposeNoteStep(raised, 'stab', 0, 500))[0].pitch).toBe(STAB_MAX_PITCH)
+    expect(stabSteps(transposeNoteStep(raised, 'stab', 0, -500))[0].pitch).toBe(STAB_MIN_PITCH)
+  })
 })
 
 describe('resizeNoteStep', () => {
@@ -130,6 +165,20 @@ describe('noteEventAtStep', () => {
     })
   })
 
+  it('returns a programmed stab event at the same step boundary as the drums and bass', () => {
+    const pattern = toggleNoteStep(
+      transposeNoteStep(createInitialPattern(), 'stab', 4, 7),
+      'stab',
+      4,
+    )
+
+    expect(noteEventAtStep(pattern, 'stab', 4)).toEqual({
+      midi: STAB_DEFAULT_PITCH + 7,
+      frequency: midiToFrequency(STAB_DEFAULT_PITCH + 7),
+      lengthSteps: MIN_NOTE_LENGTH,
+    })
+  })
+
   it('clips a long note where the next note starts, so the lane stays monophonic', () => {
     const twoNotes = toggleNoteStep(
       resizeNoteStep(toggleNoteStep(createInitialPattern(), 'bass', 0), 'bass', 0, 3),
@@ -155,6 +204,31 @@ describe('noteEventAtStep', () => {
     const legacy = { ...createInitialPattern(), noteLanes: [] } as Pattern
 
     expect(noteEventAtStep(legacy, 'bass', 0)).toBeNull()
+  })
+})
+
+describe('noteEventsAtStep', () => {
+  it('returns bass and stab events from the same sequencer step', () => {
+    const bassAndStab = toggleNoteStep(
+      toggleNoteStep(createInitialPattern(), 'bass', 8),
+      'stab',
+      8,
+    )
+
+    expect(noteEventsAtStep(bassAndStab, 8)).toEqual([
+      {
+        laneId: 'bass',
+        midi: DEFAULT_PITCH,
+        frequency: midiToFrequency(DEFAULT_PITCH),
+        lengthSteps: MIN_NOTE_LENGTH,
+      },
+      {
+        laneId: 'stab',
+        midi: STAB_DEFAULT_PITCH,
+        frequency: midiToFrequency(STAB_DEFAULT_PITCH),
+        lengthSteps: MIN_NOTE_LENGTH,
+      },
+    ])
   })
 })
 

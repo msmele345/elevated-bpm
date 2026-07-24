@@ -13,7 +13,7 @@ interface NoteRowProps {
 const OCTAVE = 12
 
 /**
- * The bass note lane: 16 steps that carry a pitch and a length instead of an
+ * A melodic note lane: 16 steps that carry a pitch and a length instead of an
  * accent. A click arms the note; the arrow keys shape it in place — up/down
  * transposes (shift for whole octaves), left/right sets how many 16ths it
  * rings — so a line can be programmed entirely from the keyboard.

@@ -144,11 +144,11 @@ A simple polyphonic stab synth played on an on-screen MIDI-style keyboard, with 
 
 ### Acceptance criteria
 
-- [ ] On-screen keys respond to mouse and to mapped computer-keyboard keys with low enough latency to feel playable
-- [ ] Multiple simultaneous notes (chords) sound correctly
-- [ ] Stab hits can be programmed into the pattern's note lane and loop in sync
-- [ ] Key highlighting shows what's sounding, whether played live or sequenced
-- [ ] Typing in text inputs never triggers notes (input focus is respected)
+- [x] On-screen keys respond to mouse and to mapped computer-keyboard keys with low enough latency to feel playable
+- [x] Multiple simultaneous notes (chords) sound correctly
+- [x] Stab hits can be programmed into the pattern's note lane and loop in sync
+- [x] Key highlighting shows what's sounding, whether played live or sequenced
+- [x] Typing in text inputs never triggers notes (input focus is respected)
 
 ---
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { STAB_KEYS, createStabNoteHolds, stabKeyForCode } from './stab'
+import {
+  STAB_KEYS,
+  createStabNoteHolds,
+  createStabSoundingNotes,
+  stabKeyForCode,
+  stabKeyForKeyboardInput,
+} from './stab'
 
 describe('stab keyboard', () => {
   it('maps a playable C4–C5 keyboard to the A–K row and its sharp keys', () => {
@@ -21,9 +27,30 @@ describe('stab keyboard', () => {
   })
 
   it('resolves mapped physical keys without claiming unrelated keyboard input', () => {
-    expect(stabKeyForCode('KeyA')?.midi).toBe(60)
+    expect(stabKeyForKeyboardInput({ code: 'KeyA', target: null })?.midi).toBe(60)
     expect(stabKeyForCode('KeyU')?.midi).toBe(70)
     expect(stabKeyForCode('Space')).toBeUndefined()
+  })
+
+  it('does not map notes while focus belongs to a text-entry control', () => {
+    const editableTargets = [
+      { tagName: 'INPUT' },
+      { tagName: 'textarea' },
+      { tagName: 'SELECT' },
+      { tagName: 'DIV', isContentEditable: true },
+    ]
+
+    expect(
+      editableTargets.map((target) =>
+        stabKeyForKeyboardInput({
+          code: 'KeyA',
+          target,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+        }),
+      ),
+    ).toEqual([undefined, undefined, undefined, undefined])
   })
 })
 
@@ -64,5 +91,47 @@ describe('stab note holds', () => {
 
     expect(holds.release('pointer:3')).toEqual({ midi: 72 })
     expect(holds.isCurrent(pending)).toBe(false)
+  })
+})
+
+describe('stab sounding notes', () => {
+  it('reports live notes for exactly as long as they are held', () => {
+    const sounding = createStabSoundingNotes()
+
+    sounding.attackLive(67)
+    sounding.attackLive(60)
+    expect(sounding.atTime(10)).toEqual([60, 67])
+
+    sounding.releaseLive(60)
+    expect(sounding.atTime(10.1)).toEqual([67])
+  })
+
+  it('reports a sequenced note only inside its scheduled audio window', () => {
+    const sounding = createStabSoundingNotes()
+    sounding.schedule(64, 20, 20.25)
+
+    expect(sounding.atTime(19.99)).toEqual([])
+    expect(sounding.atTime(20)).toEqual([64])
+    expect(sounding.atTime(20.249)).toEqual([64])
+    expect(sounding.atTime(20.25)).toEqual([])
+  })
+
+  it('keeps a live key lit when a sequenced hit on the same pitch ends', () => {
+    const sounding = createStabSoundingNotes()
+    sounding.attackLive(60)
+    sounding.schedule(60, 4, 4.1)
+
+    expect(sounding.atTime(4.05)).toEqual([60])
+    expect(sounding.atTime(4.2)).toEqual([60])
+  })
+
+  it('clears sequenced highlights on transport stop without clearing live keys', () => {
+    const sounding = createStabSoundingNotes()
+    sounding.attackLive(72)
+    sounding.schedule(64, 4, 8)
+
+    sounding.clearSequenced()
+
+    expect(sounding.atTime(5)).toEqual([72])
   })
 })

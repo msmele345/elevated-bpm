@@ -11,6 +11,10 @@ export const DEFAULT_PITCH = 36
 /** Two octaves of bass, C1–C3: low enough to rumble, high enough to sing. */
 export const MIN_PITCH = 24
 export const MAX_PITCH = 48
+/** The stab lane matches the visible one-octave keyboard, C4–C5. */
+export const STAB_DEFAULT_PITCH = 60
+export const STAB_MIN_PITCH = 60
+export const STAB_MAX_PITCH = 72
 
 /** Note length in whole steps — one 16th up to a full beat. */
 export const MIN_NOTE_LENGTH = 1
@@ -18,23 +22,48 @@ export const MAX_NOTE_LENGTH = 4
 
 /**
  * The note lanes a pattern has, in deck order. Like KIT_LANES for drums, this
- * list is the authority — Phase 6's stab lane is a one-line addition here.
+ * list is the authority for each lane's label, default pitch, and range.
  */
-export const NOTE_LANES: ReadonlyArray<{ id: NoteLaneId; label: string }> = [
-  { id: 'bass', label: 'Bass' },
+interface NoteLaneSpec {
+  id: NoteLaneId
+  label: string
+  defaultPitch: number
+  minPitch: number
+  maxPitch: number
+}
+
+export const NOTE_LANES: ReadonlyArray<NoteLaneSpec> = [
+  {
+    id: 'bass',
+    label: 'Bass',
+    defaultPitch: DEFAULT_PITCH,
+    minPitch: MIN_PITCH,
+    maxPitch: MAX_PITCH,
+  },
+  {
+    id: 'stab',
+    label: 'Stab',
+    defaultPitch: STAB_DEFAULT_PITCH,
+    minPitch: STAB_MIN_PITCH,
+    maxPitch: STAB_MAX_PITCH,
+  },
 ]
 
-function emptyNoteSteps(): NoteStep[] {
+function emptyNoteSteps(defaultPitch: number): NoteStep[] {
   return Array.from({ length: STEP_COUNT }, () => ({
     on: false,
-    pitch: DEFAULT_PITCH,
+    pitch: defaultPitch,
     length: MIN_NOTE_LENGTH,
   }))
 }
 
 /** Every note lane, all steps off and parked at the default pitch. */
 export function createNoteLanes(): NoteLane[] {
-  return NOTE_LANES.map(({ id, label }) => ({ id, label, steps: emptyNoteSteps() }))
+  return NOTE_LANES.map(({ id, label, defaultPitch }) => ({
+    id,
+    label,
+    steps: emptyNoteSteps(defaultPitch),
+  }))
 }
 
 /**
@@ -45,10 +74,15 @@ export function createNoteLanes(): NoteLane[] {
 export function withNoteLanes(pattern: Pattern): Pattern {
   return {
     ...pattern,
-    noteLanes: NOTE_LANES.map(
-      ({ id, label }) =>
-        pattern.noteLanes?.find((lane) => lane.id === id) ?? { id, label, steps: emptyNoteSteps() },
-    ),
+    noteLanes: NOTE_LANES.map(({ id, label, defaultPitch }) => {
+      return (
+        pattern.noteLanes?.find((lane) => lane.id === id) ?? {
+          id,
+          label,
+          steps: emptyNoteSteps(defaultPitch),
+        }
+      )
+    }),
   }
 }
 
@@ -88,9 +122,11 @@ export function transposeNoteStep(
   stepIndex: number,
   semitones: number,
 ): Pattern {
+  const spec = NOTE_LANES.find((lane) => lane.id === laneId)
+  if (!spec) return pattern
   return mapNoteStep(pattern, laneId, stepIndex, (step) => ({
     ...step,
-    pitch: clamp(step.pitch + semitones, MIN_PITCH, MAX_PITCH),
+    pitch: clamp(step.pitch + semitones, spec.minPitch, spec.maxPitch),
   }))
 }
 
@@ -113,6 +149,10 @@ export interface NoteEvent {
   frequency: number
   /** How many 16ths the note actually rings for, once the next note cuts it. */
   lengthSteps: number
+}
+
+export interface LaneNoteEvent extends NoteEvent {
+  laneId: NoteLaneId
 }
 
 /**
@@ -145,6 +185,14 @@ export function noteEventAtStep(
     frequency: midiToFrequency(step.pitch),
     lengthSteps: stepsUntilNextNote(lane.steps, stepIndex, step.length),
   }
+}
+
+/** Every melodic event starting on one shared 16th-note transport boundary. */
+export function noteEventsAtStep(pattern: Pattern, stepIndex: number): LaneNoteEvent[] {
+  return NOTE_LANES.flatMap(({ id }) => {
+    const event = noteEventAtStep(pattern, id, stepIndex)
+    return event ? [{ laneId: id, ...event }] : []
+  })
 }
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']

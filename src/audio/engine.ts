@@ -1,12 +1,13 @@
 import * as Tone from 'tone'
 import { DEFAULT_BASS_SETTINGS, type BassSettings } from '../model/bass'
 import type { Mixer } from '../model/mixer'
-import { midiToFrequency, noteEventAtStep } from '../model/note'
-import { createStabNoteHolds } from '../model/stab'
+import { midiToFrequency, noteEventsAtStep } from '../model/note'
+import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
 import { voiceStep } from './hits'
 import { KIT_SAMPLES } from './kit'
+import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
 /**
@@ -55,14 +56,12 @@ let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
  * own Tone.Synth voice, so computer-keyboard chords attack and release
  * independently instead of stealing the bass synth's monophonic voice.
  */
-interface StabVoice {
-  synth: Tone.PolySynth<Tone.Synth>
-}
-let stab: StabVoice | null = null
+let stab: StabVoices | null = null
 
 // Pointer contacts, computer keys, and accessible button activation all feed
 // the same source-aware hold boundary.
 const stabNoteHolds = createStabNoteHolds()
+const stabSoundingNotes = createStabSoundingNotes()
 
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {
@@ -124,13 +123,12 @@ function createBassVoice(): BassVoice {
   return { synth, filter }
 }
 
-function createStabVoice(): StabVoice {
-  const synth = new Tone.PolySynth(Tone.Synth, {
+function createStabSynth(): Tone.PolySynth<Tone.Synth> {
+  return new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'sawtooth' },
     envelope: { attack: 0.004, decay: 0.16, sustain: 0.36, release: 0.12 },
     volume: Tone.gainToDb(STAB_GAIN),
   }).toDestination()
-  return { synth }
 }
 
 /**
@@ -148,7 +146,7 @@ function ensureVoices(): void {
     }),
   ) as Record<DrumLaneId, Voice>
   bass = createBassVoice()
-  stab = createStabVoice()
+  stab = createStabVoices(createStabSynth)
   setBassSettings(bassSettings)
   samplesLoaded = Tone.loaded()
   Tone.getTransport().bpm.value = bpm
@@ -191,7 +189,8 @@ export function attackStabNote(source: string, midi: number): void {
   void Tone.start().then(() => {
     ensureVoices()
     if (!stabNoteHolds.isCurrent(attack)) return
-    stab?.synth.triggerAttack(midiToFrequency(attack.midi), Tone.immediate(), 0.82)
+    stab?.attackLive(midiToFrequency(attack.midi), Tone.immediate(), 0.82)
+    stabSoundingNotes.attackLive(attack.midi)
   })
 }
 
@@ -199,7 +198,13 @@ export function attackStabNote(source: string, midi: number): void {
 export function releaseStabNote(source: string): void {
   const release = stabNoteHolds.release(source)
   if (!release) return
-  stab?.synth.triggerRelease(midiToFrequency(release.midi), Tone.immediate())
+  stab?.releaseLive(midiToFrequency(release.midi), Tone.immediate())
+  stabSoundingNotes.releaseLive(release.midi)
+}
+
+/** Current live + sequenced stab pitches, read by the keyboard's rAF loop. */
+export function getSoundingStabNotes(): readonly number[] {
+  return stabSoundingNotes.atTime(Tone.immediate())
 }
 
 export async function play(): Promise<void> {
@@ -226,16 +231,19 @@ export async function play(): Promise<void> {
         voice.gain.gain.setValueAtTime(hit.gain, time)
         voice.player.start(time)
       }
-      // The bass rides the same scheduled 16th as the drums, so it is locked
-      // to them by construction. Its length is already clipped to the next
-      // note, keeping the single voice monophonic.
-      const note = noteEventAtStep(currentPattern, 'bass', stepIndex)
-      if (note && bass) {
-        bass.synth.triggerAttackRelease(
-          note.frequency,
-          note.lengthSteps * secondsPer16th(),
-          time,
-        )
+      // Every note lane resolves from this same scheduled 16th as the drums.
+      // Bass uses its monophonic voice. Programmed stabs use a separate
+      // polyphonic pool from live input so same-pitch releases cannot steal a
+      // held live key.
+      for (const note of noteEventsAtStep(currentPattern, stepIndex)) {
+        const duration = note.lengthSteps * secondsPer16th()
+        if (note.laneId === 'bass' && bass) {
+          bass.synth.triggerAttackRelease(note.frequency, duration, time)
+        }
+        if (note.laneId === 'stab' && stab) {
+          stab.triggerSequenced(note.frequency, duration, time, 0.72)
+          stabSoundingNotes.schedule(note.midi, time, time + duration)
+        }
       }
     }, '16n')
     repeatScheduled = true
@@ -246,5 +254,7 @@ export async function play(): Promise<void> {
 export function stop(): void {
   const transport = Tone.getTransport()
   transport.stop()
+  stab?.stopSequenced()
+  stabSoundingNotes.clearSequenced()
   // stop() resets transport position, so the next play starts on step 1.
 }

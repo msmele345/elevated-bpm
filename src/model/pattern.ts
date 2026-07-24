@@ -18,7 +18,7 @@ export const KIT_LANES: ReadonlyArray<{ id: DrumLaneId; label: string }> = [
   { id: 'perc', label: 'Perc' },
 ]
 
-/** An empty pattern with the full kit and bass lane: every lane, all steps off. */
+/** An empty pattern with the full kit and note lanes: every lane, all steps off. */
 export function createInitialPattern(): Pattern {
   return {
     id: 'pattern-1',

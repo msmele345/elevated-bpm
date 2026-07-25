@@ -23,6 +23,12 @@
      React state). Defaults keep the room calm before the first frame lands. */
   --pulse: 0;
   --breathe: 0;
+  --cool: 0;
+
+  /* the club palette the room drifts into (crossfaded from the quad palette) */
+  --cool-a: #ff2ea6; /* magenta */
+  --cool-b: #2ee6ff; /* cyan    */
+  --cool-c: #8a5cff; /* violet  */
 }
 
 * {
@@ -63,12 +69,13 @@ body::before {
 }
 
 /* ── The room: beat-synced club light behind the deck ──────────────── */
-/* Three soft light sources in the periphery plus two slow haze beams. All
-   intensity comes from --pulse (the beat strobe) and --breathe (the idle
-   swell); colors come from the deck's own quad palette so the room reads as
-   the instrument's light spilling into the space. Opacity/transform only —
-   no layout, no paint storms — and mix-blend screen so lights add, never
-   muddy. */
+/* Three soft light sources in the periphery plus two slow haze beams. The
+   room swells on a resting-glow floor — base + bar-accented --pulse depth +
+   idle --breathe — so it breathes with the phrase instead of strobing every
+   beat, and each wash is a warm/cool layer pair crossfaded by --cool as the
+   palette drifts from the deck's 909 warmth out to club magenta/cyan/violet
+   and back. Opacity/transform only — no layout, no paint storms — and
+   mix-blend screen so lights add, never muddy. */
 .room {
   position: fixed;
   inset: 0;
@@ -94,7 +101,18 @@ body::before {
     color-mix(in srgb, var(--quad-0) 62%, transparent) 0%,
     transparent 68%
   );
-  opacity: calc(var(--pulse) * 0.62 + var(--breathe) * 0.1);
+  opacity: calc((0.13 + var(--pulse) * 0.3 + var(--breathe) * 0.08) * (1 - var(--cool)));
+}
+
+.room-wash-a-cool {
+  top: -22%;
+  left: -16%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--cool-a) 62%, transparent) 0%,
+    transparent 68%
+  );
+  opacity: calc((0.13 + var(--pulse) * 0.3 + var(--breathe) * 0.08) * var(--cool));
 }
 
 .room-wash-b {
@@ -105,7 +123,18 @@ body::before {
     color-mix(in srgb, var(--quad-1) 55%, transparent) 0%,
     transparent 68%
   );
-  opacity: calc(var(--pulse) * 0.52 + var(--breathe) * 0.08);
+  opacity: calc((0.11 + var(--pulse) * 0.26 + var(--breathe) * 0.07) * (1 - var(--cool)));
+}
+
+.room-wash-b-cool {
+  top: -26%;
+  right: -18%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--cool-b) 55%, transparent) 0%,
+    transparent 68%
+  );
+  opacity: calc((0.11 + var(--pulse) * 0.26 + var(--breathe) * 0.07) * var(--cool));
 }
 
 .room-wash-c {
@@ -117,11 +146,23 @@ body::before {
     color-mix(in srgb, var(--quad-2) 36%, transparent) 0%,
     transparent 70%
   );
-  opacity: calc(var(--pulse) * 0.44 + var(--breathe) * 0.12);
+  opacity: calc((0.1 + var(--pulse) * 0.24 + var(--breathe) * 0.1) * (1 - var(--cool)));
 }
 
-/* moving-head beams: wedge blades pivoting slowly from a point above the
-   room, lit harder by each strobe flash */
+.room-wash-c-cool {
+  bottom: -26%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--cool-c) 38%, transparent) 0%,
+    transparent 70%
+  );
+  opacity: calc((0.1 + var(--pulse) * 0.24 + var(--breathe) * 0.1) * var(--cool));
+}
+
+/* moving-head beams: wedge blades in static club tints, pivoting slowly from
+   a point above the room — colored atmosphere, barely coupled to the swell */
 .room-beam {
   position: absolute;
   top: -42vh;
@@ -138,10 +179,10 @@ body::before {
   left: 24%;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--quad-0) 30%, transparent) 0%,
+    color-mix(in srgb, var(--cool-c) 30%, transparent) 0%,
     transparent 72%
   );
-  opacity: calc(0.045 + var(--pulse) * 0.16 + var(--breathe) * 0.04);
+  opacity: calc(0.05 + var(--pulse) * 0.06 + var(--breathe) * 0.04);
   animation: beam-sweep-a 47s ease-in-out infinite alternate;
 }
 
@@ -149,10 +190,10 @@ body::before {
   right: 20%;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--quad-1) 26%, transparent) 0%,
+    color-mix(in srgb, var(--cool-b) 26%, transparent) 0%,
     transparent 72%
   );
-  opacity: calc(0.04 + var(--pulse) * 0.13 + var(--breathe) * 0.035);
+  opacity: calc(0.045 + var(--pulse) * 0.05 + var(--breathe) * 0.035);
   animation: beam-sweep-b 61s ease-in-out infinite alternate;
 }
 
@@ -174,8 +215,9 @@ body::before {
   }
 }
 
-/* Reduced motion: no strobing, no sweeping — the room holds a static dim
-   glow so the deck still floats in a space, without any flashing. */
+/* Reduced motion: no swelling, no sweeping, no color drift — the room holds
+   a static dim blend of warm and cool glows so the deck still floats in a
+   space, without any movement. */
 @media (prefers-reduced-motion: reduce) {
   .room-wash-a {
     opacity: 0.1;
@@ -185,6 +227,15 @@ body::before {
   }
   .room-wash-c {
     opacity: 0.1;
+  }
+  .room-wash-a-cool {
+    opacity: 0.06;
+  }
+  .room-wash-b-cool {
+    opacity: 0.05;
+  }
+  .room-wash-c-cool {
+    opacity: 0.06;
   }
   .room-beam {
     animation: none;
@@ -206,7 +257,8 @@ body::before {
 }
 
 /* the deck as light source: warm spill cast onto the floor of the room,
-   flaring with each strobe pulse */
+   swelling on the 1 — deliberately warm even as the room drifts cool, so
+   the instrument keeps its own identity */
 .deck::after {
   content: '';
   position: absolute;
@@ -218,7 +270,7 @@ body::before {
     color-mix(in srgb, var(--quad-0) 24%, transparent) 0%,
     transparent 72%
   );
-  opacity: calc(0.26 + var(--pulse) * 0.62 + var(--breathe) * 0.14);
+  opacity: calc(0.24 + var(--pulse) * 0.4 + var(--breathe) * 0.14);
 }
 
 .deck-header {
@@ -241,10 +293,10 @@ body::before {
 .brand em {
   font-style: italic;
   color: var(--quad-0);
-  /* the wordmark flares with the room's strobe while the loop plays */
+  /* the wordmark swells gently with the room on the 1 of each bar */
   text-shadow:
-    0 0 18px rgb(255 77 51 / calc(0.45 + var(--pulse) * 0.35)),
-    0 0 52px rgb(255 77 51 / calc(var(--pulse) * 0.3));
+    0 0 18px rgb(255 77 51 / calc(0.45 + var(--pulse) * 0.2)),
+    0 0 52px rgb(255 77 51 / calc(var(--pulse) * 0.18));
 }
 
 .deck-model {

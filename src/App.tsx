@@ -229,6 +229,9 @@ export default function App() {
         <div className="room-wash room-wash-a" />
         <div className="room-wash room-wash-b" />
         <div className="room-wash room-wash-c" />
+        <div className="room-wash room-wash-a-cool" />
+        <div className="room-wash room-wash-b-cool" />
+        <div className="room-wash room-wash-c-cool" />
         <div className="room-beam room-beam-a" />
         <div className="room-beam room-beam-b" />
       </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BASS_PARAMS, DEFAULT_BASS_SETTINGS } from './bass'
-import { DEFAULT_PITCH, MIN_NOTE_LENGTH } from './note'
+import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
 import { createDemoPattern, createInitialPattern } from './pattern'
 import { DEFAULT_BPM } from './transport'
 import {
@@ -198,6 +198,33 @@ describe('migrateProjectState', () => {
     const bass = migrated.patterns[0].noteLanes.find((lane) => lane.id === 'bass')!
     expect(bass.steps).toHaveLength(16)
     expect(bass.steps.every((step) => !step.on)).toBe(true)
+  })
+
+  it('gives a v4 bass project an empty stab lane without changing its bassline', () => {
+    const bassProject = toggleActivePatternNoteStep(createInitialProjectState(), 'bass', 6)
+    const v4 = {
+      ...bassProject,
+      version: 4,
+      patterns: bassProject.patterns.map((pattern) => ({
+        ...pattern,
+        noteLanes: pattern.noteLanes.filter((lane) => lane.id === 'bass'),
+      })),
+    }
+
+    const migrated = migrateProjectState(JSON.parse(JSON.stringify(v4)))!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(
+      migrated.patterns[0].noteLanes.find((lane) => lane.id === 'bass')!.steps[6].on,
+    ).toBe(true)
+    const stab = migrated.patterns[0].noteLanes.find((lane) => lane.id === 'stab')!
+    expect(stab.steps).toHaveLength(16)
+    expect(
+      stab.steps.every(
+        (step) =>
+          !step.on && step.pitch === STAB_DEFAULT_PITCH && step.length === MIN_NOTE_LENGTH,
+      ),
+    ).toBe(true)
   })
 
   it('keeps a saved bassline and patch when loading a current-version document', () => {

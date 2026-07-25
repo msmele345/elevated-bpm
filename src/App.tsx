@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BassPanel } from './components/BassPanel'
 import { LessonPanel } from './components/LessonPanel'
+import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
@@ -21,7 +22,7 @@ import {
   transposeActivePatternNote,
   updateLessonProgress,
 } from './model/projectState'
-import type { DrumLaneId } from './model/types'
+import type { DrumLaneId, NoteLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
@@ -48,13 +49,14 @@ export default function App() {
   // never dirties the autosave. Completion itself is still latched in the
   // document, so an earned sweep survives a reload.
   const [paramMotion, setParamMotion] = useState(NO_PARAM_MOTION)
-  // The playhead sweeps every grid on the deck — drums and bass alike — so
+  // The playhead sweeps every grid on the deck — drums, bass, and stabs — so
   // its root is the deck, not one panel.
   const deckRef = useRef<HTMLElement>(null)
   const autosaverRef = useRef(createAutosaver(saveProjectState, AUTOSAVE_DELAY_MS))
 
   const pattern = activePattern(project)
-  const bassLane = pattern.noteLanes[0]
+  const bassLane = pattern.noteLanes.find((lane) => lane.id === 'bass')!
+  const stabLane = pattern.noteLanes.find((lane) => lane.id === 'stab')!
   const bassSettings = project.instrumentSettings.bass
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
@@ -175,16 +177,20 @@ export default function App() {
     setProject((p) => toggleLaneSolo(p, laneId))
   }
 
-  const handleToggleNoteStep = (stepIndex: number) => {
-    setProject((p) => toggleActivePatternNoteStep(p, 'bass', stepIndex))
+  const handleToggleNoteStep = (laneId: NoteLaneId, stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteStep(p, laneId, stepIndex))
   }
 
-  const handleTransposeNote = (stepIndex: number, semitones: number) => {
-    setProject((p) => transposeActivePatternNote(p, 'bass', stepIndex, semitones))
+  const handleTransposeNote = (
+    laneId: NoteLaneId,
+    stepIndex: number,
+    semitones: number,
+  ) => {
+    setProject((p) => transposeActivePatternNote(p, laneId, stepIndex, semitones))
   }
 
-  const handleResizeNote = (stepIndex: number, steps: number) => {
-    setProject((p) => resizeActivePatternNote(p, 'bass', stepIndex, steps))
+  const handleResizeNote = (laneId: NoteLaneId, stepIndex: number, steps: number) => {
+    setProject((p) => resizeActivePatternNote(p, laneId, stepIndex, steps))
   }
 
   const handleBassParamChange = (id: BassParamId, value: number) => {
@@ -272,10 +278,24 @@ export default function App() {
         lane={bassLane}
         settings={bassSettings}
         spotlitParams={spotlitParams}
-        onToggleStep={handleToggleNoteStep}
-        onTranspose={handleTransposeNote}
-        onResize={handleResizeNote}
+        onToggleStep={(stepIndex) => handleToggleNoteStep('bass', stepIndex)}
+        onTranspose={(stepIndex, semitones) =>
+          handleTransposeNote('bass', stepIndex, semitones)
+        }
+        onResize={(stepIndex, steps) => handleResizeNote('bass', stepIndex, steps)}
         onParamChange={handleBassParamChange}
+      />
+
+      <StabKeyboard
+        lane={stabLane}
+        onAttack={engine.attackStabNote}
+        onRelease={engine.releaseStabNote}
+        getSoundingNotes={engine.getSoundingStabNotes}
+        onToggleStep={(stepIndex) => handleToggleNoteStep('stab', stepIndex)}
+        onTranspose={(stepIndex, semitones) =>
+          handleTransposeNote('stab', stepIndex, semitones)
+        }
+        onResize={(stepIndex, steps) => handleResizeNote('stab', stepIndex, steps)}
       />
     </main>
   )

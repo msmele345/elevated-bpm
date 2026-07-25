@@ -8,11 +8,15 @@
 
 - CI/CD: Github Actions
 
-# Project Overview and Plan:
+# Project Concept:
+See @CONCEPT.md
+
+# Project Plan:
 See @plans/elevated-bpm-v1.md
 
+
 ## Agent Orientation
-- Source of truth order: `plans/elevated-bpm-v1.md` for current phase scope, `docs/strategy-matrix.md` for engine math/strategy behavior, `docs/PRD.md` for product intent.
+- Source of truth order: `plans/elevated-bpm-v1.md` for current phase scope, `CONCEPT.md` for project context, `docs/PRD.md` for product intent.
 - Keep phase work scoped to the named acceptance criteria. Do not implement later-phase matrix cells or UI behavior unless the AC explicitly requires it.
 
 ## Cadences to follow:

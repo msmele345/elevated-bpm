@@ -35,7 +35,12 @@ describe('stab keyboard', () => {
   it('does not map notes while focus belongs to a text-entry control', () => {
     const editableTargets = [
       { tagName: 'INPUT' },
+      { tagName: 'INPUT', type: 'text' },
+      // A number field takes "e" as an exponent, so it is text entry too.
+      { tagName: 'INPUT', type: 'number' },
+      { tagName: 'INPUT', type: 'search' },
       { tagName: 'textarea' },
+      // Letter keys type-ahead through a select's options.
       { tagName: 'SELECT' },
       { tagName: 'DIV', isContentEditable: true },
     ]
@@ -50,7 +55,32 @@ describe('stab keyboard', () => {
           altKey: false,
         }),
       ),
-    ).toEqual([undefined, undefined, undefined, undefined])
+    ).toEqual(editableTargets.map(() => undefined))
+  })
+
+  it('keeps playing while focus rests on a deck control that ignores letter keys', () => {
+    // Nudging the tempo fader or a checkbox focuses it. Those controls have no
+    // use for A–K, so the instrument must stay live rather than going silent
+    // until the player clicks elsewhere.
+    const playableTargets = [
+      { tagName: 'INPUT', type: 'range' },
+      { tagName: 'INPUT', type: 'checkbox' },
+      { tagName: 'INPUT', type: 'radio' },
+      { tagName: 'BUTTON' },
+      { tagName: 'DIV', isContentEditable: false },
+    ]
+
+    expect(
+      playableTargets.map((target) =>
+        stabKeyForKeyboardInput({
+          code: 'KeyA',
+          target,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+        })?.midi,
+      ),
+    ).toEqual(playableTargets.map(() => 60))
   })
 })
 

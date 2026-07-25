@@ -39,19 +39,58 @@ interface StabKeyboardInput {
 }
 
 /**
+ * Input types that have no use for a letter key. Everything else — including
+ * an absent or unrecognized type, which the DOM renders as a text field — is
+ * treated as text entry, so the guard fails toward leaving typing alone.
+ */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+])
+
+/**
+ * Whether the focused element would itself consume a letter key: text fields
+ * and anything editable, plus `select`, whose options answer to type-ahead.
+ * A fader, pad, or checkbox does not, so the deck stays playable while one
+ * holds focus — nudging the tempo must not silence the instrument.
+ */
+function claimsLetterKeys(target: {
+  tagName?: unknown
+  type?: unknown
+  isContentEditable?: unknown
+}): boolean {
+  if (target.isContentEditable === true) return true
+  if (typeof target.tagName !== 'string') return false
+  switch (target.tagName.toUpperCase()) {
+    case 'TEXTAREA':
+    case 'SELECT':
+      return true
+    case 'INPUT': {
+      const type = typeof target.type === 'string' ? target.type.toLowerCase() : 'text'
+      return !NON_TEXT_INPUT_TYPES.has(type)
+    }
+    default:
+      return false
+  }
+}
+
+/**
  * Map a global keyboard event only when it belongs to the instrument. Text
  * entry and browser/OS shortcuts keep their native behavior.
  */
 export function stabKeyForKeyboardInput(input: StabKeyboardInput): StabKey | undefined {
   if (input.metaKey || input.ctrlKey || input.altKey) return undefined
   if (typeof input.target === 'object' && input.target !== null) {
-    const target = input.target as { tagName?: unknown; isContentEditable?: unknown }
-    if (target.isContentEditable === true) return undefined
-    if (typeof target.tagName === 'string') {
-      const tagName = target.tagName.toUpperCase()
-      if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
-        return undefined
-      }
+    if (claimsLetterKeys(input.target as Parameters<typeof claimsLetterKeys>[0])) {
+      return undefined
     }
   }
   return stabKeyForCode(input.code)

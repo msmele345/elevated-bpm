@@ -18,6 +18,11 @@
 
   --font-display: 'Chakra Petch', sans-serif;
   --font-mono: 'IBM Plex Mono', monospace;
+
+  /* The room's light levels, written per-frame by useRoomLight (rAF, never
+     React state). Defaults keep the room calm before the first frame lands. */
+  --pulse: 0;
+  --breathe: 0;
 }
 
 * {
@@ -30,18 +35,22 @@ body {
   display: grid;
   place-items: center;
   background:
-    radial-gradient(1200px 600px at 50% -10%, #17191d 0%, var(--bg) 60%),
+    /* vignette: the room falls to black at the edges so the deck floats in a void */
+    radial-gradient(135% 105% at 50% 8%, transparent 52%, rgba(0, 0, 0, 0.62) 100%),
+    radial-gradient(1200px 600px at 50% -10%, #131519 0%, var(--bg) 60%),
     var(--bg);
   color: var(--ink);
   font-family: var(--font-mono);
   padding: 24px;
 }
 
-/* subtle machine-room grain */
+/* subtle machine-room grain — above the room light (z 1), so the light reads
+   as beams caught in haze rather than flat color washes */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
+  z-index: 1;
   pointer-events: none;
   opacity: 0.5;
   background-image: repeating-linear-gradient(
@@ -53,9 +62,163 @@ body::before {
   );
 }
 
+/* ── The room: beat-synced club light behind the deck ──────────────── */
+/* Three soft light sources in the periphery plus two slow haze beams. All
+   intensity comes from --pulse (the beat strobe) and --breathe (the idle
+   swell); colors come from the deck's own quad palette so the room reads as
+   the instrument's light spilling into the space. Opacity/transform only —
+   no layout, no paint storms — and mix-blend screen so lights add, never
+   muddy. */
+.room {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.room-wash {
+  position: absolute;
+  width: 62vmax;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  will-change: opacity;
+}
+
+.room-wash-a {
+  top: -22%;
+  left: -16%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--quad-0) 62%, transparent) 0%,
+    transparent 68%
+  );
+  opacity: calc(var(--pulse) * 0.62 + var(--breathe) * 0.1);
+}
+
+.room-wash-b {
+  top: -26%;
+  right: -18%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--quad-1) 55%, transparent) 0%,
+    transparent 68%
+  );
+  opacity: calc(var(--pulse) * 0.52 + var(--breathe) * 0.08);
+}
+
+.room-wash-c {
+  bottom: -26%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--quad-2) 36%, transparent) 0%,
+    transparent 70%
+  );
+  opacity: calc(var(--pulse) * 0.44 + var(--breathe) * 0.12);
+}
+
+/* moving-head beams: wedge blades pivoting slowly from a point above the
+   room, lit harder by each strobe flash */
+.room-beam {
+  position: absolute;
+  top: -42vh;
+  width: 20vw;
+  min-width: 160px;
+  height: 175vh;
+  mix-blend-mode: screen;
+  clip-path: polygon(46% 0, 54% 0, 100% 100%, 0 100%);
+  transform-origin: 50% 0;
+  will-change: transform, opacity;
+}
+
+.room-beam-a {
+  left: 24%;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--quad-0) 30%, transparent) 0%,
+    transparent 72%
+  );
+  opacity: calc(0.045 + var(--pulse) * 0.16 + var(--breathe) * 0.04);
+  animation: beam-sweep-a 47s ease-in-out infinite alternate;
+}
+
+.room-beam-b {
+  right: 20%;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--quad-1) 26%, transparent) 0%,
+    transparent 72%
+  );
+  opacity: calc(0.04 + var(--pulse) * 0.13 + var(--breathe) * 0.035);
+  animation: beam-sweep-b 61s ease-in-out infinite alternate;
+}
+
+@keyframes beam-sweep-a {
+  from {
+    transform: rotate(-13deg);
+  }
+  to {
+    transform: rotate(17deg);
+  }
+}
+
+@keyframes beam-sweep-b {
+  from {
+    transform: rotate(12deg);
+  }
+  to {
+    transform: rotate(-16deg);
+  }
+}
+
+/* Reduced motion: no strobing, no sweeping — the room holds a static dim
+   glow so the deck still floats in a space, without any flashing. */
+@media (prefers-reduced-motion: reduce) {
+  .room-wash-a {
+    opacity: 0.1;
+  }
+  .room-wash-b {
+    opacity: 0.08;
+  }
+  .room-wash-c {
+    opacity: 0.1;
+  }
+  .room-beam {
+    animation: none;
+    opacity: 0.05;
+  }
+  .deck::after {
+    opacity: 0.3;
+  }
+  .brand em {
+    text-shadow: 0 0 18px rgba(255, 77, 51, 0.45);
+  }
+}
+
 /* ── Deck chrome ───────────────────────────────────────────────────── */
 .deck {
+  position: relative;
+  z-index: 2;
   width: min(920px, 100%);
+}
+
+/* the deck as light source: warm spill cast onto the floor of the room,
+   flaring with each strobe pulse */
+.deck::after {
+  content: '';
+  position: absolute;
+  inset: 6% -8% -12%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    58% 56% at 50% 60%,
+    color-mix(in srgb, var(--quad-0) 24%, transparent) 0%,
+    transparent 72%
+  );
+  opacity: calc(0.26 + var(--pulse) * 0.62 + var(--breathe) * 0.14);
 }
 
 .deck-header {
@@ -78,7 +241,10 @@ body::before {
 .brand em {
   font-style: italic;
   color: var(--quad-0);
-  text-shadow: 0 0 18px rgba(255, 77, 51, 0.45);
+  /* the wordmark flares with the room's strobe while the loop plays */
+  text-shadow:
+    0 0 18px rgb(255 77 51 / calc(0.45 + var(--pulse) * 0.35)),
+    0 0 52px rgb(255 77 51 / calc(var(--pulse) * 0.3));
 }
 
 .deck-model {

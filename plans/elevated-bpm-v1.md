@@ -200,6 +200,8 @@ The hardware-aesthetic design pass across the whole deck, canvas-based real-time
 ### Acceptance criteria
 
 - [ ] Cohesive hardware-inspired visual language across drum machine, bass, keyboard, and mixer (consistent spacing, materials, lighting/glow)
+
+  **Progress (feat/club-room-backdrop):** the room around the deck is now a beat-synced club backdrop — vignetted void, three strobe washes in the quad palette, two slow haze beams, and a warm light spill under the deck, plus the brand wordmark flaring with the pulse. Driven by `useRoomLight` (rAF → CSS vars, zero React re-renders, same pattern as `usePlayhead`); the pure envelope math lives in `src/model/roomLight.ts` with the flash rate capped under the WCAG 2.3.1 photosafety threshold (drops to half-note pulses past 180 BPM — `beatsPerPulseForBpm`, covered by `roomLight.test.ts`). Stopped transport never strobes: the room falls to a slow dim breathe. `prefers-reduced-motion` gets a static dim glow. Verified in-browser via Playwright: strobe measured at 2.10 flashes/s against 2.17 expected at 130 BPM, pulse 0 when stopped, zero console errors, rAF rate unchanged with/without the room layers. Mixer-surface macros, canvas visualizer, and the remaining materials pass are still open below.
 - [ ] Live waveform or spectrum visualizer runs on canvas at 60fps without affecting audio
 - [ ] Master macro knobs (filter, drive) audibly shape the full mix and persist in `ProjectState`
 - [ ] The deck remains fully usable by keyboard and meets basic accessibility (focus visible, controls labeled)

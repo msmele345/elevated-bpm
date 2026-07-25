@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { isGoalMet, parseLesson, spotlitLaneIds } from './lesson'
+import {
+  isGoalMet,
+  parseLesson,
+  spotlitLaneIds,
+  spotlitParamIds,
+  type GoalContext,
+} from './lesson'
 import { createInitialPattern, toggleStep } from './pattern'
 import type { Pattern } from './types'
 
@@ -33,6 +39,24 @@ describe('parseLesson', () => {
     expect(() => parseLesson(badGoal)).toThrow(/playChord/)
   })
 
+  it('parses a paramSwept goal', () => {
+    const lesson = parseLesson({
+      ...validLesson,
+      goal: [{ type: 'paramSwept', param: 'cutoff', minTravel: 0.5 }],
+    })
+    expect(lesson.goal).toEqual([{ type: 'paramSwept', param: 'cutoff', minTravel: 0.5 }])
+  })
+
+  it('rejects a paramSwept goal without a param or with unreachable travel', () => {
+    const noParam = { ...validLesson, goal: [{ type: 'paramSwept', minTravel: 0.5 }] }
+    expect(() => parseLesson(noParam)).toThrow(/param/)
+
+    for (const minTravel of [0, 1.5, -0.2, 'lots']) {
+      const badTravel = { ...validLesson, goal: [{ type: 'paramSwept', param: 'cutoff', minTravel }] }
+      expect(() => parseLesson(badTravel)).toThrow(/minTravel/)
+    }
+  })
+
   it('rejects out-of-range or non-numeric goal steps', () => {
     const badSteps = {
       ...validLesson,
@@ -42,8 +66,12 @@ describe('parseLesson', () => {
   })
 })
 
-function patternWithKicksOn(steps: number[]): Pattern {
-  return steps.reduce((p, step) => toggleStep(p, 'kick', step), createInitialPattern())
+function patternWithKicksOn(steps: number[]): GoalContext {
+  const pattern = steps.reduce<Pattern>(
+    (p, step) => toggleStep(p, 'kick', step),
+    createInitialPattern(),
+  )
+  return { pattern }
 }
 
 describe('isGoalMet', () => {
@@ -75,6 +103,35 @@ describe('isGoalMet', () => {
   })
 })
 
+describe('isGoalMet — paramSwept', () => {
+  const sweepLesson = parseLesson({
+    ...validLesson,
+    id: 'filter-sweep',
+    spotlight: ['knob:cutoff'],
+    goal: [{ type: 'paramSwept', param: 'cutoff', minTravel: 0.5 }],
+  })
+  const pattern = createInitialPattern()
+
+  it('is met once the knob has covered the required travel', () => {
+    const motion = { cutoff: { min: 0.1, max: 0.9 } }
+    expect(isGoalMet(sweepLesson, { pattern, motion })).toBe(true)
+  })
+
+  it('is not met by a knob nudged only a little', () => {
+    const motion = { cutoff: { min: 0.4, max: 0.55 } }
+    expect(isGoalMet(sweepLesson, { pattern, motion })).toBe(false)
+  })
+
+  it('is not met when nothing has been swept at all', () => {
+    expect(isGoalMet(sweepLesson, { pattern })).toBe(false)
+  })
+
+  it('is not met by sweeping a different knob', () => {
+    const motion = { resonance: { min: 0, max: 1 } }
+    expect(isGoalMet(sweepLesson, { pattern, motion })).toBe(false)
+  })
+})
+
 describe('spotlitLaneIds', () => {
   it('extracts lane ids from lane spotlight targets, ignoring other target kinds', () => {
     const lesson = parseLesson({
@@ -86,5 +143,19 @@ describe('spotlitLaneIds', () => {
 
   it('spotlights nothing when no lesson is active', () => {
     expect(spotlitLaneIds(null)).toEqual([])
+  })
+})
+
+describe('spotlitParamIds', () => {
+  it('extracts knob ids from knob spotlight targets, ignoring lanes', () => {
+    const lesson = parseLesson({
+      ...validLesson,
+      spotlight: ['knob:cutoff', 'lane:kick'],
+    })
+    expect(spotlitParamIds(lesson)).toEqual(['cutoff'])
+  })
+
+  it('spotlights nothing when no lesson is active', () => {
+    expect(spotlitParamIds(null)).toEqual([])
   })
 })

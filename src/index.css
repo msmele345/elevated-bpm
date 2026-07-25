@@ -278,7 +278,10 @@ body::before {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 132px;
+  /* Fixed, not a floor: every lane's grid must start at the same x or the step
+     columns stop lining up and a beat can no longer be read down the column.
+     Sized to the longest label + its mute/solo buttons ("Closed Hat", 170px). */
+  flex: 0 0 176px;
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 0.8rem;
@@ -715,5 +718,314 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   .step-row.is-spotlit {
     animation: none;
+  }
+}
+
+/* ── Bass panel ────────────────────────────────────────────────────── */
+.bass-panel {
+  margin-top: 18px;
+}
+
+.stab-panel {
+  margin-top: 18px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.panel-title-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--silkscreen);
+}
+
+.panel-title-model {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  color: var(--ink-dim);
+}
+
+/* ── Live stab keyboard ───────────────────────────────────────────── */
+.stab-keyboard {
+  position: relative;
+  margin-top: 18px;
+  height: clamp(142px, 24vw, 210px);
+  overflow: hidden;
+  border: 1px solid #000;
+  border-radius: 7px;
+  background: #0d0f10;
+  box-shadow:
+    inset 0 3px 8px rgba(0, 0, 0, 0.85),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+  touch-action: none;
+}
+
+.stab-key {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 0 4px 13px;
+  border: 1px solid #08090a;
+  border-top: 0;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.stab-key-white {
+  height: 100%;
+  z-index: 1;
+  border-radius: 0 0 5px 5px;
+  background: linear-gradient(96deg, #aaa69b 0%, #f4efe4 10%, #d8d2c6 88%, #969287 100%);
+  box-shadow:
+    inset 0 -7px 8px rgba(0, 0, 0, 0.2),
+    inset 1px 0 rgba(255, 255, 255, 0.65);
+  color: #1a1c1f;
+}
+
+.stab-key-black {
+  left: 0;
+  width: 7.2%;
+  height: 62%;
+  z-index: 2;
+  transform: translateX(-50%);
+  border-radius: 0 0 5px 5px;
+  background: linear-gradient(96deg, #090a0b 0%, #30343a 14%, #17191c 74%, #050606 100%);
+  box-shadow:
+    inset 0 -6px 5px rgba(0, 0, 0, 0.8),
+    inset 1px 0 rgba(255, 255, 255, 0.1),
+    0 5px 7px rgba(0, 0, 0, 0.62);
+  color: var(--ink);
+}
+
+.stab-key:hover {
+  filter: brightness(1.06);
+}
+
+.stab-key:active {
+  padding-bottom: 10px;
+  filter: brightness(0.88);
+  box-shadow: inset 0 7px 10px rgba(0, 0, 0, 0.32);
+}
+
+/* Audio-clock state: live holds and transport-scheduled hits share this one
+   treatment, so the keyboard shows pitch activity regardless of its source. */
+.stab-key[data-sounding] {
+  padding-bottom: 10px;
+  filter: brightness(1.04);
+}
+
+.stab-key-white[data-sounding] {
+  background: linear-gradient(96deg, #c78325 0%, #ffd786 10%, #f0b94e 88%, #9f681a 100%);
+  box-shadow:
+    inset 0 7px 10px rgba(104, 52, 0, 0.28),
+    inset 1px 0 rgba(255, 255, 255, 0.65),
+    0 0 18px rgba(255, 157, 46, 0.66);
+}
+
+.stab-key-black[data-sounding] {
+  background: linear-gradient(96deg, #502500 0%, #c76413 14%, #6d3107 74%, #261000 100%);
+  box-shadow:
+    inset 0 6px 8px rgba(255, 183, 79, 0.16),
+    inset 1px 0 rgba(255, 255, 255, 0.18),
+    0 0 18px rgba(255, 157, 46, 0.75);
+}
+
+.stab-key[data-sounding] .stab-computer-key {
+  color: #fff3d6;
+  text-shadow: 0 0 8px rgba(255, 243, 214, 0.8);
+}
+
+.stab-key:focus-visible {
+  outline: 3px solid var(--quad-1);
+  outline-offset: -4px;
+}
+
+.stab-note-name {
+  font-size: clamp(0.54rem, 1.2vw, 0.68rem);
+  font-weight: 600;
+  color: currentColor;
+  opacity: 0.72;
+}
+
+.stab-computer-key {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.86;
+}
+
+.stab-key-black .stab-note-name {
+  display: none;
+}
+
+/* A note step reads as a key with a note name on it; a longer note lights
+   more dots, so pitch and length are both visible without opening an editor. */
+.note-step {
+  justify-content: center;
+  gap: 4%;
+  padding: 12% 0 8%;
+}
+
+.note-name {
+  font-family: var(--font-mono);
+  font-size: clamp(0.45rem, 1.1vw, 0.6rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-dim);
+  user-select: none;
+}
+
+.note-step[aria-pressed='true'] .note-name {
+  color: var(--ink);
+}
+
+.note-length {
+  height: 0.5em;
+  font-family: var(--font-mono);
+  font-size: clamp(0.5rem, 1.2vw, 0.7rem);
+  line-height: 0.5;
+  letter-spacing: 0.06em;
+  color: var(--led);
+  user-select: none;
+}
+
+/* ── Knobs ─────────────────────────────────────────────────────────── */
+.knob-row {
+  display: flex;
+  gap: 34px;
+  padding-top: 20px;
+  margin-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.knob {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 74px;
+}
+
+.knob-dial {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.knob-dial:focus-visible {
+  outline: 2px solid var(--quad-2);
+  outline-offset: 2px;
+}
+
+.knob-dial svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.knob-track {
+  fill: none;
+  stroke: #0d0f10;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.knob-value {
+  fill: none;
+  stroke: var(--quad-1);
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--quad-1) 70%, transparent));
+}
+
+.knob-cap {
+  fill: var(--steel);
+  stroke: #000;
+  stroke-width: 1;
+}
+
+.knob-pointer {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.knob-label {
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--silkscreen);
+}
+
+.knob-readout {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: var(--quad-1);
+  text-shadow: 0 0 8px rgba(255, 157, 46, 0.4);
+}
+
+/* Lesson spotlight on a knob — the same amber ring the drum lanes get, wrapped
+   around the dial so the eye lands on the control the lesson is talking about. */
+.knob.is-spotlit .knob-dial {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--quad-2) 6%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 55%, transparent),
+    0 0 22px color-mix(in srgb, var(--quad-2) 22%, transparent);
+  animation: knob-spotlight-breathe 2.4s ease-in-out infinite;
+}
+
+.knob.is-spotlit .knob-label {
+  color: var(--quad-2);
+}
+
+@keyframes knob-spotlight-breathe {
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--quad-2) 85%, transparent),
+      0 0 30px color-mix(in srgb, var(--quad-2) 38%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knob.is-spotlit .knob-dial {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .knob-row {
+    gap: 16px;
+    justify-content: space-between;
   }
 }

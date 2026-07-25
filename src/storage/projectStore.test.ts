@@ -1,10 +1,12 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
+import { DEFAULT_BASS_SETTINGS } from '../model/bass'
 import { createInitialPattern } from '../model/pattern'
 import {
   createInitialProjectState,
   PROJECT_STATE_VERSION,
+  setBassParamValue,
   setTransportBpm,
   cycleActivePatternStep,
   type ProjectState,
@@ -24,6 +26,24 @@ describe('projectStore', () => {
     )
     await saveProjectState(state)
     await expect(loadProjectState()).resolves.toEqual(state)
+  })
+
+  it('restores a hand-tuned synth patch exactly', async () => {
+    // The patch is half the sound of a saved beat: a bassline that comes back
+    // with default knobs is not the track the user left.
+    const patched = setBassParamValue(
+      setBassParamValue(createInitialProjectState(), 'cutoff', 2400),
+      'resonance',
+      14,
+    )
+    await saveProjectState(patched)
+
+    const loaded = await loadProjectState()
+    expect(loaded?.instrumentSettings.bass).toEqual({
+      ...DEFAULT_BASS_SETTINGS,
+      cutoff: 2400,
+      resonance: 14,
+    })
   })
 
   it('resolves null when nothing has been saved', async () => {

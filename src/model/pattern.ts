@@ -1,3 +1,4 @@
+import { createNoteLanes } from './note'
 import { STEP_COUNT, type DrumLaneId, type DrumStep, type Pattern } from './types'
 
 function emptySteps(): DrumStep[] {
@@ -17,12 +18,13 @@ export const KIT_LANES: ReadonlyArray<{ id: DrumLaneId; label: string }> = [
   { id: 'perc', label: 'Perc' },
 ]
 
-/** An empty pattern with the full kit: every lane, all steps off. */
+/** An empty pattern with the full kit and note lanes: every lane, all steps off. */
 export function createInitialPattern(): Pattern {
   return {
     id: 'pattern-1',
     name: 'Pattern 1',
     lanes: KIT_LANES.map(({ id, label }) => ({ id, label, steps: emptySteps() })),
+    noteLanes: createNoteLanes(),
   }
 }
 

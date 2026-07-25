@@ -1,9 +1,13 @@
 import * as Tone from 'tone'
+import { DEFAULT_BASS_SETTINGS, type BassSettings } from '../model/bass'
 import type { Mixer } from '../model/mixer'
+import { midiToFrequency, noteEventsAtStep } from '../model/note'
+import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
 import { voiceStep } from './hits'
 import { KIT_SAMPLES } from './kit'
+import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
 /**
@@ -34,6 +38,31 @@ interface Voice {
 let voices: Record<DrumLaneId, Voice> | null = null
 let samplesLoaded: Promise<void> | null = null
 
+/**
+ * The bass instrument: one sawtooth oscillator through a resonant lowpass.
+ * A single Tone.Synth is monophonic by construction — a new note takes the
+ * voice from the one still ringing — and the filter sits after it so cutoff
+ * and resonance shape the sound continuously, audible even mid-note.
+ */
+interface BassVoice {
+  synth: Tone.Synth
+  filter: Tone.Filter
+}
+let bass: BassVoice | null = null
+let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
+
+/**
+ * The live stab instrument is genuinely polyphonic: every held pitch gets its
+ * own Tone.Synth voice, so computer-keyboard chords attack and release
+ * independently instead of stealing the bass synth's monophonic voice.
+ */
+let stab: StabVoices | null = null
+
+// Pointer contacts, computer keys, and accessible button activation all feed
+// the same source-aware hold boundary.
+const stabNoteHolds = createStabNoteHolds()
+const stabSoundingNotes = createStabSoundingNotes()
+
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {
   currentPattern = pattern
@@ -44,12 +73,30 @@ export function setMixer(mixer: Mixer): void {
   currentMixer = mixer
 }
 
+/**
+ * Apply the bass patch. Cheap and idempotent, so knob motion can call it on
+ * every pointer move: cutoff ramps over a few milliseconds (a jump in filter
+ * frequency zippers audibly), the rest take effect on the next note.
+ */
+export function setBassSettings(next: BassSettings): void {
+  bassSettings = next
+  if (!bass) return
+  bass.filter.frequency.rampTo(next.cutoff, 0.02)
+  bass.filter.Q.rampTo(next.resonance, 0.02)
+  bass.synth.envelope.decay = next.decay
+}
+
 export function setBpm(next: number): void {
   bpm = clampBpm(next)
   // Ramp instead of jumping so mid-playback tempo changes are click-free;
   // step scheduling derives from transport ticks, so the sequence position
   // is unaffected by the tempo curve.
   Tone.getTransport().bpm.rampTo(bpm, 0.1)
+}
+
+/** One 16th in seconds at the current tempo — a note length in steps × this. */
+function secondsPer16th(): number {
+  return 15 / Tone.getTransport().bpm.value
 }
 
 /** Step the transport is currently on (for the rAF playhead in AC4). */
@@ -59,37 +106,105 @@ export function getCurrentStep(): number {
   return stepIndexAtTicks(transport.ticks, TICKS_PER_16TH, STEP_COUNT)
 }
 
+/** Bass level: sits under the kit so the drums keep the front of the mix. */
+const BASS_GAIN = 0.55
+const STAB_GAIN = 0.36
+
+function createBassVoice(): BassVoice {
+  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 })
+  const synth = new Tone.Synth({
+    oscillator: { type: 'sawtooth' },
+    // Short attack + low sustain: a plucked 303-style note whose tail the
+    // decay knob stretches from a stab to a rolling line.
+    envelope: { attack: 0.004, decay: DEFAULT_BASS_SETTINGS.decay, sustain: 0.25, release: 0.08 },
+    volume: Tone.gainToDb(BASS_GAIN),
+  }).connect(filter)
+  filter.toDestination()
+  return { synth, filter }
+}
+
+function createStabSynth(): Tone.PolySynth<Tone.Synth> {
+  return new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'sawtooth' },
+    envelope: { attack: 0.004, decay: 0.16, sustain: 0.36, release: 0.12 },
+    volume: Tone.gainToDb(STAB_GAIN),
+  }).toDestination()
+}
+
+/**
+ * Create every audio voice once. Sample loading continues asynchronously,
+ * while the synthesized instruments are playable as soon as the AudioContext
+ * starts — live keys never wait for drum assets to download.
+ */
+function ensureVoices(): void {
+  if (samplesLoaded) return
+  voices = Object.fromEntries(
+    (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(([laneId, url]) => {
+      const gain = new Tone.Gain(1).toDestination()
+      const player = new Tone.Player(url).connect(gain)
+      return [laneId, { player, gain }]
+    }),
+  ) as Record<DrumLaneId, Voice>
+  bass = createBassVoice()
+  stab = createStabVoices(createStabSynth)
+  setBassSettings(bassSettings)
+  samplesLoaded = Tone.loaded()
+  Tone.getTransport().bpm.value = bpm
+  if (import.meta.env.DEV) {
+    // Debug handle for tooling/tests; never used by app code.
+    const meter = new Tone.Meter()
+    Tone.getDestination().connect(meter)
+    ;(window as unknown as Record<string, unknown>).__ebpm = {
+      transport: Tone.getTransport(),
+      meter,
+      voices,
+      bass,
+      stab,
+    }
+  }
+}
+
 /**
  * Unlock the audio context (must be called from a user gesture — browser
- * autoplay policy) and lazily create + load the kick player. Idempotent, so
+ * autoplay policy) and lazily create + load the instrument voices. Idempotent, so
  * the app calls it eagerly on the first gesture anywhere (pointer or key)
  * and play() awaits it again as a safety net — by the time the user reaches
  * Play, the context is running and the sample is loaded.
  */
 export async function unlockAudio(): Promise<void> {
   await Tone.start()
-  if (!samplesLoaded) {
-    voices = Object.fromEntries(
-      (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(([laneId, url]) => {
-        const gain = new Tone.Gain(1).toDestination()
-        const player = new Tone.Player(url).connect(gain)
-        return [laneId, { player, gain }]
-      }),
-    ) as Record<DrumLaneId, Voice>
-    samplesLoaded = Tone.loaded()
-    Tone.getTransport().bpm.value = bpm
-    if (import.meta.env.DEV) {
-      // Debug handle for tooling/tests; never used by app code.
-      const meter = new Tone.Meter()
-      Tone.getDestination().connect(meter)
-      ;(window as unknown as Record<string, unknown>).__ebpm = {
-        transport: Tone.getTransport(),
-        meter,
-        voices,
-      }
-    }
-  }
+  ensureVoices()
   await samplesLoaded
+}
+
+/**
+ * Start one live stab note. The hold is recorded before AudioContext startup
+ * so a very quick tap cannot leave a late, stuck attack behind. Tone.immediate
+ * bypasses transport look-ahead for direct manipulation latency.
+ */
+export function attackStabNote(source: string, midi: number): void {
+  const attack = stabNoteHolds.press(source, midi)
+  if (!attack) return
+
+  void Tone.start().then(() => {
+    ensureVoices()
+    if (!stabNoteHolds.isCurrent(attack)) return
+    stab?.attackLive(midiToFrequency(attack.midi), Tone.immediate(), 0.82)
+    stabSoundingNotes.attackLive(attack.midi)
+  })
+}
+
+/** Release one input source's hold without cutting off another source. */
+export function releaseStabNote(source: string): void {
+  const release = stabNoteHolds.release(source)
+  if (!release) return
+  stab?.releaseLive(midiToFrequency(release.midi), Tone.immediate())
+  stabSoundingNotes.releaseLive(release.midi)
+}
+
+/** Current live + sequenced stab pitches, read by the keyboard's rAF loop. */
+export function getSoundingStabNotes(): readonly number[] {
+  return stabSoundingNotes.atTime(Tone.immediate())
 }
 
 export async function play(): Promise<void> {
@@ -116,6 +231,20 @@ export async function play(): Promise<void> {
         voice.gain.gain.setValueAtTime(hit.gain, time)
         voice.player.start(time)
       }
+      // Every note lane resolves from this same scheduled 16th as the drums.
+      // Bass uses its monophonic voice. Programmed stabs use a separate
+      // polyphonic pool from live input so same-pitch releases cannot steal a
+      // held live key.
+      for (const note of noteEventsAtStep(currentPattern, stepIndex)) {
+        const duration = note.lengthSteps * secondsPer16th()
+        if (note.laneId === 'bass' && bass) {
+          bass.synth.triggerAttackRelease(note.frequency, duration, time)
+        }
+        if (note.laneId === 'stab' && stab) {
+          stab.triggerSequenced(note.frequency, duration, time, 0.72)
+          stabSoundingNotes.schedule(note.midi, time, time + duration)
+        }
+      }
     }, '16n')
     repeatScheduled = true
   }
@@ -125,5 +254,7 @@ export async function play(): Promise<void> {
 export function stop(): void {
   const transport = Tone.getTransport()
   transport.stop()
+  stab?.stopSequenced()
+  stabSoundingNotes.clearSequenced()
   // stop() resets transport position, so the next play starts on step 1.
 }

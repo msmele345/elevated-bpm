@@ -21,9 +21,33 @@ export interface DrumLane {
   steps: DrumStep[]
 }
 
-/** A first-class 16-step loop. */
+/**
+ * One cell of a note lane: a pitch (MIDI note number) and a length in whole
+ * steps, so a note can ring across the 16ths that follow it.
+ */
+export interface NoteStep {
+  on: boolean
+  pitch: number
+  length: number
+}
+
+export type NoteLaneId = 'bass' | 'stab'
+
+/** A note lane: 16 steps of on/off + pitch + length. */
+export interface NoteLane {
+  id: NoteLaneId
+  label: string
+  steps: NoteStep[]
+}
+
+/**
+ * A first-class 16-step loop. Drum lanes and note lanes are separate lists
+ * because their steps carry different musical content, but both are sequenced
+ * off the same step index, which keeps bass and stabs locked to the drums.
+ */
 export interface Pattern {
   id: string
   name: string
   lanes: DrumLane[]
+  noteLanes: NoteLane[]
 }

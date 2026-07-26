@@ -56,13 +56,26 @@ describe('createInitialPattern', () => {
 })
 
 describe('createDemoPattern', () => {
-  it('ships a techno groove: backbeat clap, offbeat hats, syncopated perc', () => {
+  it('ships a techno groove: half-time clap, offbeat hats, syncopated perc', () => {
     const demo = createDemoPattern()
 
-    expect(onSteps(demo, 'snare')).toEqual([4, 12])
+    expect(onSteps(demo, 'snare')).toEqual([12])
     expect(onSteps(demo, 'closedHat')).toEqual([2, 6, 10])
     expect(onSteps(demo, 'openHat')).toEqual([14])
     expect(onSteps(demo, 'perc')).toEqual([5, 11])
+  })
+
+  it('leaves every step the arc teaches unplayed, so no lesson opens already won', () => {
+    // Same rule the kick lane has followed since Phase 4: the demo may groove,
+    // but it must never do a lesson's work for the user. The curriculum's own
+    // guard against this is in lessons/lessons.test.ts — this one keeps the
+    // pattern honest at the source.
+    const demo = createDemoPattern()
+
+    expect(onSteps(demo, 'kick')).toEqual([])
+    expect(onSteps(demo, 'snare')).not.toEqual([4, 12])
+    expect(onSteps(demo, 'closedHat')).not.toEqual([2, 6, 10, 14])
+    expect(demo.noteLanes.every((lane) => lane.steps.every((step) => !step.on))).toBe(true)
   })
 })
 

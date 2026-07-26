@@ -1,0 +1,7 @@
+{
+  "id": "resonance-squelch",
+  "title": "Acid Squelch",
+  "intro": "Cutoff decides where the filter closes; resonance decides how loudly it complains at that point. Crank it and the frequencies right at the cutoff ring out — the squelch that made the 303 famous. With the loop running, take the Resonance knob most of the way from soft to screaming and back if you like it tamer.",
+  "spotlight": ["knob:resonance"],
+  "goal": [{ "type": "paramSwept", "param": "resonance", "minTravel": 0.5 }]
+}

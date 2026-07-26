@@ -30,15 +30,19 @@ export function createInitialPattern(): Pattern {
 
 /**
  * The starter groove a first-time deck opens with, as step indexes per lane;
- * `accent` steps hit at accent velocity. Deliberately kick-less: the clap,
- * hats and perc already sound like techno on the first press of play, and
- * dropping the kick in is the four-on-the-floor lesson's payoff.
+ * `accent` steps hit at accent velocity. It grooves on the first press of
+ * play, but every place the curriculum teaches is deliberately left open: no
+ * kick at all, a half-time clap answering only on beat 4, and offbeat hats
+ * that stop a step short. Each arc lesson is the missing piece, and finishing
+ * the arc is what completes this groove.
  *
- * The closed hat stops short of step 14 so the open hat there rings out
- * instead of being choked (see CHOKES in audio/hits.ts).
+ * The closed hat also stops short of step 14 so the open hat there rings out
+ * instead of being choked (see CHOKES in audio/hits.ts) — until the offbeat
+ * hats lesson fills that step in, which is exactly what the open hat lesson
+ * then teaches the user to hear and fix.
  */
 const DEMO_GROOVE: Partial<Record<DrumLaneId, { on: number[]; accent?: number[] }>> = {
-  snare: { on: [4, 12], accent: [4, 12] },
+  snare: { on: [12], accent: [12] },
   closedHat: { on: [2, 6, 10] },
   openHat: { on: [14], accent: [14] },
   perc: { on: [5, 11] },

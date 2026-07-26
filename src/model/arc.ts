@@ -1,0 +1,89 @@
+import type { Lesson } from './lesson'
+import type { LessonProgress } from './projectState'
+
+/**
+ * An Arc is an ordered list of lessons (see plans/elevated-bpm-v1.md). These
+ * are the pure rules for moving along one: which lesson the deck is showing,
+ * where the user is on the path, and what is left to earn.
+ *
+ * Navigation never touches the sandbox — an arc function reads progress and
+ * returns a lesson, and nothing here can edit a pattern or a knob.
+ */
+
+export type LessonProgressMap = Record<string, LessonProgress>
+
+/** One rung of the path as the arc UI renders it. */
+export interface ArcEntry {
+  lesson: Lesson
+  /** 1-based place in the arc, the number the user sees. */
+  position: number
+  completed: boolean
+  current: boolean
+}
+
+function isCompleted(progress: LessonProgressMap, lessonId: string): boolean {
+  return progress[lessonId]?.completed ?? false
+}
+
+/**
+ * The lesson the deck is on. An explicit selection wins — the user may step
+ * anywhere on the path, forwards to look ahead or back to redo earned work.
+ * Left to itself the arc follows its own order to the first lesson not yet
+ * finished with, resting on the last one when there is nothing left.
+ *
+ * "Finished with" means earned *and* put away: a lesson whose goal has just
+ * been met stays on screen until the user dismisses it, so the next lesson
+ * never appears over the top of a celebration.
+ */
+export function activeArcLesson(
+  arc: Lesson[],
+  progress: LessonProgressMap,
+  selectedId: string | null,
+): Lesson {
+  const selected = arc.find((lesson) => lesson.id === selectedId)
+  if (selected) return selected
+  const unfinished = arc.find((lesson) => {
+    const earned = progress[lesson.id]
+    return !(earned?.completed && earned.dismissed)
+  })
+  return unfinished ?? arc[arc.length - 1]
+}
+
+/**
+ * Where the path goes after `afterId`: the next unearned lesson, wrapping back
+ * to work left behind by a user who jumped ahead. Null once the arc is done.
+ */
+export function nextUnfinishedLessonId(
+  arc: Lesson[],
+  progress: LessonProgressMap,
+  afterId: string,
+): string | null {
+  const from = arc.findIndex((lesson) => lesson.id === afterId)
+  const ordered = [...arc.slice(from + 1), ...arc.slice(0, Math.max(from, 0))]
+  return ordered.find((lesson) => !isCompleted(progress, lesson.id))?.id ?? null
+}
+
+/** How much of the arc is earned — the number the progress meter reports. */
+export function arcCompletion(
+  arc: Lesson[],
+  progress: LessonProgressMap,
+): { completed: number; total: number } {
+  return {
+    completed: arc.filter((lesson) => isCompleted(progress, lesson.id)).length,
+    total: arc.length,
+  }
+}
+
+/** The whole path in order, ready to render. */
+export function arcEntries(
+  arc: Lesson[],
+  progress: LessonProgressMap,
+  activeId: string,
+): ArcEntry[] {
+  return arc.map((lesson, i) => ({
+    lesson,
+    position: i + 1,
+    completed: isCompleted(progress, lesson.id),
+    current: lesson.id === activeId,
+  }))
+}

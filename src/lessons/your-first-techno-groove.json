@@ -1,0 +1,13 @@
+{
+  "id": "your-first-techno-groove",
+  "title": "Your First Techno Groove",
+  "intro": "Everything at once, the way a record works. Kick on all four beats, clap answering on 2 and 4, hats filling every offbeat, a bassline of at least four notes in the gaps, and stabs on top. If you cleared anything along the way, put it back — then press play, hold the whole thing in your ears, and take the filter for a ride while it runs.",
+  "spotlight": [],
+  "goal": [
+    { "type": "stepsActive", "lane": "kick", "steps": [0, 4, 8, 12] },
+    { "type": "stepsActive", "lane": "snare", "steps": [4, 12] },
+    { "type": "stepsActive", "lane": "closedHat", "steps": [2, 6, 10, 14] },
+    { "type": "notesPlaced", "lane": "bass", "min": 4 },
+    { "type": "notesPlaced", "lane": "stab", "min": 2 }
+  ]
+}

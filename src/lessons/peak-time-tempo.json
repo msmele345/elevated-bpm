@@ -1,0 +1,7 @@
+{
+  "id": "peak-time-tempo",
+  "title": "Find the Tempo",
+  "intro": "Tempo is an instrument too. House sits around 120, techno pushes harder — most club techno lives between 130 and 145 BPM, and the same pattern feels like a different genre at each end. Drag the Tempo fader up into the 138–145 range while the loop runs and feel the groove tighten under you.",
+  "spotlight": ["transport:tempo"],
+  "goal": [{ "type": "bpmInRange", "min": 138, "max": 145 }]
+}

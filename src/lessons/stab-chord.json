@@ -1,0 +1,7 @@
+{
+  "id": "stab-chord",
+  "title": "Play a Chord",
+  "intro": "The sequencer plays one stab note at a time, but your hands don't have to. The A–K row of your computer keyboard is mapped to the on-screen keys: hold A, D and G down together over the running loop and you get a full major chord in one hit. Play three notes at once, live, and the deck stops being a sequencer and starts being an instrument.",
+  "spotlight": ["keyboard:stab"],
+  "goal": [{ "type": "chordPlayed", "minNotes": 3 }]
+}

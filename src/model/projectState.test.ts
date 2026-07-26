@@ -13,6 +13,8 @@ import {
   setBassParamValue,
   setTransportBpm,
   cycleActivePatternStep,
+  enterLesson,
+  selectLesson,
   toggleActivePatternNoteStep,
   toggleLaneMute,
   toggleLaneSolo,
@@ -30,6 +32,74 @@ describe('createInitialProjectState', () => {
     expect(state.lessonProgress).toEqual({})
     expect(state.instrumentSettings).toEqual({ bass: DEFAULT_BASS_SETTINGS })
     expect(state.prefs).toEqual({})
+    // No lesson picked yet: the document follows the arc's own path until the
+    // user steps off it.
+    expect(state.activeLessonId).toBeNull()
+  })
+})
+
+describe('selectLesson', () => {
+  it('records which lesson the user stepped into, immutably', () => {
+    const state = createInitialProjectState()
+    const selected = selectLesson(state, 'filter-sweep')
+
+    expect(selected.activeLessonId).toBe('filter-sweep')
+    expect(state.activeLessonId).toBeNull()
+  })
+
+  it('leaves the pattern, transport, and progress alone — navigation is not an edit', () => {
+    const sandbox = setTransportBpm(
+      cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
+      137,
+    )
+    const selected = selectLesson(sandbox, 'stab-chord')
+
+    expect(selected.patterns).toBe(sandbox.patterns)
+    expect(selected.transport).toBe(sandbox.transport)
+    expect(selected.lessonProgress).toBe(sandbox.lessonProgress)
+  })
+
+  it('hands the path back when the selection is cleared', () => {
+    const selected = selectLesson(createInitialProjectState(), 'filter-sweep')
+    expect(selectLesson(selected, null).activeLessonId).toBeNull()
+  })
+})
+
+describe('enterLesson', () => {
+  it('selects a lesson and reopens it, so a lesson put away can be resumed', () => {
+    const dismissed = updateLessonProgress(createInitialProjectState(), 'filter-sweep', {
+      dismissed: true,
+    })
+    const entered = enterLesson(dismissed, 'filter-sweep')
+
+    expect(entered.activeLessonId).toBe('filter-sweep')
+    expect(entered.lessonProgress['filter-sweep'].dismissed).toBe(false)
+  })
+
+  it('keeps a lesson already earned marked complete when the user comes back to it', () => {
+    const earned = updateLessonProgress(createInitialProjectState(), 'four-on-the-floor', {
+      completed: true,
+      dismissed: true,
+    })
+    const entered = enterLesson(earned, 'four-on-the-floor')
+
+    expect(entered.lessonProgress['four-on-the-floor']).toEqual({
+      completed: true,
+      dismissed: false,
+    })
+  })
+
+  it('never disturbs the sandbox', () => {
+    const sandbox = setBassParamValue(
+      cycleActivePatternStep(createInitialProjectState(), 'kick', 0),
+      'cutoff',
+      2400,
+    )
+    const entered = enterLesson(sandbox, 'stab-hits')
+
+    expect(entered.patterns).toBe(sandbox.patterns)
+    expect(entered.instrumentSettings).toBe(sandbox.instrumentSettings)
+    expect(entered.mixer).toBe(sandbox.mixer)
   })
 })
 
@@ -180,6 +250,27 @@ describe('migrateProjectState', () => {
       lessonProgress: {},
       prefs: {},
       mixer: {},
+      activeLessonId: null,
+    })
+  })
+
+  it('puts a v5 document back on the arc path, keeping its earned lessons', () => {
+    const v5 = {
+      ...updateLessonProgress(createInitialProjectState(), 'four-on-the-floor', {
+        completed: true,
+        dismissed: true,
+      }),
+      version: 5,
+    } as Record<string, unknown>
+    delete v5.activeLessonId
+
+    const migrated = migrateProjectState(v5)!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.activeLessonId).toBeNull()
+    expect(migrated.lessonProgress['four-on-the-floor']).toEqual({
+      completed: true,
+      dismissed: true,
     })
   })
 

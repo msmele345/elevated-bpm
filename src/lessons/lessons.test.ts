@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import { detectLessonCompletion } from '../model/arc'
 import { BASS_PARAMS } from '../model/bass'
-import { isGoalMet, spotlitParamIds, type GoalAssertion } from '../model/lesson'
-import { createDemoPattern } from '../model/pattern'
+import {
+  isGoalMet,
+  spotlitParamIds,
+  type GoalAssertion,
+  type GoalContext,
+  type Lesson,
+} from '../model/lesson'
+import { NOTE_LANES } from '../model/note'
+import { createDemoPattern, createInitialPattern } from '../model/pattern'
 import { DEFAULT_BPM } from '../model/transport'
+import type { DrumLaneId, NoteLaneId, Pattern } from '../model/types'
 import { ARC } from './index'
 
 /** The deck exactly as a first-time user finds it: demo groove, default tempo. */
@@ -26,6 +35,206 @@ function goalLanes(kind: 'drum' | 'note'): Set<string> {
       }),
     ),
   )
+}
+
+function setDrumSteps(
+  pattern: Pattern,
+  laneId: DrumLaneId,
+  on: Set<number>,
+  accented?: Set<number>,
+): Pattern {
+  return {
+    ...pattern,
+    lanes: pattern.lanes.map((lane) =>
+      lane.id === laneId
+        ? {
+            ...lane,
+            steps: lane.steps.map((step, index) => ({
+              on: on.has(index),
+              accent: accented ? accented.has(index) : step.accent && on.has(index),
+            })),
+          }
+        : lane,
+    ),
+  }
+}
+
+function setNoteSteps(pattern: Pattern, laneId: NoteLaneId, on: Set<number>): Pattern {
+  return {
+    ...pattern,
+    noteLanes: pattern.noteLanes.map((lane) =>
+      lane.id === laneId
+        ? {
+            ...lane,
+            steps: lane.steps.map((step, index) => ({ ...step, on: on.has(index) })),
+          }
+        : lane,
+    ),
+  }
+}
+
+function activeDrumStepIndexes(pattern: Pattern, laneId: DrumLaneId): Set<number> {
+  const lane = pattern.lanes.find((candidate) => candidate.id === laneId)!
+  return new Set(lane.steps.flatMap((step, index) => (step.on ? [index] : [])))
+}
+
+function activeNoteStepIndexes(pattern: Pattern, laneId: NoteLaneId): Set<number> {
+  const lane = pattern.noteLanes.find((candidate) => candidate.id === laneId)!
+  return new Set(lane.steps.flatMap((step, index) => (step.on ? [index] : [])))
+}
+
+/**
+ * Build one worked, known-good example directly from a shipped lesson's JSON.
+ * This is deliberately independent of isGoalMet: it edits the public Pattern
+ * and session-observation shapes, then lets the evaluator prove it recognizes
+ * the result.
+ */
+function satisfyingContext(lesson: Lesson): GoalContext {
+  let context: GoalContext = { pattern: createInitialPattern(), bpm: DEFAULT_BPM }
+
+  for (const goal of lesson.goal) {
+    switch (goal.type) {
+      case 'stepsActive':
+        context = {
+          ...context,
+          pattern: setDrumSteps(context.pattern, goal.lane, new Set(goal.steps)),
+        }
+        break
+      case 'stepsAccented': {
+        const on = activeDrumStepIndexes(context.pattern, goal.lane)
+        goal.steps.forEach((step) => on.add(step))
+        context = {
+          ...context,
+          pattern: setDrumSteps(context.pattern, goal.lane, on, new Set(goal.steps)),
+        }
+        break
+      }
+      case 'notesActive':
+        context = {
+          ...context,
+          pattern: setNoteSteps(context.pattern, goal.lane, new Set(goal.steps)),
+        }
+        break
+      case 'notesPlaced': {
+        const on = activeNoteStepIndexes(context.pattern, goal.lane)
+        for (let step = 0; on.size < goal.min; step += 1) on.add(step)
+        context = { ...context, pattern: setNoteSteps(context.pattern, goal.lane, on) }
+        break
+      }
+      case 'pitchesVaried': {
+        const spec = NOTE_LANES.find((candidate) => candidate.id === goal.lane)!
+        const on = activeNoteStepIndexes(context.pattern, goal.lane)
+        for (let step = 0; on.size < goal.min; step += 1) on.add(step)
+        const active = [...on].sort((a, b) => a - b)
+        context = {
+          ...context,
+          pattern: {
+            ...setNoteSteps(context.pattern, goal.lane, on),
+            noteLanes: context.pattern.noteLanes.map((noteLane) =>
+              noteLane.id === goal.lane
+                ? {
+                    ...noteLane,
+                    steps: noteLane.steps.map((step, index) => {
+                      const activeIndex = active.indexOf(index)
+                      return activeIndex < 0
+                        ? step
+                        : { ...step, on: true, pitch: spec.minPitch + activeIndex }
+                    }),
+                  }
+                : noteLane,
+            ),
+          },
+        }
+        break
+      }
+      case 'bpmInRange':
+        context = { ...context, bpm: goal.min }
+        break
+      case 'paramSwept':
+        context = {
+          ...context,
+          motion: {
+            ...context.motion,
+            [goal.param]: { min: 0, max: goal.minTravel },
+          },
+        }
+        break
+      case 'chordPlayed':
+        context = { ...context, chord: { held: {}, maxNotes: goal.minNotes } }
+        break
+    }
+  }
+
+  return context
+}
+
+/** Break one assertion in an otherwise satisfying context. */
+function nearMiss(context: GoalContext, goal: GoalAssertion): GoalContext {
+  switch (goal.type) {
+    case 'stepsActive': {
+      const on = activeDrumStepIndexes(context.pattern, goal.lane)
+      on.delete(goal.steps[0])
+      return { ...context, pattern: setDrumSteps(context.pattern, goal.lane, on) }
+    }
+    case 'stepsAccented': {
+      const lane = context.pattern.lanes.find((candidate) => candidate.id === goal.lane)!
+      const on = activeDrumStepIndexes(context.pattern, goal.lane)
+      const accented = new Set(
+        lane.steps.flatMap((step, index) => (step.accent ? [index] : [])),
+      )
+      accented.delete(goal.steps[0])
+      return {
+        ...context,
+        pattern: setDrumSteps(context.pattern, goal.lane, on, accented),
+      }
+    }
+    case 'notesActive': {
+      const on = activeNoteStepIndexes(context.pattern, goal.lane)
+      on.delete(goal.steps[0])
+      return { ...context, pattern: setNoteSteps(context.pattern, goal.lane, on) }
+    }
+    case 'notesPlaced':
+      return {
+        ...context,
+        pattern: setNoteSteps(
+          context.pattern,
+          goal.lane,
+          new Set(Array.from({ length: goal.min - 1 }, (_, index) => index)),
+        ),
+      }
+    case 'pitchesVaried': {
+      const lane = context.pattern.noteLanes.find((candidate) => candidate.id === goal.lane)!
+      const pitch = lane.steps.find((step) => step.on)!.pitch
+      return {
+        ...context,
+        pattern: {
+          ...context.pattern,
+          noteLanes: context.pattern.noteLanes.map((noteLane) =>
+            noteLane.id === goal.lane
+              ? {
+                  ...noteLane,
+                  steps: noteLane.steps.map((step) =>
+                    step.on ? { ...step, pitch } : step,
+                  ),
+                }
+              : noteLane,
+          ),
+        },
+      }
+    }
+    case 'bpmInRange':
+      return { ...context, bpm: goal.min - 1 }
+    case 'paramSwept':
+      return {
+        ...context,
+        motion: {
+          ...context.motion,
+          [goal.param]: { min: 0, max: goal.minTravel / 2 },
+        },
+      }
+    case 'chordPlayed':
+      return { ...context, chord: { held: {}, maxNotes: goal.minNotes - 1 } }
+  }
 }
 
 describe('the curriculum arc', () => {
@@ -123,5 +332,35 @@ describe('the curriculum arc', () => {
   it('finishes with a capstone that asks for the whole groove at once', () => {
     const finale = ARC[ARC.length - 1]
     expect(finale.goal.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('recognizes a known-good completion example for every shipped lesson', () => {
+    for (const lesson of ARC) {
+      const completion = detectLessonCompletion(ARC, lesson, false, satisfyingContext(lesson))
+      expect([lesson.id, completion.justCompleted, completion.showFinale]).toEqual([
+        lesson.id,
+        true,
+        lesson === ARC[ARC.length - 1],
+      ])
+    }
+  })
+
+  it('keeps every assertion necessary, so one near miss cannot complete a lesson', () => {
+    for (const lesson of ARC) {
+      const complete = satisfyingContext(lesson)
+      for (const goal of lesson.goal) {
+        const completion = detectLessonCompletion(
+          ARC,
+          lesson,
+          false,
+          nearMiss(complete, goal),
+        )
+        expect([lesson.id, goal.type, completion]).toEqual([
+          lesson.id,
+          goal.type,
+          { justCompleted: false, showFinale: false },
+        ])
+      }
+    }
   })
 })

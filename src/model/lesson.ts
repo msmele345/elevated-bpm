@@ -1,3 +1,4 @@
+import { BASS_PARAMS, type BassParamId } from './bass'
 import { NO_CHORD_PLAY, type ChordPlay } from './chordPlay'
 import { NOTE_LANES } from './note'
 import { NO_PARAM_MOTION, paramTravel, type ParamMotion } from './paramMotion'
@@ -86,7 +87,7 @@ export interface ChordPlayedGoal {
  */
 export interface ParamSweptGoal {
   type: 'paramSwept'
-  param: string
+  param: BassParamId
   minTravel: number
 }
 
@@ -219,6 +220,11 @@ function fail(lessonId: string, message: string): never {
 
 const DRUM_LANE_IDS: string[] = KIT_LANES.map((lane) => lane.id)
 const NOTE_LANE_IDS: string[] = NOTE_LANES.map((lane) => lane.id)
+const PARAM_IDS: ReadonlySet<string> = new Set(BASS_PARAMS.map((param) => param.id))
+
+function isBassParamId(value: unknown): value is BassParamId {
+  return typeof value === 'string' && PARAM_IDS.has(value)
+}
 
 /**
  * A lane the deck actually has. Authoring a lesson is a JSON-only job, so a
@@ -240,9 +246,14 @@ function parseLane(
 function parseSteps(steps: unknown, lessonId: string, index: number): number[] {
   if (
     !Array.isArray(steps) ||
+    steps.length === 0 ||
+    new Set(steps).size !== steps.length ||
     !steps.every((s) => Number.isInteger(s) && s >= 0 && s < STEP_COUNT)
   ) {
-    fail(lessonId, `goal[${index}] steps must be integers in [0, ${STEP_COUNT})`)
+    fail(
+      lessonId,
+      `goal[${index}] steps must be unique integers in [0, ${STEP_COUNT}) and cannot be empty`,
+    )
   }
   return steps
 }
@@ -314,11 +325,18 @@ function parsePitchesVariedGoal(
   lessonId: string,
   index: number,
 ): PitchesVariedGoal {
+  const lane = parseLane(goal.lane, NOTE_LANE_IDS, lessonId, index) as NoteLaneId
+  const spec = NOTE_LANES.find((candidate) => candidate.id === lane)!
+  const distinctPitches = spec.maxPitch - spec.minPitch + 1
+  const max = Math.min(STEP_COUNT, distinctPitches)
+  if (!Number.isInteger(goal.min) || (goal.min as number) < 2 || (goal.min as number) > max) {
+    fail(lessonId, `goal[${index}] min must be an integer in [2, ${max}] for lane "${lane}"`)
+  }
   return {
     type: 'pitchesVaried',
-    lane: parseLane(goal.lane, NOTE_LANE_IDS, lessonId, index) as NoteLaneId,
+    lane,
     // One pitch is a line that never moves, so it is no goal at all.
-    min: parseCount(goal.min, 'min', 2, lessonId, index),
+    min: goal.min as number,
   }
 }
 
@@ -359,8 +377,14 @@ function parseParamSweptGoal(
   lessonId: string,
   index: number,
 ): ParamSweptGoal {
-  if (typeof goal.param !== 'string' || goal.param === '') {
+  if (goal.param === undefined) {
     fail(lessonId, `goal[${index}] is missing a param`)
+  }
+  if (!isBassParamId(goal.param)) {
+    fail(
+      lessonId,
+      `goal[${index}] names param "${goal.param}"; the deck has ${[...PARAM_IDS].join(', ')}`,
+    )
   }
   // Travel is a fraction of the knob's range, so anything outside (0, 1] is
   // either a no-op goal or one no amount of knob turning can ever satisfy.

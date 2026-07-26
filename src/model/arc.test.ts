@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { activeArcLesson, arcCompletion, arcEntries, nextUnfinishedLessonId } from './arc'
+import {
+  activeArcLesson,
+  arcCompletion,
+  arcEntries,
+  detectLessonCompletion,
+  isFinalArcLesson,
+  nextUnfinishedLessonId,
+} from './arc'
 import { parseLesson, type Lesson } from './lesson'
+import { createInitialPattern, toggleStep } from './pattern'
 import type { LessonProgress } from './projectState'
 
 function lesson(id: string): Lesson {
@@ -89,5 +97,43 @@ describe('arcEntries', () => {
     expect(entries.map((entry) => entry.position)).toEqual([1, 2, 3])
     expect(entries.map((entry) => entry.completed)).toEqual([true, false, false])
     expect(entries.map((entry) => entry.current)).toEqual([false, true, false])
+  })
+})
+
+describe('isFinalArcLesson', () => {
+  it('derives the graduation lesson from the end of the JSON arc', () => {
+    expect(isFinalArcLesson(ARC, 'three')).toBe(true)
+    expect(isFinalArcLesson(ARC, 'two')).toBe(false)
+    expect(isFinalArcLesson([], 'three')).toBe(false)
+  })
+})
+
+describe('detectLessonCompletion', () => {
+  const metContext = { pattern: toggleStep(createInitialPattern(), 'kick', 0) }
+  const nearMiss = { pattern: createInitialPattern() }
+
+  it('signals a newly met lesson and reserves the finale signal for the capstone', () => {
+    expect(detectLessonCompletion(ARC, ARC[0], false, metContext)).toEqual({
+      justCompleted: true,
+      showFinale: false,
+    })
+    expect(detectLessonCompletion(ARC, ARC[2], false, metContext)).toEqual({
+      justCompleted: true,
+      showFinale: true,
+    })
+  })
+
+  it('does not repeat completion after dismissal, re-entry, or hydration', () => {
+    expect(detectLessonCompletion(ARC, ARC[2], true, metContext)).toEqual({
+      justCompleted: false,
+      showFinale: false,
+    })
+  })
+
+  it('keeps a near miss incomplete', () => {
+    expect(detectLessonCompletion(ARC, ARC[2], false, nearMiss)).toEqual({
+      justCompleted: false,
+      showFinale: false,
+    })
   })
 })

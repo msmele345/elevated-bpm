@@ -364,10 +364,17 @@ describe('parseLesson — arc goal vocabulary', () => {
     expect(withGoal({ type: 'pitchesVaried', lane: 'lead', min: 2 })).toThrow(/lead/)
   })
 
+  it('rejects empty or repeated step goals that could auto-complete with less work', () => {
+    expect(withGoal({ type: 'stepsActive', lane: 'kick', steps: [] })).toThrow(/steps/)
+    expect(withGoal({ type: 'stepsAccented', lane: 'kick', steps: [0, 0] })).toThrow(/steps/)
+    expect(withGoal({ type: 'notesActive', lane: 'bass', steps: [2, 2, 6] })).toThrow(/steps/)
+  })
+
   it('rejects counts that no pattern could ever satisfy', () => {
     expect(withGoal({ type: 'notesPlaced', lane: 'bass', min: 0 })).toThrow(/min/)
     expect(withGoal({ type: 'notesPlaced', lane: 'bass', min: 17 })).toThrow(/min/)
     expect(withGoal({ type: 'pitchesVaried', lane: 'bass', min: 1 })).toThrow(/min/)
+    expect(withGoal({ type: 'pitchesVaried', lane: 'stab', min: 14 })).toThrow(/min/)
     expect(withGoal({ type: 'chordPlayed', minNotes: 1 })).toThrow(/minNotes/)
   })
 
@@ -375,6 +382,12 @@ describe('parseLesson — arc goal vocabulary', () => {
     expect(withGoal({ type: 'bpmInRange', min: 20, max: 140 })).toThrow(/bpm/i)
     expect(withGoal({ type: 'bpmInRange', min: 140, max: 260 })).toThrow(/bpm/i)
     expect(withGoal({ type: 'bpmInRange', min: 145, max: 138 })).toThrow(/bpm/i)
+  })
+
+  it('rejects a sweep for a knob the deck does not have', () => {
+    expect(withGoal({ type: 'paramSwept', param: 'cuttof', minTravel: 0.5 })).toThrow(
+      /cuttof/,
+    )
   })
 
   it('parses every arc goal type it accepts', () => {

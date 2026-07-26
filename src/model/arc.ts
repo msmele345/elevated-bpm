@@ -1,4 +1,4 @@
-import type { Lesson } from './lesson'
+import { isGoalMet, type GoalContext, type Lesson } from './lesson'
 import type { LessonProgress } from './projectState'
 
 /**
@@ -86,4 +86,34 @@ export function arcEntries(
     completed: isCompleted(progress, lesson.id),
     current: lesson.id === activeId,
   }))
+}
+
+/** True when `lessonId` names the capstone at the end of this data-defined arc. */
+export function isFinalArcLesson(arc: Lesson[], lessonId: string): boolean {
+  return arc.length > 0 && arc[arc.length - 1].id === lessonId
+}
+
+export interface LessonCompletionDetection {
+  justCompleted: boolean
+  showFinale: boolean
+}
+
+/**
+ * The user-edit transition consumed by App: recognize a newly met goal once,
+ * and distinguish the data-defined capstone without replaying it for persisted
+ * or revisited completion.
+ */
+export function detectLessonCompletion(
+  arc: Lesson[],
+  lesson: Lesson,
+  alreadyCompleted: boolean,
+  context: GoalContext,
+): LessonCompletionDetection {
+  if (alreadyCompleted || !isGoalMet(lesson, context)) {
+    return { justCompleted: false, showFinale: false }
+  }
+  return {
+    justCompleted: true,
+    showFinale: isFinalArcLesson(arc, lesson.id),
+  }
 }

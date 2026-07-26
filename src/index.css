@@ -902,6 +902,373 @@ body::before {
   }
 }
 
+/* ── Arc finale: the EB-01 graduation plate ─────────────────────────── */
+/* The deck stays physically present behind the moment — dimmed, not replaced —
+   because the user's running groove is the proof. The overlay borrows the
+   machine's powder-coated metal, 16-step language, and club-light palette,
+   then pushes their scale far enough that this cannot read as another lesson
+   toast. */
+.deck[inert] {
+  filter: saturate(0.45) brightness(0.42);
+}
+
+.finale {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: clamp(18px, 4vw, 48px);
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255, 77, 51, 0.1), transparent 34%),
+    rgba(5, 6, 8, 0.88);
+  animation: finale-curtain-in 320ms ease-out both;
+}
+
+/* One room-sized light bloom, then stillness: graduation, not a looping effect. */
+.finale-glow {
+  position: fixed;
+  inset: -28vmax;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    conic-gradient(
+      from 218deg at 50% 50%,
+      transparent 0 21%,
+      color-mix(in srgb, var(--cool-a) 30%, transparent) 27%,
+      transparent 34% 55%,
+      color-mix(in srgb, var(--cool-b) 24%, transparent) 62%,
+      transparent 70% 82%,
+      color-mix(in srgb, var(--quad-1) 34%, transparent) 88%,
+      transparent 96%
+    );
+  filter: blur(52px);
+  opacity: 0.5;
+  animation: finale-room-bloom 1.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.finale-card {
+  position: relative;
+  width: min(760px, 100%);
+  overflow: hidden;
+  padding: clamp(28px, 6vw, 64px);
+  border: 1px solid #050607;
+  border-radius: 18px;
+  background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0.075), transparent 24%),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 3px,
+      rgba(255, 255, 255, 0.012) 3px,
+      rgba(255, 255, 255, 0.012) 4px
+    ),
+    linear-gradient(145deg, #292d31 0%, #17191c 48%, #0f1113 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    inset 0 -4px 10px rgba(0, 0, 0, 0.7),
+    0 32px 100px rgba(0, 0, 0, 0.72),
+    0 0 0 1px rgba(255, 210, 77, 0.16),
+    0 0 74px rgba(255, 77, 51, 0.16);
+  animation: finale-plate-land 680ms cubic-bezier(0.16, 1, 0.3, 1) 80ms both;
+}
+
+/* A hard diagonal color slash breaks the polite centered panel and reads like
+   a club flyer trapped under the machine's faceplate. */
+.finale-card::before {
+  content: '';
+  position: absolute;
+  top: -42%;
+  right: -12%;
+  width: 42%;
+  height: 184%;
+  pointer-events: none;
+  transform: rotate(12deg);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--quad-0) 54%, transparent),
+    color-mix(in srgb, var(--cool-a) 22%, transparent) 48%,
+    transparent 82%
+  );
+  opacity: 0.3;
+  mix-blend-mode: screen;
+}
+
+.finale-card::after {
+  content: 'ELEVATED BPM  /  GRADUATION OUTPUT';
+  position: absolute;
+  right: -62px;
+  bottom: 76px;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.22em;
+  color: rgba(232, 228, 218, 0.24);
+}
+
+.finale-kicker {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: clamp(0.58rem, 1.5vw, 0.7rem);
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  color: var(--quad-2);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--quad-2) 45%, transparent);
+  animation: finale-copy-rise 500ms ease-out 480ms both;
+}
+
+.finale-step-run {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+  gap: clamp(3px, 0.8vw, 8px);
+  width: min(600px, 92%);
+  margin-top: clamp(18px, 3vw, 30px);
+}
+
+.finale-step-run span {
+  aspect-ratio: 1;
+  border: 1px solid #050607;
+  border-radius: clamp(2px, 0.5vw, 5px);
+  background: #151719;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.08),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.7);
+  animation: finale-step-fire 700ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(250ms + var(--finale-step) * 38ms);
+}
+
+.finale-step-run span:nth-child(-n + 4) {
+  --step-color: var(--quad-0);
+}
+
+.finale-step-run span:nth-child(n + 5):nth-child(-n + 8) {
+  --step-color: var(--quad-1);
+}
+
+.finale-step-run span:nth-child(n + 9):nth-child(-n + 12) {
+  --step-color: var(--quad-2);
+}
+
+.finale-step-run span:nth-child(n + 13) {
+  --step-color: var(--quad-3);
+}
+
+.finale-title {
+  position: relative;
+  z-index: 1;
+  max-width: 620px;
+  margin-top: clamp(28px, 6vw, 54px);
+  font-family: var(--font-display);
+  font-size: clamp(3.2rem, 11vw, 7.7rem);
+  font-style: italic;
+  font-weight: 700;
+  letter-spacing: -0.055em;
+  line-height: 0.72;
+  text-transform: uppercase;
+  color: var(--quad-3);
+  text-shadow:
+    3px 3px 0 #111315,
+    0 0 24px rgba(255, 77, 51, 0.28);
+  animation: finale-title-hit 720ms cubic-bezier(0.16, 1, 0.3, 1) 520ms both;
+}
+
+.finale-title span {
+  display: block;
+  margin-bottom: 0.25em;
+  padding-left: 0.12em;
+  font-family: var(--font-mono);
+  font-size: 0.12em;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.6em;
+  line-height: 1;
+  color: var(--quad-0);
+  text-shadow: 0 0 12px rgba(255, 77, 51, 0.55);
+}
+
+.finale-copy {
+  position: relative;
+  z-index: 1;
+  max-width: 570px;
+  margin-top: clamp(28px, 5vw, 44px);
+  font-size: clamp(0.76rem, 2vw, 0.9rem);
+  line-height: 1.7;
+  color: var(--silkscreen);
+  animation: finale-copy-rise 500ms ease-out 720ms both;
+}
+
+.finale-close {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: clamp(24px, 4vw, 38px);
+  padding: 12px 22px;
+  border: 1px solid #050607;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #40454a 0%, var(--steel) 48%, #202326 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -3px 4px rgba(0, 0, 0, 0.52),
+    0 4px 8px rgba(0, 0, 0, 0.5);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  cursor: pointer;
+  animation: finale-copy-rise 500ms ease-out 820ms both;
+}
+
+.finale-close:hover {
+  background: linear-gradient(180deg, #4b5157 0%, #373c41 48%, #24272a 100%);
+}
+
+.finale-close:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.52),
+    0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.finale-close:focus-visible {
+  outline: 2px solid var(--quad-2);
+  outline-offset: 4px;
+}
+
+.finale-close-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4dff6a;
+  box-shadow:
+    0 0 8px #4dff6a,
+    0 0 20px rgba(77, 255, 106, 0.48);
+}
+
+@keyframes finale-curtain-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes finale-room-bloom {
+  from {
+    opacity: 0;
+    transform: scale(0.68) rotate(-9deg);
+  }
+  55% {
+    opacity: 0.82;
+  }
+  to {
+    opacity: 0.5;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes finale-plate-land {
+  from {
+    opacity: 0;
+    transform: translateY(44px) scale(0.94) rotate(-0.8deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
+}
+
+@keyframes finale-step-fire {
+  from {
+    background: #151719;
+    transform: translateY(7px) scale(0.72);
+  }
+  58% {
+    transform: translateY(0) scale(1.18);
+  }
+  to {
+    background: var(--step-color);
+    transform: translateY(0) scale(1);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.24),
+      inset 0 -2px 3px rgba(0, 0, 0, 0.42),
+      0 0 13px color-mix(in srgb, var(--step-color) 60%, transparent);
+  }
+}
+
+@keyframes finale-title-hit {
+  from {
+    opacity: 0;
+    transform: translateX(-34px) skewX(-5deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) skewX(0);
+  }
+}
+
+@keyframes finale-copy-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 520px) {
+  .finale {
+    place-items: start center;
+  }
+
+  .finale-card {
+    padding: 28px 22px 32px;
+  }
+
+  .finale-card::after {
+    display: none;
+  }
+
+  .finale-step-run {
+    width: 100%;
+    gap: 3px;
+  }
+
+  .finale-title {
+    font-size: clamp(3rem, 18vw, 5rem);
+  }
+
+  .finale-close {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .finale,
+  .finale-glow,
+  .finale-card,
+  .finale-kicker,
+  .finale-step-run span,
+  .finale-title,
+  .finale-copy,
+  .finale-close {
+    animation: none;
+  }
+}
+
 /* ── Lesson spotlight on a lane ────────────────────────────────────── */
 .step-row.is-spotlit {
   padding: 10px 12px;

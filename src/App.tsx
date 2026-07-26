@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BassPanel } from './components/BassPanel'
+import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
 import { StabKeyboard } from './components/StabKeyboard'
@@ -7,11 +8,16 @@ import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
 import { useRoomLight } from './hooks/useRoomLight'
-import { activeArcLesson, arcCompletion, arcEntries, nextUnfinishedLessonId } from './model/arc'
+import {
+  activeArcLesson,
+  arcCompletion,
+  arcEntries,
+  detectLessonCompletion,
+  nextUnfinishedLessonId,
+} from './model/arc'
 import { bassParamSpec, type BassParamId } from './model/bass'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
-  isGoalMet,
   spotlightsTarget,
   spotlitLaneIds,
   spotlitNoteLaneIds,
@@ -49,6 +55,9 @@ export default function App() {
   const [project, setProject] = useState(createInitialProjectState)
   const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
+  // A session-only graduation overlay: it appears on the transition into an
+  // earned capstone, never just because an already-complete project reloaded.
+  const [finaleVisible, setFinaleVisible] = useState(false)
   // Knob motion is a claim about this session, not about the saved document:
   // it is what the user just did to a running loop, so it lives in memory and
   // never dirties the autosave. Completion itself is still latched in the
@@ -140,10 +149,15 @@ export default function App() {
   // document, so undoing the work later doesn't revoke it and the earned
   // lesson survives a reload.
   useEffect(() => {
-    if (lessonCompleted) return
-    if (isGoalMet(activeLesson, { pattern, motion: paramMotion, bpm, chord: chordPlay })) {
-      setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
-    }
+    const completion = detectLessonCompletion(ARC, activeLesson, lessonCompleted, {
+      pattern,
+      motion: paramMotion,
+      bpm,
+      chord: chordPlay,
+    })
+    if (!completion.justCompleted) return
+    setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
+    if (completion.showFinale) setFinaleVisible(true)
   }, [pattern, paramMotion, bpm, chordPlay, activeLesson, lessonCompleted])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
@@ -266,6 +280,10 @@ export default function App() {
     setProject((p) => enterLesson(p, activeLesson.id))
   }
 
+  // Stable because the modal owns a window listener while mounted; changing
+  // this callback would tear that listener down and refocus its button.
+  const handleCloseFinale = useCallback(() => setFinaleVisible(false), [])
+
   return (
     <>
       {/* The room: decorative club light behind the deck, driven by rAF CSS
@@ -281,7 +299,12 @@ export default function App() {
         <div className="room-beam room-beam-b" />
       </div>
 
-      <main className="deck" ref={deckRef}>
+      <main
+        className="deck"
+        ref={deckRef}
+        inert={finaleVisible}
+        aria-hidden={finaleVisible || undefined}
+      >
       <header className="deck-header">
         <h1 className="brand">
           Elevated <em>BPM</em>
@@ -368,6 +391,7 @@ export default function App() {
         onResize={(stepIndex, steps) => handleResizeNote('stab', stepIndex, steps)}
       />
     </main>
+      {finaleVisible && <FinaleMoment onClose={handleCloseFinale} />}
     </>
   )
 }

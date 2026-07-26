@@ -62,7 +62,20 @@ describe('createDemoPattern', () => {
     expect(onSteps(demo, 'snare')).toEqual([12])
     expect(onSteps(demo, 'closedHat')).toEqual([2, 6, 10])
     expect(onSteps(demo, 'openHat')).toEqual([14])
-    expect(onSteps(demo, 'perc')).toEqual([5, 11])
+    expect(onSteps(demo, 'perc')).toEqual([3, 5, 11, 13])
+  })
+
+  it('carries its syncopation in the perc, entirely off the beat', () => {
+    // The perc is where the demo is allowed to be busy (no lesson asks for it),
+    // so it carries the groove the arc's own lanes cannot: every hit lands on a
+    // 16th between the beats, and two of them push.
+    const demo = createDemoPattern()
+    const perc = demo.lanes.find((lane) => lane.id === 'perc')!
+
+    expect(onSteps(demo, 'perc').every((step) => step % 2 === 1)).toBe(true)
+    expect(perc.steps.map((step, i) => (step.accent ? i : -1)).filter((i) => i >= 0)).toEqual([
+      5, 11,
+    ])
   })
 
   it('leaves every step the arc teaches unplayed, so no lesson opens already won', () => {

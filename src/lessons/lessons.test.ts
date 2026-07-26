@@ -73,6 +73,41 @@ describe('the curriculum arc', () => {
     }
   })
 
+  it('ships a demo that stays inside the arc, so a lesson is always "add", never "delete"', () => {
+    // The rule that keeps the demo and the curriculum out of each other's way:
+    // on any lane a lesson asserts exactly, the demo may only place steps that
+    // lesson also wants. Then every lesson is a missing piece to drop in, and
+    // none of them opens already won.
+    const demo = createDemoPattern()
+    const wanted = (laneId: string) =>
+      new Set(
+        ARC.flatMap((lesson) =>
+          lesson.goal.flatMap((goal) =>
+            goal.type === 'stepsActive' && goal.lane === laneId ? goal.steps : [],
+          ),
+        ),
+      )
+
+    const strays = demo.lanes
+      .filter((lane) => wanted(lane.id).size > 0)
+      .filter((lane) => lane.steps.some((step, i) => step.on && !wanted(lane.id).has(i)))
+      .map((lane) => lane.id)
+
+    // The open hat is the one deliberate exception: its lesson teaches the 909
+    // choke by making the user hear it cut off and move it.
+    expect(strays).toEqual(['openHat'])
+  })
+
+  it('leaves the perc lane free — the one place the demo can be busy', () => {
+    // Nothing in the arc asserts perc, which is what lets the demo carry its
+    // groove there without ever doing a lesson's work.
+    expect(
+      ARC.flatMap((lesson) =>
+        lesson.goal.filter((goal) => 'lane' in goal && goal.lane === 'perc'),
+      ),
+    ).toEqual([])
+  })
+
   it('names only knobs the deck actually has', () => {
     // A spotlight or goal pointing at a knob that does not exist would be a
     // lesson the user can never complete and never see highlighted.

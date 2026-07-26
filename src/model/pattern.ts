@@ -36,16 +36,24 @@ export function createInitialPattern(): Pattern {
  * that stop a step short. Each arc lesson is the missing piece, and finishing
  * the arc is what completes this groove.
  *
+ * The rule this pattern lives by: on a lane a lesson asserts, the demo may
+ * only place steps that lesson also wants, so every lesson is something to add
+ * rather than something to undo (guarded in lessons/lessons.test.ts). That
+ * leaves the perc as the one lane free to be busy — no lesson asks for it — so
+ * it carries the syncopation, all of it between the beats, with the hit after
+ * the clap answering the backbeat the arc has yet to build.
+ *
  * The closed hat also stops short of step 14 so the open hat there rings out
  * instead of being choked (see CHOKES in audio/hits.ts) — until the offbeat
  * hats lesson fills that step in, which is exactly what the open hat lesson
- * then teaches the user to hear and fix.
+ * then teaches the user to hear and fix. That move is the one deliberate
+ * exception to the rule above.
  */
 const DEMO_GROOVE: Partial<Record<DrumLaneId, { on: number[]; accent?: number[] }>> = {
   snare: { on: [12], accent: [12] },
   closedHat: { on: [2, 6, 10] },
   openHat: { on: [14], accent: [14] },
-  perc: { on: [5, 11] },
+  perc: { on: [3, 5, 11, 13], accent: [5, 11] },
 }
 
 /** The pattern a fresh project starts from: playable techno on first press. */

@@ -5,6 +5,7 @@ import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
+import { useRoomLight } from './hooks/useRoomLight'
 import { bassParamSpec, type BassParamId } from './model/bass'
 import { isGoalMet, parseLesson, spotlitLaneIds, spotlitParamIds } from './model/lesson'
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
@@ -80,6 +81,7 @@ export default function App() {
   const spotlitParams = spotlitResting ? [] : spotlitParamIds(activeLesson)
 
   usePlayhead(deckRef, isPlaying)
+  useRoomLight(isPlaying, bpm)
 
   // Hydrate from IndexedDB once on mount: a returning user gets their saved
   // beat back, a first-time one gets the demo groove so the deck is never
@@ -220,7 +222,21 @@ export default function App() {
   }
 
   return (
-    <main className="deck" ref={deckRef}>
+    <>
+      {/* The room: decorative club light behind the deck, driven by rAF CSS
+          variables — static markup, so it never re-renders on the audio clock. */}
+      <div className="room" aria-hidden="true">
+        <div className="room-wash room-wash-a" />
+        <div className="room-wash room-wash-b" />
+        <div className="room-wash room-wash-c" />
+        <div className="room-wash room-wash-a-cool" />
+        <div className="room-wash room-wash-b-cool" />
+        <div className="room-wash room-wash-c-cool" />
+        <div className="room-beam room-beam-a" />
+        <div className="room-beam room-beam-b" />
+      </div>
+
+      <main className="deck" ref={deckRef}>
       <header className="deck-header">
         <h1 className="brand">
           Elevated <em>BPM</em>
@@ -298,5 +314,6 @@ export default function App() {
         onResize={(stepIndex, steps) => handleResizeNote('stab', stepIndex, steps)}
       />
     </main>
+    </>
   )
 }

@@ -154,6 +154,11 @@ A simple polyphonic stab synth played on an on-screen MIDI-style keyboard, with 
 
 ---
 
+### Phase 6.5: Backdrop UX Only Update
+- [x] the room around the deck is now a beat-synced club backdrop — vignetted void, light washes behind the deck, two slow haze beams, and a warm light spill under the deck, plus the brand wordmark swelling on the downbeat. Driven by useRoomLight (rAF → CSS vars, zero React re-renders, same pattern as usePlayhead); the pure envelope math lives in src/model/roomLight.ts (covered by roomLight.test.ts). Tuned for practice, not spectacle: the pulse is a bar-accented swell (accentAtBeatInBar — full on the 1, a lift on the 3, nods on 2/4) on a resting-glow floor with a soft e^-2.75x decay, and the palette slowly drifts from the deck's 909 warmth out to club magenta/cyan/violet and back over 36 s (coolMixAtTime, crossfaded warm/cool gradient layers — opacity-only, GPU-cheap). Flash rate capped under the WCAG 2.3.1 photosafety threshold (drops to half-note pulses past 180 BPM — beatsPerPulseForBpm). Stopped transport never pulses: the room falls to a slow dim breathe with the color drift continuing. prefers-reduced-motion gets a static dim warm+cool blend. Verified in-browser via Playwright: per-beat peaks measured 0.93 / 0.39 / 0.60 / 0.39 against the designed 1 / 0.4 / 0.6 / 0.4 at 130 BPM, pulse 0 when stopped, cool drift confirmed moving, zero console errors, rAF rate unchanged with/without the room layers. Mixer-surface macros, canvas visualizer, and the remaining materials pass are still open below.
+
+**Note:** This was a phase 9 UI polish item that got bumped up to do before phase 7.
+
 ## Phase 7: Full curriculum arc
 
 **User stories**: the v1 product promise — a beginner goes from silence to a full techno groove along one guided path.
@@ -200,9 +205,9 @@ The hardware-aesthetic design pass across the whole deck, canvas-based real-time
 ### Acceptance criteria
 
 - [ ] Cohesive hardware-inspired visual language across drum machine, bass, keyboard, and mixer (consistent spacing, materials, lighting/glow)
-
-  **Progress (feat/club-room-backdrop):** the room around the deck is now a beat-synced club backdrop — vignetted void, light washes behind the deck, two slow haze beams, and a warm light spill under the deck, plus the brand wordmark swelling on the downbeat. Driven by `useRoomLight` (rAF → CSS vars, zero React re-renders, same pattern as `usePlayhead`); the pure envelope math lives in `src/model/roomLight.ts` (covered by `roomLight.test.ts`). Tuned for practice, not spectacle: the pulse is a bar-accented swell (`accentAtBeatInBar` — full on the 1, a lift on the 3, nods on 2/4) on a resting-glow floor with a soft `e^-2.75x` decay, and the palette slowly drifts from the deck's 909 warmth out to club magenta/cyan/violet and back over 36 s (`coolMixAtTime`, crossfaded warm/cool gradient layers — opacity-only, GPU-cheap). Flash rate capped under the WCAG 2.3.1 photosafety threshold (drops to half-note pulses past 180 BPM — `beatsPerPulseForBpm`). Stopped transport never pulses: the room falls to a slow dim breathe with the color drift continuing. `prefers-reduced-motion` gets a static dim warm+cool blend. Verified in-browser via Playwright: per-beat peaks measured 0.93 / 0.39 / 0.60 / 0.39 against the designed 1 / 0.4 / 0.6 / 0.4 at 130 BPM, pulse 0 when stopped, cool drift confirmed moving, zero console errors, rAF rate unchanged with/without the room layers. Mixer-surface macros, canvas visualizer, and the remaining materials pass are still open below.
 - [ ] Live waveform or spectrum visualizer runs on canvas at 60fps without affecting audio
 - [ ] Master macro knobs (filter, drive) audibly shape the full mix and persist in `ProjectState`
 - [ ] The deck remains fully usable by keyboard and meets basic accessibility (focus visible, controls labeled)
 - [ ] No interaction causes audio glitches or dropped frames during playback
+
+**Note** 

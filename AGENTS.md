@@ -22,7 +22,7 @@ See @plans/elevated-bpm-v1.md
 2. Red green refactor. Reference the /tdd skill and follow it
 
 # Git Strategy and Instructions
-- Create feature branches off of develop for each new feature or task. Name branches using the format `feat/short-description` (e.g., `feature/spotify-integration`).
+- Create feature branches off of develop for each new feature or task. Name branches using the format `feat/short-description` (e.g., `feat/spotify-integration`).
 - Git Strategy is Git Flow with the following branches:
     - `main` - production ready code
     - `develop` - latest development code, merged from feature branches

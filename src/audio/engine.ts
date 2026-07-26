@@ -20,7 +20,7 @@ import { stepIndexAtTicks } from './stepIndex'
 // The BPM range/default live in the model (model/transport.ts) — the state
 // document clamps with the same rule — and are re-exported for UI convenience.
 export { DEFAULT_BPM, MAX_BPM, MIN_BPM } from '../model/transport'
-const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
+export const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
 let bpm = DEFAULT_BPM
 let currentPattern: Pattern | null = null
@@ -104,6 +104,17 @@ export function getCurrentStep(): number {
   const transport = Tone.getTransport()
   if (transport.state !== 'started') return -1
   return stepIndexAtTicks(transport.ticks, TICKS_PER_16TH, STEP_COUNT)
+}
+
+/**
+ * Transport position in ticks, or -1 when not running (same convention as
+ * getCurrentStep). Sub-step resolution for the room light's strobe phase,
+ * which needs to know where inside the beat the transport is.
+ */
+export function getTransportTicks(): number {
+  const transport = Tone.getTransport()
+  if (transport.state !== 'started') return -1
+  return transport.ticks
 }
 
 /** Bass level: sits under the kit so the drums keep the front of the mix. */

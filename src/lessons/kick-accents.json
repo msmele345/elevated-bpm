@@ -1,0 +1,7 @@
+{
+  "id": "kick-accents",
+  "title": "Make the Kick Push",
+  "intro": "Four identical kicks are a metronome. Real machines hit some harder than others, and that is what makes a bar lean. Tap steps 1 and 9 one more time each — a second tap turns a step into an accent — so the kick pushes on beats 1 and 3 and eases off on 2 and 4.",
+  "spotlight": ["lane:kick"],
+  "goal": [{ "type": "stepsAccented", "lane": "kick", "steps": [0, 8] }]
+}

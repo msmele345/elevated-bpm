@@ -19,8 +19,9 @@ import type { DrumLaneId, NoteLaneId, Pattern } from './types'
  */
 
 // v2 grew the pattern to the full kit; v3 added the per-lane mute/solo mixer;
-// v4 added bass; v5 adds the sequenced stab note lane.
-export const PROJECT_STATE_VERSION = 5
+// v4 added bass; v5 the sequenced stab note lane; v6 remembers which lesson of
+// the arc the user is on.
+export const PROJECT_STATE_VERSION = 6
 
 /** Per-lesson progress; keyed by lesson id in the document. */
 export interface LessonProgress {
@@ -43,6 +44,11 @@ export interface ProjectState {
   prefs: Record<string, unknown>
   /** Per-lane mute/solo. Absent lanes are audible and un-soloed. */
   mixer: Mixer
+  /**
+   * The lesson of the arc the user stepped into, or null to follow the arc's
+   * own order. Persisted so a reload resumes where they were on the path.
+   */
+  activeLessonId: string | null
 }
 
 export function createInitialProjectState(): ProjectState {
@@ -56,6 +62,7 @@ export function createInitialProjectState(): ProjectState {
     lessonProgress: {},
     prefs: {},
     mixer: {},
+    activeLessonId: null,
   }
 }
 
@@ -173,6 +180,25 @@ export function updateLessonProgress(
   }
 }
 
+/**
+ * Immutably step onto a lesson of the arc (or back onto its path with null).
+ * Navigation only ever moves the marker: the pattern, the patch, the transport
+ * and earned progress all come through untouched, so entering or leaving a
+ * lesson can never cost the user their sandbox.
+ */
+export function selectLesson(state: ProjectState, lessonId: string | null): ProjectState {
+  return { ...state, activeLessonId: lessonId }
+}
+
+/**
+ * Step into a lesson from the arc: select it and reopen its panel. Completion
+ * already earned stays earned — a lesson can be revisited to re-read it
+ * without the celebration being taken back.
+ */
+export function enterLesson(state: ProjectState, lessonId: string): ProjectState {
+  return selectLesson(updateLessonProgress(state, lessonId, { dismissed: false }), lessonId)
+}
+
 const AUDIBLE: LaneMix = { muted: false, soloed: false }
 
 /** Immutably flip one field of one lane's mixer strip. */
@@ -209,24 +235,32 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
   // Each step lifts the document one version; they chain so an ancient save
   // reaches the current shape through the same path a recent one takes.
   if (doc.version === 0) {
-    return migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(migrateV0ToV1(doc)))))
+    return migrateV5ToV6(
+      migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(migrateV0ToV1(doc))))),
+    )
   }
   if (doc.version === 1) {
-    return migrateV4ToV5(
-      migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(doc as ProjectStateV1))),
+    return migrateV5ToV6(
+      migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(doc as ProjectStateV1)))),
     )
   }
   if (doc.version === 2) {
-    return migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(doc as ProjectStateV2)))
+    return migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(doc as ProjectStateV2))))
   }
-  if (doc.version === 3) return migrateV4ToV5(migrateV3ToV4(doc as ProjectStateV3))
-  if (doc.version === 4) return migrateV4ToV5(doc as ProjectStateV4)
+  if (doc.version === 3) {
+    return migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(doc as ProjectStateV3)))
+  }
+  if (doc.version === 4) return migrateV5ToV6(migrateV4ToV5(doc as ProjectStateV4))
+  if (doc.version === 5) return migrateV5ToV6(doc as ProjectStateV5)
   if (doc.version === PROJECT_STATE_VERSION) return raw as ProjectState
   return null
 }
 
 /** Fields shared by every document version, before the version-specific bits. */
-type ProjectStateBase = Omit<ProjectState, 'version' | 'mixer' | 'instrumentSettings'> & {
+type ProjectStateBase = Omit<
+  ProjectState,
+  'version' | 'mixer' | 'instrumentSettings' | 'activeLessonId'
+> & {
   instrumentSettings: Record<string, unknown>
 }
 
@@ -247,7 +281,10 @@ type ProjectStateV2 = ProjectStateBase & { version: 2 }
 type ProjectStateV3 = ProjectStateBase & { version: 3; mixer: Mixer }
 
 /** v4 added the bass lane and synth patch, but no stab lane yet. */
-type ProjectStateV4 = Omit<ProjectState, 'version'> & { version: 4 }
+type ProjectStateV4 = Omit<ProjectState, 'version' | 'activeLessonId'> & { version: 4 }
+
+/** v5 had every instrument, but the arc was a fixed order with no place to be on it. */
+type ProjectStateV5 = Omit<ProjectState, 'version' | 'activeLessonId'> & { version: 5 }
 
 function migrateV0ToV1(doc: object): ProjectStateV1 {
   const { pattern, bpm } = doc as ProjectStateV0
@@ -281,10 +318,16 @@ function migrateV3ToV4(doc: ProjectStateV3): ProjectStateV4 {
   }
 }
 
-function migrateV4ToV5(doc: ProjectStateV4): ProjectState {
+function migrateV4ToV5(doc: ProjectStateV4): ProjectStateV5 {
   return {
     ...doc,
     version: 5,
     patterns: doc.patterns.map(withNoteLanes),
   }
+}
+
+function migrateV5ToV6(doc: ProjectStateV5): ProjectState {
+  // No selection: a returning user rejoins the arc at the first lesson they
+  // have not earned, with everything they had already earned intact.
+  return { ...doc, version: 6, activeLessonId: null }
 }

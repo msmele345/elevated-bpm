@@ -1,0 +1,7 @@
+{
+  "id": "envelope-pluck",
+  "title": "Pluck or Rumble",
+  "intro": "The Decay knob sets how long each bass note holds before it dies away. Short decay gives you a tight, plucky line with air between the notes; long decay smears them into one rolling rumble under the kick. With the loop playing, run Decay from its shortest setting up to its longest and pick the one your groove wants.",
+  "spotlight": ["knob:decay"],
+  "goal": [{ "type": "paramSwept", "param": "decay", "minTravel": 0.5 }]
+}

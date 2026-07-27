@@ -1,0 +1,7 @@
+{
+  "id": "offbeat-hats",
+  "title": "Offbeat Hats",
+  "intro": "The kick holds the floor down; the hats lift it back up. A closed hat sits exactly halfway between two kicks — on steps 3, 7, 11 and 15. Three of them are already running. Add the missing one so the offbeat never drops out, and listen to the loop start to move forward instead of just repeating.",
+  "spotlight": ["lane:closedHat"],
+  "goal": [{ "type": "stepsActive", "lane": "closedHat", "steps": [2, 6, 10, 14] }]
+}

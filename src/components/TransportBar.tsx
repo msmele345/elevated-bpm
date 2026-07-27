@@ -3,11 +3,19 @@ import { MAX_BPM, MIN_BPM } from '../audio/engine'
 interface TransportBarProps {
   isPlaying: boolean
   bpm: number
+  /** The active lesson is pointing at the tempo fader. */
+  spotlitTempo?: boolean
   onTogglePlay: () => void
   onBpmChange: (bpm: number) => void
 }
 
-export function TransportBar({ isPlaying, bpm, onTogglePlay, onBpmChange }: TransportBarProps) {
+export function TransportBar({
+  isPlaying,
+  bpm,
+  spotlitTempo = false,
+  onTogglePlay,
+  onBpmChange,
+}: TransportBarProps) {
   return (
     <div className="transport">
       <button
@@ -19,7 +27,7 @@ export function TransportBar({ isPlaying, bpm, onTogglePlay, onBpmChange }: Tran
         <span className="transport-play-led" aria-hidden="true" />
         {isPlaying ? 'Stop' : 'Play'}
       </button>
-      <label className="transport-tempo">
+      <label className={spotlitTempo ? 'transport-tempo is-spotlit' : 'transport-tempo'}>
         <span className="transport-tempo-label">Tempo</span>
         <input
           type="range"

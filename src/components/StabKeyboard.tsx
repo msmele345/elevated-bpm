@@ -12,6 +12,10 @@ import { NoteRow } from './NoteRow'
 
 interface StabKeyboardProps {
   lane: NoteLane
+  /** The active lesson is pointing at the sequenced stab lane. */
+  spotlitLane?: boolean
+  /** The active lesson is pointing at the live keyboard. */
+  spotlitKeys?: boolean
   onAttack: (source: string, midi: number) => void
   onRelease: (source: string) => void
   getSoundingNotes: () => readonly number[]
@@ -41,6 +45,8 @@ const STAB_KEY_LAYOUT = STAB_KEYS.map((key) => ({ key, style: keyStyle(key) }))
  */
 export function StabKeyboard({
   lane,
+  spotlitLane = false,
+  spotlitKeys = false,
   onAttack,
   onRelease,
   getSoundingNotes,
@@ -162,11 +168,16 @@ export function StabKeyboard({
       </div>
       <NoteRow
         lane={lane}
+        spotlit={spotlitLane}
         onToggleStep={onToggleStep}
         onTranspose={onTranspose}
         onResize={onResize}
       />
-      <div ref={keyboardRef} className="stab-keyboard" aria-label="Live stab keyboard">
+      <div
+        ref={keyboardRef}
+        className={spotlitKeys ? 'stab-keyboard is-spotlit' : 'stab-keyboard'}
+        aria-label="Live stab keyboard"
+      >
         {STAB_KEY_LAYOUT.map(({ key, style }) => (
           <button
             key={key.code}

@@ -1,0 +1,7 @@
+{
+  "id": "first-bassline",
+  "title": "First Bassline",
+  "intro": "The oldest trick in techno: the bass plays where the kick isn't. Your kick owns beats 1, 2, 3 and 4, so put a bass note in each gap — steps 3, 7, 11 and 15 on the Bass Line row. Four notes, all on the same pitch for now. Press play: the kick and the bass hand off to each other instead of fighting for the low end.",
+  "spotlight": ["noteLane:bass"],
+  "goal": [{ "type": "notesActive", "lane": "bass", "steps": [2, 6, 10, 14] }]
+}

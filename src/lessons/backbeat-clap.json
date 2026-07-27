@@ -1,0 +1,7 @@
+{
+  "id": "backbeat-clap",
+  "title": "Clap on 2 and 4",
+  "intro": "The clap answers the kick. It belongs on beats 2 and 4 — the backbeat every dance record is built on — which is steps 5 and 13 here. One is already answering on beat 4; put its partner on step 5 so the bar splits evenly into call and response.",
+  "spotlight": ["lane:snare"],
+  "goal": [{ "type": "stepsActive", "lane": "snare", "steps": [4, 12] }]
+}

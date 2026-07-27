@@ -1,18 +1,34 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BassPanel } from './components/BassPanel'
+import { FinaleMoment } from './components/FinaleMoment'
+import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
 import { usePlayhead } from './hooks/usePlayhead'
 import { useRoomLight } from './hooks/useRoomLight'
+import {
+  activeArcLesson,
+  arcCompletion,
+  arcEntries,
+  detectLessonCompletion,
+  nextUnfinishedLessonId,
+} from './model/arc'
 import { bassParamSpec, type BassParamId } from './model/bass'
-import { isGoalMet, parseLesson, spotlitLaneIds, spotlitParamIds } from './model/lesson'
+import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
+import {
+  spotlightsTarget,
+  spotlitLaneIds,
+  spotlitNoteLaneIds,
+  spotlitParamIds,
+} from './model/lesson'
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activePattern,
   createInitialProjectState,
   cycleActivePatternStep,
+  enterLesson,
   openingProjectState,
   resizeActivePatternNote,
   setBassParamValue,
@@ -27,13 +43,7 @@ import type { DrumLaneId, NoteLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
-import filterSweepJson from './lessons/filter-sweep.json'
-import fourOnTheFloorJson from './lessons/four-on-the-floor.json'
-
-// Lessons are pure data: the definitions are JSON, parsed once at module load.
-// The order is the arc — rhythm first, then sound design. Full arc navigation
-// (jumping between lessons) lands in Phase 7.
-const LESSONS = [fourOnTheFloorJson, filterSweepJson].map(parseLesson)
+import { ARC } from './lessons'
 
 // Long enough to coalesce a burst of step taps into one IndexedDB write,
 // short enough that a save has almost always landed before a refresh.
@@ -45,11 +55,20 @@ export default function App() {
   const [project, setProject] = useState(createInitialProjectState)
   const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
+  // A session-only graduation overlay: it appears on the transition into an
+  // earned capstone, never just because an already-complete project reloaded.
+  const [finaleVisible, setFinaleVisible] = useState(false)
   // Knob motion is a claim about this session, not about the saved document:
   // it is what the user just did to a running loop, so it lives in memory and
   // never dirties the autosave. Completion itself is still latched in the
   // document, so an earned sweep survives a reload.
   const [paramMotion, setParamMotion] = useState(NO_PARAM_MOTION)
+  // Live playing is a session observation too. The record of what is held
+  // right now lives in a ref — it changes on every key press and no pixel
+  // depends on it — while state carries only the biggest chord played, so a
+  // key press re-renders the deck once a chord grows, and never otherwise.
+  const chordRef = useRef(NO_CHORD_PLAY)
+  const [chordPlay, setChordPlay] = useState(NO_CHORD_PLAY)
   // The playhead sweeps every grid on the deck — drums, bass, and stabs — so
   // its root is the deck, not one panel.
   const deckRef = useRef<HTMLElement>(null)
@@ -62,13 +81,12 @@ export default function App() {
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
 
-  // The arc advances only once a finished lesson is put away, so the
-  // celebration is never cut short by the next lesson appearing over it.
-  const activeLesson =
-    LESSONS.find((lesson) => {
-      const progress = project.lessonProgress[lesson.id]
-      return !(progress?.completed && progress.dismissed)
-    }) ?? LESSONS[LESSONS.length - 1]
+  // Where the user is on the arc: their own selection if they stepped off the
+  // path, otherwise the first lesson still unearned.
+  const activeLesson = activeArcLesson(ARC, project.lessonProgress, project.activeLessonId)
+  const arcPath = arcEntries(ARC, project.lessonProgress, activeLesson.id)
+  const arcDone = arcCompletion(ARC, project.lessonProgress)
+  const here = arcPath.find((entry) => entry.current)!
 
   const lessonProgress = project.lessonProgress[activeLesson.id]
   const lessonCompleted = lessonProgress?.completed ?? false
@@ -78,7 +96,10 @@ export default function App() {
   // the lesson is put away.
   const spotlitResting = lessonCompleted || lessonDismissed
   const spotlitLanes = spotlitResting ? [] : spotlitLaneIds(activeLesson)
+  const spotlitNoteLanes = spotlitResting ? [] : spotlitNoteLaneIds(activeLesson)
   const spotlitParams = spotlitResting ? [] : spotlitParamIds(activeLesson)
+  const spotlitTarget = (target: string) =>
+    !spotlitResting && spotlightsTarget(activeLesson, target)
 
   usePlayhead(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
@@ -128,11 +149,16 @@ export default function App() {
   // document, so undoing the work later doesn't revoke it and the earned
   // lesson survives a reload.
   useEffect(() => {
-    if (lessonCompleted) return
-    if (isGoalMet(activeLesson, { pattern, motion: paramMotion })) {
-      setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
-    }
-  }, [pattern, paramMotion, activeLesson, lessonCompleted])
+    const completion = detectLessonCompletion(ARC, activeLesson, lessonCompleted, {
+      pattern,
+      motion: paramMotion,
+      bpm,
+      chord: chordPlay,
+    })
+    if (!completion.justCompleted) return
+    setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
+    if (completion.showFinale) setFinaleVisible(true)
+  }, [pattern, paramMotion, bpm, chordPlay, activeLesson, lessonCompleted])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -217,9 +243,46 @@ export default function App() {
     }
   }
 
-  const handleSetLessonDismissed = (dismissed: boolean) => {
-    setProject((p) => updateLessonProgress(p, activeLesson.id, { dismissed }))
+  const handleStabAttack = (source: string, midi: number) => {
+    // Sound first: the note is attacked before any bookkeeping, so watching
+    // for a chord never costs the keyboard its latency.
+    engine.attackStabNote(source, midi)
+    chordRef.current = observeChordAttack(chordRef.current, source, midi)
+    // Same record back when the chord did not grow, so React bails out and a
+    // held key repeats nothing up the tree.
+    setChordPlay((played) =>
+      chordRef.current.maxNotes > played.maxNotes ? chordRef.current : played,
+    )
   }
+
+  const handleStabRelease = (source: string) => {
+    engine.releaseStabNote(source)
+    chordRef.current = observeChordRelease(chordRef.current, source)
+  }
+
+  const handleDismissLesson = () => {
+    setProject((p) => {
+      const next = updateLessonProgress(p, activeLesson.id, { dismissed: true })
+      if (!next.lessonProgress[activeLesson.id]?.completed) return next
+      // Putting away a finished lesson moves the deck on to the next unearned
+      // one — the celebration is never cut short, and the path keeps its
+      // momentum. With the arc finished there is nowhere to move on to.
+      const following = nextUnfinishedLessonId(ARC, next.lessonProgress, activeLesson.id)
+      return following ? enterLesson(next, following) : next
+    })
+  }
+
+  const handleSelectLesson = (lessonId: string) => {
+    setProject((p) => enterLesson(p, lessonId))
+  }
+
+  const handleResumeLesson = () => {
+    setProject((p) => enterLesson(p, activeLesson.id))
+  }
+
+  // Stable because the modal owns a window listener while mounted; changing
+  // this callback would tear that listener down and refocus its button.
+  const handleCloseFinale = useCallback(() => setFinaleVisible(false), [])
 
   return (
     <>
@@ -236,7 +299,12 @@ export default function App() {
         <div className="room-beam room-beam-b" />
       </div>
 
-      <main className="deck" ref={deckRef}>
+      <main
+        className="deck"
+        ref={deckRef}
+        inert={finaleVisible}
+        aria-hidden={finaleVisible || undefined}
+      >
       <header className="deck-header">
         <h1 className="brand">
           Elevated <em>BPM</em>
@@ -244,20 +312,25 @@ export default function App() {
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
       </header>
 
+      <LessonArc
+        entries={arcPath}
+        completed={arcDone.completed}
+        total={arcDone.total}
+        onSelect={handleSelectLesson}
+      />
+
       {lessonDismissed ? (
-        <button
-          type="button"
-          className="lesson-resume"
-          onClick={() => handleSetLessonDismissed(false)}
-        >
+        <button type="button" className="lesson-resume" onClick={handleResumeLesson}>
           <span className="lesson-resume-led" aria-hidden="true" />
           Resume lesson · {activeLesson.title}
         </button>
       ) : (
         <LessonPanel
           lesson={activeLesson}
+          position={here.position}
+          total={arcDone.total}
           completed={lessonCompleted}
-          onDismiss={() => handleSetLessonDismissed(true)}
+          onDismiss={handleDismissLesson}
         />
       )}
 
@@ -265,6 +338,7 @@ export default function App() {
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}
+          spotlitTempo={spotlitTarget('transport:tempo')}
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
         />
@@ -293,6 +367,7 @@ export default function App() {
       <BassPanel
         lane={bassLane}
         settings={bassSettings}
+        spotlitLane={spotlitNoteLanes.includes('bass')}
         spotlitParams={spotlitParams}
         onToggleStep={(stepIndex) => handleToggleNoteStep('bass', stepIndex)}
         onTranspose={(stepIndex, semitones) =>
@@ -304,8 +379,10 @@ export default function App() {
 
       <StabKeyboard
         lane={stabLane}
-        onAttack={engine.attackStabNote}
-        onRelease={engine.releaseStabNote}
+        spotlitLane={spotlitNoteLanes.includes('stab')}
+        spotlitKeys={spotlitTarget('keyboard:stab')}
+        onAttack={handleStabAttack}
+        onRelease={handleStabRelease}
         getSoundingNotes={engine.getSoundingStabNotes}
         onToggleStep={(stepIndex) => handleToggleNoteStep('stab', stepIndex)}
         onTranspose={(stepIndex, semitones) =>
@@ -314,6 +391,7 @@ export default function App() {
         onResize={(stepIndex, steps) => handleResizeNote('stab', stepIndex, steps)}
       />
     </main>
+      {finaleVisible && <FinaleMoment onClose={handleCloseFinale} />}
     </>
   )
 }

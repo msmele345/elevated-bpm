@@ -1,0 +1,7 @@
+{
+  "id": "stab-hits",
+  "title": "Stab on the Offbeat",
+  "intro": "A stab is a chord played short and hard — the hook that sits on top of a techno loop. Program two of them into the Stab row, on steps 7 and 15, so they land late in each half of the bar and answer the clap. Use the ↑ and ↓ arrows to move them to pitches that suit your bassline.",
+  "spotlight": ["noteLane:stab"],
+  "goal": [{ "type": "notesActive", "lane": "stab", "steps": [6, 14] }]
+}

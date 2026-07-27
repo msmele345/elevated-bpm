@@ -1,0 +1,7 @@
+{
+  "id": "bass-movement",
+  "title": "Make the Line Move",
+  "intro": "One repeated note is a drone, not a bassline. Click a bass note to focus it, then use the ↑ and ↓ arrow keys to move it in semitones (hold shift for whole octaves). Reshape your line so it uses at least three different pitches — try leaving the first note low as an anchor and lifting the ones after it.",
+  "spotlight": ["noteLane:bass"],
+  "goal": [{ "type": "pitchesVaried", "lane": "bass", "min": 3 }]
+}

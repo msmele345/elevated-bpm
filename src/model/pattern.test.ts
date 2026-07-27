@@ -56,13 +56,39 @@ describe('createInitialPattern', () => {
 })
 
 describe('createDemoPattern', () => {
-  it('ships a techno groove: backbeat clap, offbeat hats, syncopated perc', () => {
+  it('ships a techno groove: half-time clap, offbeat hats, syncopated perc', () => {
     const demo = createDemoPattern()
 
-    expect(onSteps(demo, 'snare')).toEqual([4, 12])
+    expect(onSteps(demo, 'snare')).toEqual([12])
     expect(onSteps(demo, 'closedHat')).toEqual([2, 6, 10])
     expect(onSteps(demo, 'openHat')).toEqual([14])
-    expect(onSteps(demo, 'perc')).toEqual([5, 11])
+    expect(onSteps(demo, 'perc')).toEqual([3, 5, 11, 13])
+  })
+
+  it('carries its syncopation in the perc, entirely off the beat', () => {
+    // The perc is where the demo is allowed to be busy (no lesson asks for it),
+    // so it carries the groove the arc's own lanes cannot: every hit lands on a
+    // 16th between the beats, and two of them push.
+    const demo = createDemoPattern()
+    const perc = demo.lanes.find((lane) => lane.id === 'perc')!
+
+    expect(onSteps(demo, 'perc').every((step) => step % 2 === 1)).toBe(true)
+    expect(perc.steps.map((step, i) => (step.accent ? i : -1)).filter((i) => i >= 0)).toEqual([
+      5, 11,
+    ])
+  })
+
+  it('leaves every step the arc teaches unplayed, so no lesson opens already won', () => {
+    // Same rule the kick lane has followed since Phase 4: the demo may groove,
+    // but it must never do a lesson's work for the user. The curriculum's own
+    // guard against this is in lessons/lessons.test.ts — this one keeps the
+    // pattern honest at the source.
+    const demo = createDemoPattern()
+
+    expect(onSteps(demo, 'kick')).toEqual([])
+    expect(onSteps(demo, 'snare')).not.toEqual([4, 12])
+    expect(onSteps(demo, 'closedHat')).not.toEqual([2, 6, 10, 14])
+    expect(demo.noteLanes.every((lane) => lane.steps.every((step) => !step.on))).toBe(true)
   })
 })
 

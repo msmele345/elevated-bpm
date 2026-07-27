@@ -1,0 +1,7 @@
+{
+  "id": "open-hat-lift",
+  "title": "Open Hat Lift",
+  "intro": "Notice your open hat went quiet? On a 909 the closed hat and the open hat share one voice: whenever the closed hat fires, it cuts the open hat dead. Yours is sitting on step 15, right under the closed hat you just added. Move it to step 16 — clear it, then place it on the last step — and it rings out over the turnaround, pulling the loop into the next bar.",
+  "spotlight": ["lane:openHat"],
+  "goal": [{ "type": "stepsActive", "lane": "openHat", "steps": [15] }]
+}

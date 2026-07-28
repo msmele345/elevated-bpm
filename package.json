@@ -15,10 +15,12 @@
     "tone": "^15.1.22"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.6.0",
     "fake-indexeddb": "^6.2.5",
+    "jsdom": "^29.1.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.0",
     "vitest": "^4.1.10"

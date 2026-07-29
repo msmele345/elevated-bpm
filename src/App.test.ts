@@ -126,6 +126,50 @@ describe('App sharing workflow', () => {
     await new Promise((resolve) => setTimeout(resolve, 450))
   })
 
+  it('never credits the recipient with lesson work the incoming beat arrived with', async () => {
+    const recipient = createInitialProjectState()
+    let sender = createInitialProjectState()
+    for (const step of [0, 4, 8, 12]) sender = cycleActivePatternStep(sender, 'kick', step)
+    await saveProjectState(recipient)
+    const shareUrl = await createShareUrl(sender, window.location.href)
+    window.history.replaceState(null, '', new URL(shareUrl).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    // The four-on-the-floor is the sender's work, so the arc must not light up
+    // for it — during the preview or after the recipient keeps the beat.
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep this beat' }))
+    await waitFor(() => expect(screen.queryByText('Shared beat preview')).toBeNull())
+    await new Promise((resolve) => setTimeout(resolve, 450))
+
+    expect((await loadProjectState())!.lessonProgress).toEqual({})
+  })
+
+  it('still earns a lesson the recipient builds on top of a kept beat', async () => {
+    const recipient = createInitialProjectState()
+    let sender = createInitialProjectState()
+    for (const step of [0, 4, 8]) sender = cycleActivePatternStep(sender, 'kick', step)
+    await saveProjectState(recipient)
+    const shareUrl = await createShareUrl(sender, window.location.href)
+    window.history.replaceState(null, '', new URL(shareUrl).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+
+    // The missing downbeat is the recipient's own work: placing it completes
+    // the lesson exactly as it would on their own beat.
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 13' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 450))
+  })
+
   it('shares the hydrated project through the visible share action', async () => {
     const source = setTransportBpm(
       cycleActivePatternStep(createInitialProjectState(), 'snare', 12),

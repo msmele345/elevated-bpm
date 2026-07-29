@@ -14,6 +14,7 @@ import {
   arcCompletion,
   arcEntries,
   detectLessonCompletion,
+  lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './model/arc'
 import { bassParamSpec, type BassParamId } from './model/bass'
@@ -87,6 +88,11 @@ export default function App() {
   // key press re-renders the deck once a chord grows, and never otherwise.
   const chordRef = useRef(NO_CHORD_PLAY)
   const [chordPlay, setChordPlay] = useState(NO_CHORD_PLAY)
+  // Goals describe what the user did, so work that arrives already done in an
+  // incoming shared beat is inherited, not earned: these lessons are held back
+  // from completion until their goal stops being met and is built again. A
+  // session observation like the others — never persisted.
+  const inheritedLessonsRef = useRef<Set<string>>(new Set())
   // The playhead sweeps every grid on the deck — drums, bass, and stabs — so
   // its root is the deck, not one panel.
   const deckRef = useRef<HTMLElement>(null)
@@ -138,6 +144,12 @@ export default function App() {
             : opening
         if (incoming.status === 'ready') {
           setSharePreview({ recipientProject: opening })
+          inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
+            pattern: activePattern(next),
+            motion: NO_PARAM_MOTION,
+            bpm: next.transport.bpm,
+            chord: NO_CHORD_PLAY,
+          })
         } else if (incoming.status === 'error') {
           setIncomingShareError(incoming.message)
         }
@@ -191,7 +203,14 @@ export default function App() {
       bpm,
       chord: chordPlay,
     })
-    if (!completion.justCompleted) return
+    if (!completion.justCompleted) {
+      // The goal is not met right now, so whatever the shared beat brought
+      // with it is gone: from here the lesson is the user's to earn.
+      inheritedLessonsRef.current.delete(activeLesson.id)
+      return
+    }
+    // Met, but only because the beat arrived that way — hold the credit.
+    if (inheritedLessonsRef.current.has(activeLesson.id)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
     if (completion.showFinale) setFinaleVisible(true)
   }, [pattern, paramMotion, bpm, chordPlay, activeLesson, lessonCompleted])
@@ -364,6 +383,8 @@ export default function App() {
     setIsPlaying(false)
     engine.setBpm(sharePreview.recipientProject.transport.bpm)
     setProject(sharePreview.recipientProject)
+    // The shared beat is off the deck, so nothing is inherited from it any more.
+    inheritedLessonsRef.current = new Set()
     setSharePreview(null)
     removeShareFromAddress()
   }

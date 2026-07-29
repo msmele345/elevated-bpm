@@ -307,6 +307,177 @@ body::before {
   color: var(--ink-dim);
 }
 
+/* ── Share link / incoming beat strip ─────────────────────────────── */
+.share-controls {
+  margin: -4px 6px 14px;
+}
+
+.share-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.share-action-label {
+  font-family: var(--font-display);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--ink-dim);
+}
+
+.share-button,
+.share-keep,
+.share-restore {
+  border: 1px solid #050607;
+  border-radius: 5px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 2px 0 #050607;
+}
+
+.share-button {
+  padding: 7px 12px;
+  background: linear-gradient(180deg, #3b4045, #24272b);
+  color: var(--ink);
+  text-transform: uppercase;
+  font-size: 0.64rem;
+}
+
+.share-button:hover:not(:disabled),
+.share-restore:hover {
+  filter: brightness(1.16);
+}
+
+.share-button:active:not(:disabled),
+.share-keep:active,
+.share-restore:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.share-button:disabled {
+  cursor: wait;
+  color: var(--ink-dim);
+}
+
+.share-button:focus-visible,
+.share-keep:focus-visible,
+.share-restore:focus-visible,
+.share-result input:focus-visible {
+  outline: 2px solid var(--quad-2);
+  outline-offset: 2px;
+}
+
+.share-notice,
+.share-result {
+  margin-top: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 4px solid var(--quad-1);
+  border-radius: 7px;
+  background:
+    linear-gradient(110deg, rgba(255, 157, 46, 0.09), transparent 46%),
+    #15171a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.share-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 14px;
+}
+
+.share-notice strong {
+  display: block;
+  margin-bottom: 3px;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.share-notice p,
+.share-result {
+  color: var(--silkscreen);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.share-notice.is-error {
+  border-left-color: var(--quad-0);
+  background:
+    linear-gradient(110deg, rgba(255, 77, 51, 0.11), transparent 48%),
+    #15171a;
+}
+
+.share-notice-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.share-keep,
+.share-restore {
+  padding: 7px 10px;
+  font-size: 0.64rem;
+  color: #101113;
+}
+
+.share-keep {
+  background: linear-gradient(180deg, #ffd96a, var(--quad-1));
+}
+
+.share-restore {
+  background: linear-gradient(180deg, #d5d1c7, #8e8a82);
+}
+
+.share-result {
+  padding: 10px 12px;
+}
+
+.share-result label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.share-result input {
+  width: 100%;
+  border: 1px solid #050607;
+  border-radius: 4px;
+  background: #090a0c;
+  color: var(--ink);
+  padding: 7px 9px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  text-transform: none;
+}
+
+@media (max-width: 640px) {
+  .share-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .share-notice-actions {
+    flex-wrap: wrap;
+  }
+
+  .share-keep,
+  .share-restore {
+    flex: 1 1 auto;
+  }
+}
+
 /* ── Panel ─────────────────────────────────────────────────────────── */
 .panel {
   background: linear-gradient(180deg, var(--panel-edge) 0%, var(--panel) 8%, #141619 100%);

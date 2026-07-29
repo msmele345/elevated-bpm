@@ -3,6 +3,7 @@ import { BassPanel } from './components/BassPanel'
 import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
+import { ShareControls } from './components/ShareControls'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
@@ -13,6 +14,7 @@ import {
   arcCompletion,
   arcEntries,
   detectLessonCompletion,
+  lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './model/arc'
 import { bassParamSpec, type BassParamId } from './model/bass'
@@ -39,6 +41,12 @@ import {
   transposeActivePatternNote,
   updateLessonProgress,
 } from './model/projectState'
+import {
+  createShareUrl,
+  projectWithSharedBeat,
+  readSharedBeat,
+  SHARE_QUERY_PARAM,
+} from './model/share'
 import type { DrumLaneId, NoteLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { createAutosaver } from './storage/autosave'
@@ -55,6 +63,17 @@ export default function App() {
   const [project, setProject] = useState(createInitialProjectState)
   const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
+  // An incoming beat runs as a disposable in-memory preview. Holding the
+  // recipient's opening document here lets "Back to my project" restore it
+  // exactly; autosave stays suspended until the preview is explicitly kept.
+  const [sharePreview, setSharePreview] = useState<{
+    recipientProject: ReturnType<typeof createInitialProjectState>
+  } | null>(null)
+  const [incomingShareError, setIncomingShareError] = useState<string | null>(null)
+  const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
+  const [isSharing, setIsSharing] = useState(false)
+  const [sharedUrl, setSharedUrl] = useState<string | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
   // A session-only graduation overlay: it appears on the transition into an
   // earned capstone, never just because an already-complete project reloaded.
   const [finaleVisible, setFinaleVisible] = useState(false)
@@ -69,6 +88,11 @@ export default function App() {
   // key press re-renders the deck once a chord grows, and never otherwise.
   const chordRef = useRef(NO_CHORD_PLAY)
   const [chordPlay, setChordPlay] = useState(NO_CHORD_PLAY)
+  // Goals describe what the user did, so work that arrives already done in an
+  // incoming shared beat is inherited, not earned: these lessons are held back
+  // from completion until their goal stops being met and is built again. A
+  // session observation like the others — never persisted.
+  const inheritedLessonsRef = useRef<Set<string>>(new Set())
   // The playhead sweeps every grid on the deck — drums, bass, and stabs — so
   // its root is the deck, not one panel.
   const deckRef = useRef<HTMLElement>(null)
@@ -110,13 +134,30 @@ export default function App() {
   // the document that won.
   useEffect(() => {
     let cancelled = false
-    void loadProjectState().then((saved) => {
-      if (cancelled) return
-      const opening = openingProjectState(saved)
-      setProject(opening)
-      engine.setBpm(opening.transport.bpm)
-      setHydrated(true)
-    })
+    void Promise.all([loadProjectState(), readSharedBeat(window.location.href)]).then(
+      ([saved, incoming]) => {
+        if (cancelled) return
+        const opening = openingProjectState(saved)
+        const next =
+          incoming.status === 'ready'
+            ? projectWithSharedBeat(opening, incoming.project)
+            : opening
+        if (incoming.status === 'ready') {
+          setSharePreview({ recipientProject: opening })
+          inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
+            pattern: activePattern(next),
+            motion: NO_PARAM_MOTION,
+            bpm: next.transport.bpm,
+            chord: NO_CHORD_PLAY,
+          })
+        } else if (incoming.status === 'error') {
+          setIncomingShareError(incoming.message)
+        }
+        setProject(next)
+        engine.setBpm(next.transport.bpm)
+        setHydrated(true)
+      },
+    )
     return () => {
       cancelled = true
     }
@@ -125,9 +166,16 @@ export default function App() {
   // Debounced autosave of every document change after hydration — never on
   // the audio clock, and coalesced so playback stays glitch-free.
   useEffect(() => {
-    if (!hydrated) return
+    if (!hydrated || sharePreview !== null) return
     autosaverRef.current.schedule(project)
-  }, [project, hydrated])
+  }, [project, hydrated, sharePreview])
+
+  // Once the deck changes, an older generated link no longer describes what
+  // is on it. Clear the stale result; the user can press Share again.
+  useEffect(() => {
+    setSharedUrl(null)
+    setShareCopied(false)
+  }, [project])
 
   // A refresh or tab close inside the debounce window must not lose the last
   // edit: flush the pending save as the page goes away.
@@ -155,7 +203,14 @@ export default function App() {
       bpm,
       chord: chordPlay,
     })
-    if (!completion.justCompleted) return
+    if (!completion.justCompleted) {
+      // The goal is not met right now, so whatever the shared beat brought
+      // with it is gone: from here the lesson is the user's to earn.
+      inheritedLessonsRef.current.delete(activeLesson.id)
+      return
+    }
+    // Met, but only because the beat arrived that way — hold the credit.
+    if (inheritedLessonsRef.current.has(activeLesson.id)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
     if (completion.showFinale) setFinaleVisible(true)
   }, [pattern, paramMotion, bpm, chordPlay, activeLesson, lessonCompleted])
@@ -280,6 +335,65 @@ export default function App() {
     setProject((p) => enterLesson(p, activeLesson.id))
   }
 
+  const removeShareFromAddress = () => {
+    const url = new URL(window.location.href)
+    url.searchParams.delete(SHARE_QUERY_PARAM)
+    window.history.replaceState(null, '', url)
+  }
+
+  const handleShare = async () => {
+    setIsSharing(true)
+    setOutgoingShareError(null)
+    try {
+      const url = await createShareUrl(project, window.location.href)
+      setSharedUrl(url)
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(url)
+          setShareCopied(true)
+        } catch {
+          // Clipboard permission is optional: the rendered URL remains
+          // selectable so the share action still succeeds.
+        }
+      }
+    } catch {
+      setOutgoingShareError(
+        'A share link could not be created in this browser. Your project is still safe.',
+      )
+    } finally {
+      setIsSharing(false)
+    }
+  }
+
+  const handleKeepSharedBeat = async () => {
+    try {
+      await saveProjectState(project)
+      setSharePreview(null)
+      removeShareFromAddress()
+    } catch {
+      setOutgoingShareError(
+        'This beat could not be saved yet. The preview is still open and your project is safe.',
+      )
+    }
+  }
+
+  const handleRestoreOwnProject = () => {
+    if (!sharePreview) return
+    engine.stop()
+    setIsPlaying(false)
+    engine.setBpm(sharePreview.recipientProject.transport.bpm)
+    setProject(sharePreview.recipientProject)
+    // The shared beat is off the deck, so nothing is inherited from it any more.
+    inheritedLessonsRef.current = new Set()
+    setSharePreview(null)
+    removeShareFromAddress()
+  }
+
+  const handleDismissIncomingError = () => {
+    setIncomingShareError(null)
+    removeShareFromAddress()
+  }
+
   // Stable because the modal owns a window listener while mounted; changing
   // this callback would tear that listener down and refocus its button.
   const handleCloseFinale = useCallback(() => setFinaleVisible(false), [])
@@ -311,6 +425,25 @@ export default function App() {
         </h1>
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
       </header>
+
+      <ShareControls
+        previewing={sharePreview !== null}
+        errorMessage={incomingShareError ?? outgoingShareError}
+        shareReady={hydrated}
+        isSharing={isSharing}
+        sharedUrl={sharedUrl}
+        copied={shareCopied}
+        onShare={handleShare}
+        onKeep={handleKeepSharedBeat}
+        onRestore={handleRestoreOwnProject}
+        onDismissError={() => {
+          if (incomingShareError) {
+            handleDismissIncomingError()
+          } else {
+            setOutgoingShareError(null)
+          }
+        }}
+      />
 
       <LessonArc
         entries={arcPath}

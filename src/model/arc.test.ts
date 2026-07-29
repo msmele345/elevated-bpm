@@ -5,6 +5,7 @@ import {
   arcEntries,
   detectLessonCompletion,
   isFinalArcLesson,
+  lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './arc'
 import { parseLesson, type Lesson } from './lesson'
@@ -105,6 +106,27 @@ describe('isFinalArcLesson', () => {
     expect(isFinalArcLesson(ARC, 'three')).toBe(true)
     expect(isFinalArcLesson(ARC, 'two')).toBe(false)
     expect(isFinalArcLesson([], 'three')).toBe(false)
+  })
+})
+
+describe('lessonsAlreadyMet', () => {
+  const otherGoal = parseLesson({
+    id: 'four',
+    title: 'four',
+    intro: 'Do four.',
+    spotlight: [],
+    goal: [{ type: 'stepsActive', lane: 'snare', steps: [4] }],
+  })
+  const mixedArc = [...ARC, otherGoal]
+
+  it('names the lessons a beat satisfies the moment it lands on the deck', () => {
+    const arrived = { pattern: toggleStep(createInitialPattern(), 'kick', 0) }
+
+    expect(lessonsAlreadyMet(mixedArc, arrived)).toEqual(new Set(['one', 'two', 'three']))
+  })
+
+  it('names nothing for a beat that carries none of the arc work', () => {
+    expect(lessonsAlreadyMet(mixedArc, { pattern: createInitialPattern() })).toEqual(new Set())
   })
 })
 

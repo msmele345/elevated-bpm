@@ -93,6 +93,21 @@ export function isFinalArcLesson(arc: Lesson[], lessonId: string): boolean {
   return arc.length > 0 && arc[arc.length - 1].id === lessonId
 }
 
+/**
+ * The lessons a beat already satisfies the moment it lands on the deck.
+ *
+ * A goal is a claim about work the user did, so a beat that arrives already
+ * containing that work — an incoming shared beat — must not earn credit for
+ * it. The caller holds this set as a session observation and stops inheriting
+ * a lesson as soon as its goal stops being met, so a recipient who takes the
+ * beat apart and builds it back up earns it honestly.
+ */
+export function lessonsAlreadyMet(arc: Lesson[], context: GoalContext): Set<string> {
+  return new Set(
+    arc.filter((lesson) => isGoalMet(lesson, context)).map((lesson) => lesson.id),
+  )
+}
+
 export interface LessonCompletionDetection {
   justCompleted: boolean
   showFinale: boolean

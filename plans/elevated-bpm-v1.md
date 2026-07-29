@@ -193,10 +193,10 @@ Encode the active pattern (and the instrument settings it needs to sound right) 
 
 ### Acceptance criteria
 
-- [ ] A "share" action produces a URL that fully reproduces the pattern and its instrument settings on another machine
-- [ ] The payload is compressed and stays within practical URL length limits
-- [ ] Opening a shared link plays the shared beat and offers to keep it, without silently destroying the recipient's existing project
-- [ ] Malformed or version-mismatched share payloads fail gracefully with a clear message
+- [x] A "share" action produces a URL that fully reproduces the pattern and its instrument settings on another machine — `createShareUrl` (`src/model/share.ts`) serializes a current-version `ProjectState` containing the active pattern, BPM, bass patch, and mixer state into `?p=…`; curriculum progress and preferences are deliberately blank recipient-only fields. `ShareControls` exposes the action, copies through the Clipboard API when permitted, and leaves a selectable URL fallback when it is not. The round-trip is covered at the model seam and through the mounted app workflow (`share.test.ts`, `App.test.ts`)
+- [x] The payload is compressed and stays within practical URL length limits — the ProjectState JSON is gzip-compressed with the browser Compression Streams API and base64url-encoded; a densely programmed 16-step project across every drum and note lane is guarded beneath the conservative 2,000-character limit in `share.test.ts`
+- [x] Opening a shared link plays the shared beat and offers to keep it, without silently destroying the recipient's existing project — valid links hydrate an in-memory `projectWithSharedBeat` preview that drives the real deck/audio state while autosave is suspended. The preview strip offers explicit **Keep this beat** and **Back to my project** actions; only Keep writes the shared state to IndexedDB, while Back restores the exact recipient document. Mounted jsdom tests prove the preview survives beyond the autosave debounce without overwriting storage, restore returns the recipient pattern/BPM, and Keep persists only after the click (`App.test.ts`)
+- [x] Malformed or version-mismatched share payloads fail gracefully with a clear message — `readSharedBeat` rejects invalid URLs, base64, gzip, JSON, incomplete ProjectState shapes, and older/newer schema versions before they reach the deck. The app keeps the recipient project open and renders a dismissible `role="alert"` explaining either a damaged link or an incompatible version; model and mounted-app tests cover corrupt, structurally invalid, older, newer, and visible-error paths
 
 ---
 

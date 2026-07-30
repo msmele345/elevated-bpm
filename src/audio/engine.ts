@@ -2,6 +2,7 @@ import * as Tone from 'tone'
 import { DEFAULT_BASS_SETTINGS, type BassSettings } from '../model/bass'
 import type { Mixer } from '../model/mixer'
 import { midiToFrequency, noteEventsAtStep } from '../model/note'
+import { SCOPE_SPEC } from '../model/scope'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
@@ -57,6 +58,13 @@ let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
  * independently instead of stealing the bass synth's monophonic voice.
  */
 let stab: StabVoices | null = null
+
+/**
+ * Master spectrum tap for the scope. An analyser only pulls samples when its
+ * value is read — it sits off the destination as a dead-end branch, never in
+ * the signal path, so drawing (or not drawing) it cannot affect the audio.
+ */
+let analyser: Tone.Analyser | null = null
 
 // Pointer contacts, computer keys, and accessible button activation all feed
 // the same source-aware hold boundary.
@@ -158,6 +166,11 @@ function ensureVoices(): void {
   ) as Record<DrumLaneId, Voice>
   bass = createBassVoice()
   stab = createStabVoices(createStabSynth)
+  analyser = new Tone.Analyser('fft', SCOPE_SPEC.binCount)
+  // Snappier than the analyser's 0.8 default: the scope does its own fall
+  // decay, so internal smoothing only has to keep single frames from jittering.
+  analyser.smoothing = 0.5
+  Tone.getDestination().connect(analyser)
   setBassSettings(bassSettings)
   samplesLoaded = Tone.loaded()
   Tone.getTransport().bpm.value = bpm
@@ -216,6 +229,15 @@ export function releaseStabNote(source: string): void {
 /** Current live + sequenced stab pitches, read by the keyboard's rAF loop. */
 export function getSoundingStabNotes(): readonly number[] {
   return stabSoundingNotes.atTime(Tone.immediate())
+}
+
+/**
+ * The latest FFT frame off the master output (dB per bin), or null before the
+ * first user gesture creates the audio graph. Read by the scope's rAF loop.
+ */
+export function getSpectrum(): Float32Array | null {
+  if (!analyser) return null
+  return analyser.getValue() as Float32Array
 }
 
 export async function play(): Promise<void> {

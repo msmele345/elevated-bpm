@@ -4,6 +4,7 @@ import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
 import { ShareControls } from './components/ShareControls'
+import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportBar } from './components/TransportBar'
@@ -467,7 +468,13 @@ export default function App() {
         />
       )}
 
-      <section className="panel" aria-label="Drum machine">
+      {/* The master strip: deck-global transport plus the main-out scope —
+          the mixer surface AC3's macro knobs will later join. */}
+      <section className="panel master-panel" aria-label="Master">
+        <div className="panel-title">
+          <span className="panel-title-name">Master</span>
+          <span className="panel-title-model">MAIN OUT · MX-01</span>
+        </div>
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}
@@ -475,6 +482,14 @@ export default function App() {
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
         />
+        <SpectrumScope />
+      </section>
+
+      <section className="panel" aria-label="Drum machine">
+        <div className="panel-title">
+          <span className="panel-title-name">Drum Machine</span>
+          <span className="panel-title-model">RHYTHM SECTION · DR-909</span>
+        </div>
         {pattern.lanes.map((lane) => {
           const mix = project.mixer[lane.id]
           // With any solo engaged, a lane that is not soloed is silenced —

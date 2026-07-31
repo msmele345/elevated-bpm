@@ -61,5 +61,6 @@ export function formatParam(spec: ParamSpec, value: number): string {
   if (spec.unit === 'Hz' && value >= 1000) return `${(value / 1000).toFixed(2)} kHz`
   if (spec.unit === 'Hz') return `${Math.round(value)} Hz`
   if (spec.unit === 's') return `${Math.round(value * 1000)} ms`
+  if (spec.unit === '%') return `${Math.round(value)} %`
   return `${value.toFixed(1)} ${spec.unit}`
 }

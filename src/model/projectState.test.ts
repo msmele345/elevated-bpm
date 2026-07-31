@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BASS_PARAMS, DEFAULT_BASS_SETTINGS } from './bass'
+import { DEFAULT_MASTER_SETTINGS, MASTER_PARAMS } from './master'
 import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
 import { createDemoPattern, createInitialPattern } from './pattern'
 import { DEFAULT_BPM } from './transport'
@@ -11,6 +12,7 @@ import {
   migrateProjectState,
   resizeActivePatternNote,
   setBassParamValue,
+  setMasterParamValue,
   setTransportBpm,
   cycleActivePatternStep,
   enterLesson,
@@ -30,7 +32,10 @@ describe('createInitialProjectState', () => {
     expect(state.activePatternId).toBe(state.patterns[0].id)
     expect(state.transport.bpm).toBe(DEFAULT_BPM)
     expect(state.lessonProgress).toEqual({})
-    expect(state.instrumentSettings).toEqual({ bass: DEFAULT_BASS_SETTINGS })
+    expect(state.instrumentSettings).toEqual({
+      bass: DEFAULT_BASS_SETTINGS,
+      master: DEFAULT_MASTER_SETTINGS,
+    })
     expect(state.prefs).toEqual({})
     // No lesson picked yet: the document follows the arc's own path until the
     // user steps off it.
@@ -177,6 +182,24 @@ describe('setBassParamValue', () => {
   })
 })
 
+describe('setMasterParamValue', () => {
+  it('stores a macro value in instrumentSettings, clamped, without touching the bass patch', () => {
+    const state = createInitialProjectState()
+    const closed = setMasterParamValue(state, 'filter', 640)
+
+    expect(closed.instrumentSettings.master.filter).toBe(640)
+    expect(closed.instrumentSettings.master.drive).toBe(DEFAULT_MASTER_SETTINGS.drive)
+    expect(closed.instrumentSettings.bass).toBe(state.instrumentSettings.bass)
+    expect(activePattern(closed)).toBe(activePattern(state))
+    expect(state.instrumentSettings.master.filter).toBe(DEFAULT_MASTER_SETTINGS.filter)
+
+    const drive = MASTER_PARAMS.find((param) => param.id === 'drive')!
+    expect(setMasterParamValue(state, 'drive', 1e6).instrumentSettings.master.drive).toBe(
+      drive.max,
+    )
+  })
+})
+
 describe('mixer', () => {
   it('starts with an empty mixer — every lane audible', () => {
     expect(createInitialProjectState().mixer).toEqual({})
@@ -246,12 +269,27 @@ describe('migrateProjectState', () => {
       patterns: [pattern],
       activePatternId: pattern.id,
       transport: { bpm: 125 },
-      instrumentSettings: { bass: DEFAULT_BASS_SETTINGS },
+      instrumentSettings: { bass: DEFAULT_BASS_SETTINGS, master: DEFAULT_MASTER_SETTINGS },
       lessonProgress: {},
       prefs: {},
       mixer: {},
       activeLessonId: null,
     })
+  })
+
+  it('gives a v6 document (no master macros) the neutral master patch, keeping its bass patch', () => {
+    const v6 = {
+      ...setBassParamValue(createInitialProjectState(), 'cutoff', 2400),
+      version: 6,
+    } as Record<string, unknown>
+    const settings = v6.instrumentSettings as Record<string, unknown>
+    delete settings.master
+
+    const migrated = migrateProjectState(JSON.parse(JSON.stringify(v6)))!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.instrumentSettings.master).toEqual(DEFAULT_MASTER_SETTINGS)
+    expect(migrated.instrumentSettings.bass.cutoff).toBe(2400)
   })
 
   it('puts a v5 document back on the arc path, keeping its earned lessons', () => {

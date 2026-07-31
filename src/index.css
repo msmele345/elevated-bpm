@@ -684,6 +684,51 @@ body::before {
   text-transform: uppercase;
 }
 
+/* ── Master strip: main out — scope beside the two macro knobs ─────── */
+/* The mixer surface of the strip: the display window grows, the macros sit
+   beside it like a mixer's master section. The knobs reuse the shared knob
+   materials; only the row's separator is dropped, the .master-out row's own
+   top border already draws it. */
+.master-out {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Explicit height: the canvas inside fills 100% and writes its measured size
+   back into its own intrinsic dimensions, so an auto height would feed back. */
+.master-out .scope {
+  flex: 1;
+  min-width: 0;
+  height: clamp(96px, 10vw, 124px);
+}
+
+.master-out .knob-row.master-knobs {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
+  flex: none;
+}
+
+@media (max-width: 640px) {
+  .master-out {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .master-out .scope {
+    height: clamp(58px, 9vw, 78px);
+  }
+
+  .master-out .knob-row.master-knobs {
+    justify-content: center;
+    gap: 34px;
+  }
+}
+
 /* ── Master strip: the main-out spectrum scope ─────────────────────── */
 /* A recessed display window under the transport: 16 log-spaced bars — one
    per step, in the step grid's quad colors — drawn as LED segment ladders on

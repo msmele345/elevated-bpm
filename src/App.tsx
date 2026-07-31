@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BassPanel } from './components/BassPanel'
+import { Knob } from './components/Knob'
 import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
@@ -19,6 +20,7 @@ import {
   nextUnfinishedLessonId,
 } from './model/arc'
 import { bassParamSpec, type BassParamId } from './model/bass'
+import { MASTER_PARAMS, masterParamSpec, type MasterParamId } from './model/master'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
   spotlightsTarget,
@@ -35,6 +37,7 @@ import {
   openingProjectState,
   resizeActivePatternNote,
   setBassParamValue,
+  setMasterParamValue,
   setTransportBpm,
   toggleActivePatternNoteStep,
   toggleLaneMute,
@@ -103,6 +106,7 @@ export default function App() {
   const bassLane = pattern.noteLanes.find((lane) => lane.id === 'bass')!
   const stabLane = pattern.noteLanes.find((lane) => lane.id === 'stab')!
   const bassSettings = project.instrumentSettings.bass
+  const masterSettings = project.instrumentSettings.master
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
 
@@ -234,6 +238,12 @@ export default function App() {
     engine.setBassSettings(bassSettings)
   }, [bassSettings])
 
+  // The master macros ride the same path: the bus ramps filter and drive, so
+  // the whole mix sweeps live under a dragged knob.
+  useEffect(() => {
+    engine.setMasterSettings(masterSettings)
+  }, [masterSettings])
+
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
   // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
@@ -282,6 +292,11 @@ export default function App() {
     // Sound design is something you do to a running loop, so only motion over
     // playing audio counts toward a sweep goal.
     setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlaying))
+  }
+
+  const handleMasterParamChange = (id: MasterParamId, value: number) => {
+    setProject((p) => setMasterParamValue(p, id, value))
+    setParamMotion((m) => observeParamMotion(m, masterParamSpec(id), value, isPlaying))
   }
 
   const handleBpmChange = (next: number) => {
@@ -468,8 +483,8 @@ export default function App() {
         />
       )}
 
-      {/* The master strip: deck-global transport plus the main-out scope —
-          the mixer surface AC3's macro knobs will later join. */}
+      {/* The master strip: deck-global transport, the main-out scope, and the
+          two macro knobs — filter and drive — that shape the whole mix. */}
       <section className="panel master-panel" aria-label="Master">
         <div className="panel-title">
           <span className="panel-title-name">Master</span>
@@ -482,7 +497,20 @@ export default function App() {
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
         />
-        <SpectrumScope />
+        <div className="master-out">
+          <SpectrumScope />
+          <div className="knob-row master-knobs">
+            {MASTER_PARAMS.map((param) => (
+              <Knob
+                key={param.id}
+                spec={param}
+                value={masterSettings[param.id]}
+                spotlit={spotlitParams.includes(param.id)}
+                onChange={(value) => handleMasterParamChange(param.id, value)}
+              />
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="panel" aria-label="Drum machine">

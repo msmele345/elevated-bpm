@@ -1,12 +1,13 @@
-import type { KeyboardEvent } from 'react'
+import { memo, type KeyboardEvent } from 'react'
 import { midiToNoteName } from '../model/note'
-import type { NoteLane } from '../model/types'
+import type { NoteLane, NoteLaneId } from '../model/types'
 
 interface NoteRowProps {
   lane: NoteLane
-  onToggleStep: (stepIndex: number) => void
-  onTranspose: (stepIndex: number, semitones: number) => void
-  onResize: (stepIndex: number, steps: number) => void
+  /** Named callbacks, for the same reason as the drum lane's — see StepRow. */
+  onToggleStep: (laneId: NoteLaneId, stepIndex: number) => void
+  onTranspose: (laneId: NoteLaneId, stepIndex: number, semitones: number) => void
+  onResize: (laneId: NoteLaneId, stepIndex: number, steps: number) => void
   spotlit?: boolean
 }
 
@@ -17,8 +18,10 @@ const OCTAVE = 12
  * accent. A click arms the note; the arrow keys shape it in place — up/down
  * transposes (shift for whole octaves), left/right sets how many 16ths it
  * rings — so a line can be programmed entirely from the keyboard.
+ *
+ * Memoized alongside the drum lanes, and for the same reason.
  */
-export function NoteRow({
+function NoteRowLane({
   lane,
   onToggleStep,
   onTranspose,
@@ -30,16 +33,16 @@ export function NoteRow({
     switch (event.key) {
       case 'ArrowUp':
         event.preventDefault()
-        return onTranspose(stepIndex, semitones)
+        return onTranspose(lane.id, stepIndex, semitones)
       case 'ArrowDown':
         event.preventDefault()
-        return onTranspose(stepIndex, -semitones)
+        return onTranspose(lane.id, stepIndex, -semitones)
       case 'ArrowRight':
         event.preventDefault()
-        return onResize(stepIndex, 1)
+        return onResize(lane.id, stepIndex, 1)
       case 'ArrowLeft':
         event.preventDefault()
-        return onResize(stepIndex, -1)
+        return onResize(lane.id, stepIndex, -1)
       default:
         return
     }
@@ -66,7 +69,7 @@ export function NoteRow({
                 ? `${lane.label} step ${i + 1}, ${midiToNoteName(step.pitch)}, ${step.length} step${step.length === 1 ? '' : 's'} long`
                 : `${lane.label} step ${i + 1}, empty`
             }
-            onClick={() => onToggleStep(i)}
+            onClick={() => onToggleStep(lane.id, i)}
             onKeyDown={(event) => handleKeyDown(event, i)}
           >
             <span className="step-led" aria-hidden="true" />
@@ -82,3 +85,5 @@ export function NoteRow({
     </div>
   )
 }
+
+export const NoteRow = memo(NoteRowLane)

@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { Lesson } from '../model/lesson'
 
 interface LessonPanelProps {
@@ -14,7 +15,7 @@ interface LessonPanelProps {
  * lesson's title and intro text, flips into a celebration once the goal is
  * auto-detected, and can be dismissed at any time (the sandbox is never gated).
  */
-export function LessonPanel({ lesson, position, total, completed, onDismiss }: LessonPanelProps) {
+function Lessons({ lesson, position, total, completed, onDismiss }: LessonPanelProps) {
   return (
     <aside className={completed ? 'lesson-panel is-complete' : 'lesson-panel'} aria-label="Lesson">
       <div className="lesson-head">
@@ -48,3 +49,5 @@ export function LessonPanel({ lesson, position, total, completed, onDismiss }: L
     </aside>
   )
 }
+
+export const LessonPanel = memo(Lessons)

@@ -1,7 +1,10 @@
+import { memo } from 'react'
 import { BASS_PARAMS, type BassParamId, type BassSettings } from '../model/bass'
-import type { NoteLane } from '../model/types'
+import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
+import type { NoteLane, NoteLaneId } from '../model/types'
 import { Knob } from './Knob'
 import { NoteRow } from './NoteRow'
+import { PanelTitle } from './PanelTitle'
 
 interface BassPanelProps {
   lane: NoteLane
@@ -10,9 +13,9 @@ interface BassPanelProps {
   spotlitLane?: boolean
   /** Knob ids the active lesson is pointing at. */
   spotlitParams: string[]
-  onToggleStep: (stepIndex: number) => void
-  onTranspose: (stepIndex: number, semitones: number) => void
-  onResize: (stepIndex: number, steps: number) => void
+  onToggleStep: (laneId: NoteLaneId, stepIndex: number) => void
+  onTranspose: (laneId: NoteLaneId, stepIndex: number, semitones: number) => void
+  onResize: (laneId: NoteLaneId, stepIndex: number, steps: number) => void
   onParamChange: (id: BassParamId, value: number) => void
 }
 
@@ -20,8 +23,12 @@ interface BassPanelProps {
  * The bass instrument's surface: the note lane on top, its filter and envelope
  * knobs below — the 303 layout, and the sound-design vocabulary the curriculum
  * teaches (cutoff, resonance, decay).
+ *
+ * The lane and the knobs both name themselves in their callbacks, so this
+ * panel forwards the deck's handlers untouched rather than wrapping them in
+ * fresh closures the memoized children would have to re-render for.
  */
-export function BassPanel({
+function BassInstrument({
   lane,
   settings,
   spotlitLane = false,
@@ -32,11 +39,13 @@ export function BassPanel({
   onParamChange,
 }: BassPanelProps) {
   return (
-    <section className="panel bass-panel" aria-label="Bass synth">
-      <div className="panel-title">
-        <span className="panel-title-name">Bass Line</span>
-        <span className="panel-title-model">MONO SYNTH · BL-303</span>
-      </div>
+    <section
+      className="panel bass-panel"
+      id={DECK_SECTION_IDS.bass}
+      tabIndex={-1}
+      aria-labelledby={sectionTitleId(DECK_SECTION_IDS.bass)}
+    >
+      <PanelTitle sectionId={DECK_SECTION_IDS.bass} name="Bass Line" model="MONO SYNTH · BL-303" />
       <NoteRow
         lane={lane}
         spotlit={spotlitLane}
@@ -51,7 +60,7 @@ export function BassPanel({
             spec={param}
             value={settings[param.id]}
             spotlit={spotlitParams.includes(param.id)}
-            onChange={(value) => onParamChange(param.id, value)}
+            onChange={onParamChange}
           />
         ))}
       </div>
@@ -62,3 +71,5 @@ export function BassPanel({
     </section>
   )
 }
+
+export const BassPanel = memo(BassInstrument)

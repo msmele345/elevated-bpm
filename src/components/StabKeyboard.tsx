@@ -1,14 +1,17 @@
 import {
+  memo,
   useEffect,
   useRef,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
 } from 'react'
+import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { midiToNoteName } from '../model/note'
 import { STAB_KEYS, stabKeyForKeyboardInput, type StabKey } from '../model/stab'
-import type { NoteLane } from '../model/types'
+import type { NoteLane, NoteLaneId } from '../model/types'
 import { NoteRow } from './NoteRow'
+import { PanelTitle } from './PanelTitle'
 
 interface StabKeyboardProps {
   lane: NoteLane
@@ -19,9 +22,9 @@ interface StabKeyboardProps {
   onAttack: (source: string, midi: number) => void
   onRelease: (source: string) => void
   getSoundingNotes: () => readonly number[]
-  onToggleStep: (stepIndex: number) => void
-  onTranspose: (stepIndex: number, semitones: number) => void
-  onResize: (stepIndex: number, steps: number) => void
+  onToggleStep: (laneId: NoteLaneId, stepIndex: number) => void
+  onTranspose: (laneId: NoteLaneId, stepIndex: number, semitones: number) => void
+  onResize: (laneId: NoteLaneId, stepIndex: number, steps: number) => void
 }
 
 const WHITE_KEY_COUNT = STAB_KEYS.filter((key) => key.kind === 'white').length
@@ -42,8 +45,11 @@ const STAB_KEY_LAYOUT = STAB_KEYS.map((key) => ({ key, style: keyStyle(key) }))
  * One live octave of the stab synth. Pointer contacts and physical keyboard
  * codes are tracked separately, so several held keys form a chord and each
  * note releases only when its own input ends.
+ *
+ * Memoized like the lanes: thirteen keys plus a note row is too much to
+ * rebuild because a knob moved somewhere else on the deck.
  */
-export function StabKeyboard({
+function StabInstrument({
   lane,
   spotlitLane = false,
   spotlitKeys = false,
@@ -140,9 +146,17 @@ export function StabKeyboard({
     const source = `pointer:${event.pointerId}`
     if (heldSources.current.has(source)) return
     event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
     heldSources.current.add(source)
+    // Sound first, then reach for capture. Capture is an enhancement — it keeps
+    // a held key alive when the pointer slides off it — and a pointer that
+    // refuses to be captured must still play the note: silence is the one
+    // outcome an instrument cannot have.
     onAttack(source, midi)
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      // No capture: the key releases on pointerup wherever that lands.
+    }
   }
 
   const handlePointerRelease = (event: PointerEvent<HTMLButtonElement>) => {
@@ -161,11 +175,13 @@ export function StabKeyboard({
   }
 
   return (
-    <section className="panel stab-panel" aria-label="Stab synth">
-      <div className="panel-title">
-        <span className="panel-title-name">Chord Stab</span>
-        <span className="panel-title-model">POLY SYNTH · CS-08</span>
-      </div>
+    <section
+      className="panel stab-panel"
+      id={DECK_SECTION_IDS.stabs}
+      tabIndex={-1}
+      aria-labelledby={sectionTitleId(DECK_SECTION_IDS.stabs)}
+    >
+      <PanelTitle sectionId={DECK_SECTION_IDS.stabs} name="Chord Stab" model="POLY SYNTH · CS-08" />
       <NoteRow
         lane={lane}
         spotlit={spotlitLane}
@@ -176,6 +192,10 @@ export function StabKeyboard({
       <div
         ref={keyboardRef}
         className={spotlitKeys ? 'stab-keyboard is-spotlit' : 'stab-keyboard'}
+        // A bare div takes no accessible name: without a role the label below
+        // is dropped and the keys arrive unannounced, one loose button after
+        // another, with nothing saying they are one instrument.
+        role="group"
         aria-label="Live stab keyboard"
       >
         {STAB_KEY_LAYOUT.map(({ key, style }) => (
@@ -206,3 +226,5 @@ export function StabKeyboard({
     </section>
   )
 }
+
+export const StabKeyboard = memo(StabInstrument)

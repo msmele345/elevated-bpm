@@ -5,6 +5,7 @@ import {
   type ProjectState,
 } from './projectState'
 import { BASS_PARAMS } from './bass'
+import { MASTER_PARAMS } from './master'
 import type { Mixer } from './mixer'
 import { MAX_NOTE_LENGTH, MIN_NOTE_LENGTH, NOTE_LANES } from './note'
 import { KIT_LANES } from './pattern'
@@ -157,13 +158,21 @@ function isPattern(value: unknown): value is Pattern {
   )
 }
 
-function isInstrumentSettings(value: unknown): value is InstrumentSettings {
-  if (!isRecord(value) || !isRecord(value.bass)) return false
-  const bass = value.bass
-  return BASS_PARAMS.every((param) => {
-    const setting = bass[param.id]
+function isPatch(
+  value: unknown,
+  params: ReadonlyArray<{ id: string; min: number; max: number }>,
+): boolean {
+  if (!isRecord(value)) return false
+  return params.every((param) => {
+    const setting = value[param.id]
     return isFiniteNumber(setting) && setting >= param.min && setting <= param.max
   })
+}
+
+function isInstrumentSettings(value: unknown): value is InstrumentSettings {
+  return (
+    isRecord(value) && isPatch(value.bass, BASS_PARAMS) && isPatch(value.master, MASTER_PARAMS)
+  )
 }
 
 function isMixer(value: unknown): value is Mixer {

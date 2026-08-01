@@ -1,7 +1,13 @@
 import * as Tone from 'tone'
 import { DEFAULT_BASS_SETTINGS, type BassSettings } from '../model/bass'
+import {
+  DEFAULT_MASTER_SETTINGS,
+  masterBusParams,
+  type MasterSettings,
+} from '../model/master'
 import type { Mixer } from '../model/mixer'
 import { midiToFrequency, noteEventsAtStep } from '../model/note'
+import { SCOPE_SPEC } from '../model/scope'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
 import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
@@ -58,6 +64,27 @@ let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
  */
 let stab: StabVoices | null = null
 
+/**
+ * The master bus: every instrument feeds one shared input, then the whole mix
+ * runs filter → drive → destination. The two macro knobs on the Master strip
+ * shape this chain — a performance filter and saturation across the full mix,
+ * never per instrument.
+ */
+interface MasterBus {
+  input: Tone.Gain
+  filter: Tone.Filter
+  drive: Tone.Distortion
+}
+let master: MasterBus | null = null
+let masterSettings: MasterSettings = DEFAULT_MASTER_SETTINGS
+
+/**
+ * Master spectrum tap for the scope. An analyser only pulls samples when its
+ * value is read — it sits off the destination as a dead-end branch, never in
+ * the signal path, so drawing (or not drawing) it cannot affect the audio.
+ */
+let analyser: Tone.Analyser | null = null
+
 // Pointer contacts, computer keys, and accessible button activation all feed
 // the same source-aware hold boundary.
 const stabNoteHolds = createStabNoteHolds()
@@ -84,6 +111,22 @@ export function setBassSettings(next: BassSettings): void {
   bass.filter.frequency.rampTo(next.cutoff, 0.02)
   bass.filter.Q.rampTo(next.resonance, 0.02)
   bass.synth.envelope.decay = next.decay
+}
+
+/**
+ * Apply the master macros. Cheap and idempotent like the bass patch: cutoff
+ * and wet ramp over a few milliseconds so knob motion is heard as a sweep,
+ * and the distortion curve is only rebuilt when the drive amount changed.
+ */
+export function setMasterSettings(next: MasterSettings): void {
+  masterSettings = next
+  if (!master) return
+  const bus = masterBusParams(next)
+  master.filter.frequency.rampTo(bus.cutoff, 0.02)
+  master.drive.wet.rampTo(bus.wet, 0.02)
+  if (master.drive.distortion !== bus.distortion) {
+    master.drive.distortion = bus.distortion
+  }
 }
 
 export function setBpm(next: number): void {
@@ -121,7 +164,20 @@ export function getTransportTicks(): number {
 const BASS_GAIN = 0.55
 const STAB_GAIN = 0.36
 
-function createBassVoice(): BassVoice {
+/**
+ * Build the shared output chain. The filter's gentler -12 dB rolloff is the
+ * classic DJ-mixer master filter — it dulls the whole mix without gutting it —
+ * where the bass voice's own -24 dB filter is a sound-design tool.
+ */
+function createMasterBus(): MasterBus {
+  const drive = new Tone.Distortion({ distortion: 0, wet: 0 })
+  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -12 }).connect(drive)
+  const input = new Tone.Gain(1).connect(filter)
+  drive.toDestination()
+  return { input, filter, drive }
+}
+
+function createBassVoice(destination: Tone.ToneAudioNode): BassVoice {
   const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 })
   const synth = new Tone.Synth({
     oscillator: { type: 'sawtooth' },
@@ -130,16 +186,16 @@ function createBassVoice(): BassVoice {
     envelope: { attack: 0.004, decay: DEFAULT_BASS_SETTINGS.decay, sustain: 0.25, release: 0.08 },
     volume: Tone.gainToDb(BASS_GAIN),
   }).connect(filter)
-  filter.toDestination()
+  filter.connect(destination)
   return { synth, filter }
 }
 
-function createStabSynth(): Tone.PolySynth<Tone.Synth> {
+function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.Synth> {
   return new Tone.PolySynth(Tone.Synth, {
     oscillator: { type: 'sawtooth' },
     envelope: { attack: 0.004, decay: 0.16, sustain: 0.36, release: 0.12 },
     volume: Tone.gainToDb(STAB_GAIN),
-  }).toDestination()
+  }).connect(destination)
 }
 
 /**
@@ -149,16 +205,24 @@ function createStabSynth(): Tone.PolySynth<Tone.Synth> {
  */
 function ensureVoices(): void {
   if (samplesLoaded) return
+  master = createMasterBus()
+  const bus = master.input
   voices = Object.fromEntries(
     (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(([laneId, url]) => {
-      const gain = new Tone.Gain(1).toDestination()
+      const gain = new Tone.Gain(1).connect(bus)
       const player = new Tone.Player(url).connect(gain)
       return [laneId, { player, gain }]
     }),
   ) as Record<DrumLaneId, Voice>
-  bass = createBassVoice()
-  stab = createStabVoices(createStabSynth)
+  bass = createBassVoice(bus)
+  stab = createStabVoices(() => createStabSynth(bus))
+  analyser = new Tone.Analyser('fft', SCOPE_SPEC.binCount)
+  // Snappier than the analyser's 0.8 default: the scope does its own fall
+  // decay, so internal smoothing only has to keep single frames from jittering.
+  analyser.smoothing = 0.5
+  Tone.getDestination().connect(analyser)
   setBassSettings(bassSettings)
+  setMasterSettings(masterSettings)
   samplesLoaded = Tone.loaded()
   Tone.getTransport().bpm.value = bpm
   if (import.meta.env.DEV) {
@@ -171,6 +235,7 @@ function ensureVoices(): void {
       voices,
       bass,
       stab,
+      master,
     }
   }
 }
@@ -216,6 +281,15 @@ export function releaseStabNote(source: string): void {
 /** Current live + sequenced stab pitches, read by the keyboard's rAF loop. */
 export function getSoundingStabNotes(): readonly number[] {
   return stabSoundingNotes.atTime(Tone.immediate())
+}
+
+/**
+ * The latest FFT frame off the master output (dB per bin), or null before the
+ * first user gesture creates the audio graph. Read by the scope's rAF loop.
+ */
+export function getSpectrum(): Float32Array | null {
+  if (!analyser) return null
+  return analyser.getValue() as Float32Array
 }
 
 export async function play(): Promise<void> {

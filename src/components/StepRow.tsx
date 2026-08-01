@@ -1,10 +1,17 @@
-import type { DrumLane } from '../model/types'
+import { memo } from 'react'
+import type { DrumLane, DrumLaneId } from '../model/types'
 
 interface StepRowProps {
   lane: DrumLane
-  onCycleStep: (stepIndex: number) => void
-  onToggleMute: () => void
-  onToggleSolo: () => void
+  /**
+   * The lane names itself in every callback, so the deck can hand each row one
+   * callback that never changes identity. Closing over the lane up there would
+   * mean a fresh function per row per render, and the memo below would never
+   * bail out on anything.
+   */
+  onCycleStep: (laneId: DrumLaneId, stepIndex: number) => void
+  onToggleMute: (laneId: DrumLaneId) => void
+  onToggleSolo: (laneId: DrumLaneId) => void
   spotlit?: boolean
   muted?: boolean
   soloed?: boolean
@@ -16,8 +23,11 @@ interface StepRowProps {
  * One sequencer lane: label + mute/solo strip plus 16 step buttons, grouped
  * into the four classic 909 color quads. Steps are plain DOM buttons (per the
  * rendering split: pads/keys/steps are DOM/CSS, never canvas).
+ *
+ * Memoized: a row is eighteen controls, and seven of them sit on the deck. A
+ * knob moving elsewhere must not cost a rebuild of all of them mid-playback.
  */
-export function StepRow({
+function StepRowLane({
   lane,
   onCycleStep,
   onToggleMute,
@@ -41,7 +51,7 @@ export function StepRow({
             className="lane-mix-btn is-mute"
             aria-pressed={muted}
             aria-label={`Mute ${lane.label}`}
-            onClick={onToggleMute}
+            onClick={() => onToggleMute(lane.id)}
           >
             M
           </button>
@@ -50,7 +60,7 @@ export function StepRow({
             className="lane-mix-btn is-solo"
             aria-pressed={soloed}
             aria-label={`Solo ${lane.label}`}
-            onClick={onToggleSolo}
+            onClick={() => onToggleSolo(lane.id)}
           >
             S
           </button>
@@ -67,7 +77,7 @@ export function StepRow({
             data-accent={step.accent || undefined}
             aria-pressed={step.on}
             aria-label={`${lane.label} step ${i + 1}${step.accent ? ' (accent)' : ''}`}
-            onClick={() => onCycleStep(i)}
+            onClick={() => onCycleStep(lane.id, i)}
           >
             <span className="step-led" aria-hidden="true" />
             <span className="step-num" aria-hidden="true">
@@ -79,3 +89,5 @@ export function StepRow({
     </div>
   )
 }
+
+export const StepRow = memo(StepRowLane)

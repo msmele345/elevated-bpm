@@ -1,4 +1,6 @@
+import { memo } from 'react'
 import type { ArcEntry } from '../model/arc'
+import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 
 interface LessonArcProps {
   entries: ArcEntry[]
@@ -14,12 +16,19 @@ interface LessonArcProps {
  * selecting one only moves the marker, so the sandbox is untouched by
  * navigation.
  */
-export function LessonArc({ entries, completed, total, onSelect }: LessonArcProps) {
+function CurriculumArc({ entries, completed, total, onSelect }: LessonArcProps) {
   const current = entries.find((entry) => entry.current)
   return (
-    <nav className="arc" aria-label="Curriculum arc">
+    <nav
+      className="arc"
+      id={DECK_SECTION_IDS.curriculum}
+      tabIndex={-1}
+      aria-labelledby={sectionTitleId(DECK_SECTION_IDS.curriculum)}
+    >
       <div className="arc-head">
-        <span className="arc-tag">Curriculum</span>
+        <h2 className="arc-tag" id={sectionTitleId(DECK_SECTION_IDS.curriculum)}>
+          Curriculum
+        </h2>
         <span className="arc-count">
           <span className="arc-count-done">{completed}</span> / {total} complete
         </span>
@@ -66,3 +75,5 @@ export function LessonArc({ entries, completed, total, onSelect }: LessonArcProp
     </nav>
   )
 }
+
+export const LessonArc = memo(CurriculumArc)

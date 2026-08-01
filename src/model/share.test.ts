@@ -5,6 +5,7 @@ import {
   cycleActivePatternStep,
   PROJECT_STATE_VERSION,
   setBassParamValue,
+  setMasterParamValue,
   setTransportBpm,
   resizeActivePatternNote,
   toggleActivePatternNoteStep,
@@ -21,20 +22,24 @@ import type { DrumLaneId, NoteLaneId } from './types'
 
 describe('share URL', () => {
   it('reproduces the active pattern and every setting that affects how it sounds', async () => {
-    const source = toggleLaneMute(
-      setBassParamValue(
-        setTransportBpm(
-          toggleActivePatternNoteStep(
-            cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
-            'stab',
-            7,
+    const source = setMasterParamValue(
+      toggleLaneMute(
+        setBassParamValue(
+          setTransportBpm(
+            toggleActivePatternNoteStep(
+              cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
+              'stab',
+              7,
+            ),
+            142,
           ),
-          142,
+          'cutoff',
+          3200,
         ),
-        'cutoff',
-        3200,
+        'openHat',
       ),
-      'openHat',
+      'drive',
+      45,
     )
 
     const url = await createShareUrl(source, 'https://elevated-bpm.example/deck?ref=friend')
@@ -116,6 +121,23 @@ describe('share URL', () => {
       status: 'error',
       code: 'malformed',
     })
+  })
+
+  it('rejects a payload whose master macros are missing or out of range', async () => {
+    const outOfRange = createInitialProjectState()
+    outOfRange.instrumentSettings.master = { filter: 18_000, drive: 400 }
+    const missing = createInitialProjectState()
+    missing.instrumentSettings = {
+      bass: missing.instrumentSettings.bass,
+    } as typeof missing.instrumentSettings
+
+    for (const invalid of [outOfRange, missing]) {
+      const url = await createShareUrl(invalid, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
   })
 
   it('previews a shared beat without mutating recipient-only project state', async () => {

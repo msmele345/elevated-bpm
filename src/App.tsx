@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BassPanel } from './components/BassPanel'
 import { Knob } from './components/Knob'
 import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
+import { PanelTitle } from './components/PanelTitle'
 import { ShareControls } from './components/ShareControls'
+import { SkipLinks } from './components/SkipLinks'
 import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
@@ -20,6 +22,7 @@ import {
   nextUnfinishedLessonId,
 } from './model/arc'
 import { bassParamSpec, type BassParamId } from './model/bass'
+import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
 import { MASTER_PARAMS, masterParamSpec, type MasterParamId } from './model/master'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
@@ -67,6 +70,10 @@ export default function App() {
   const [project, setProject] = useState(createInitialProjectState)
   const [hydrated, setHydrated] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
+  // Mirrored in a ref so the handlers that only need to *ask* whether the loop
+  // is running can stay identity-stable across a play/stop.
+  const isPlayingRef = useRef(false)
+  isPlayingRef.current = isPlaying
   // An incoming beat runs as a disposable in-memory preview. Holding the
   // recipient's opening document here lets "Back to my project" restore it
   // exactly; autosave stays suspended until the preview is explicitly kept.
@@ -113,7 +120,13 @@ export default function App() {
   // Where the user is on the arc: their own selection if they stepped off the
   // path, otherwise the first lesson still unearned.
   const activeLesson = activeArcLesson(ARC, project.lessonProgress, project.activeLessonId)
-  const arcPath = arcEntries(ARC, project.lessonProgress, activeLesson.id)
+  // Memoized because the arc is a fresh array every time it is built, and a
+  // fresh array is a changed prop: without this the fourteen arc pads would
+  // rebuild on every knob move.
+  const arcPath = useMemo(
+    () => arcEntries(ARC, project.lessonProgress, activeLesson.id),
+    [project.lessonProgress, activeLesson.id],
+  )
   const arcDone = arcCompletion(ARC, project.lessonProgress)
   const here = arcPath.find((entry) => entry.current)!
 
@@ -124,9 +137,20 @@ export default function App() {
   // Spotlight guides toward the goal, so it rests once the goal is met or
   // the lesson is put away.
   const spotlitResting = lessonCompleted || lessonDismissed
-  const spotlitLanes = spotlitResting ? [] : spotlitLaneIds(activeLesson)
-  const spotlitNoteLanes = spotlitResting ? [] : spotlitNoteLaneIds(activeLesson)
-  const spotlitParams = spotlitResting ? [] : spotlitParamIds(activeLesson)
+  const spotlitLanes = useMemo(
+    () => (spotlitResting ? [] : spotlitLaneIds(activeLesson)),
+    [spotlitResting, activeLesson],
+  )
+  const spotlitNoteLanes = useMemo(
+    () => (spotlitResting ? [] : spotlitNoteLaneIds(activeLesson)),
+    [spotlitResting, activeLesson],
+  )
+  // A prop the bass panel holds by reference, so it has to be the same array
+  // between renders or the panel and all three of its knobs rebuild.
+  const spotlitParams = useMemo(
+    () => (spotlitResting ? [] : spotlitParamIds(activeLesson)),
+    [spotlitResting, activeLesson],
+  )
   const spotlitTarget = (target: string) =>
     !spotlitResting && spotlightsTarget(activeLesson, target)
 
@@ -259,62 +283,69 @@ export default function App() {
     }
   }, [])
 
-  const handleCycleStep = (laneId: DrumLaneId, stepIndex: number) => {
+  // Every handler below is stable across renders, because the panels they are
+  // handed to are memoized: a fresh closure is a changed prop, and a changed
+  // prop would rebuild seven lanes and a keyboard on each pointer move of a
+  // dragged knob — the dropped frame this deck must not have while playing.
+  const handleCycleStep = useCallback((laneId: DrumLaneId, stepIndex: number) => {
     setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
-  }
+  }, [])
 
-  const handleToggleMute = (laneId: DrumLaneId) => {
+  const handleToggleMute = useCallback((laneId: DrumLaneId) => {
     setProject((p) => toggleLaneMute(p, laneId))
-  }
+  }, [])
 
-  const handleToggleSolo = (laneId: DrumLaneId) => {
+  const handleToggleSolo = useCallback((laneId: DrumLaneId) => {
     setProject((p) => toggleLaneSolo(p, laneId))
-  }
+  }, [])
 
-  const handleToggleNoteStep = (laneId: NoteLaneId, stepIndex: number) => {
+  const handleToggleNoteStep = useCallback((laneId: NoteLaneId, stepIndex: number) => {
     setProject((p) => toggleActivePatternNoteStep(p, laneId, stepIndex))
-  }
+  }, [])
 
-  const handleTransposeNote = (
-    laneId: NoteLaneId,
-    stepIndex: number,
-    semitones: number,
-  ) => {
-    setProject((p) => transposeActivePatternNote(p, laneId, stepIndex, semitones))
-  }
+  const handleTransposeNote = useCallback(
+    (laneId: NoteLaneId, stepIndex: number, semitones: number) => {
+      setProject((p) => transposeActivePatternNote(p, laneId, stepIndex, semitones))
+    },
+    [],
+  )
 
-  const handleResizeNote = (laneId: NoteLaneId, stepIndex: number, steps: number) => {
-    setProject((p) => resizeActivePatternNote(p, laneId, stepIndex, steps))
-  }
+  const handleResizeNote = useCallback(
+    (laneId: NoteLaneId, stepIndex: number, steps: number) => {
+      setProject((p) => resizeActivePatternNote(p, laneId, stepIndex, steps))
+    },
+    [],
+  )
 
-  const handleBassParamChange = (id: BassParamId, value: number) => {
+  const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
     setProject((p) => setBassParamValue(p, id, value))
     // Sound design is something you do to a running loop, so only motion over
-    // playing audio counts toward a sweep goal.
-    setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlaying))
-  }
+    // playing audio counts toward a sweep goal. Read from the ref rather than
+    // the state so this handler never has to change identity.
+    setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlayingRef.current))
+  }, [])
 
-  const handleMasterParamChange = (id: MasterParamId, value: number) => {
+  const handleMasterParamChange = useCallback((id: MasterParamId, value: number) => {
     setProject((p) => setMasterParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, masterParamSpec(id), value, isPlaying))
-  }
+    setParamMotion((m) => observeParamMotion(m, masterParamSpec(id), value, isPlayingRef.current))
+  }, [])
 
-  const handleBpmChange = (next: number) => {
+  const handleBpmChange = useCallback((next: number) => {
     setProject((p) => setTransportBpm(p, next))
     engine.setBpm(next)
-  }
+  }, [])
 
-  const handleTogglePlay = async () => {
-    if (isPlaying) {
+  const handleTogglePlay = useCallback(async () => {
+    if (isPlayingRef.current) {
       engine.stop()
       setIsPlaying(false)
     } else {
       await engine.play()
       setIsPlaying(true)
     }
-  }
+  }, [])
 
-  const handleStabAttack = (source: string, midi: number) => {
+  const handleStabAttack = useCallback((source: string, midi: number) => {
     // Sound first: the note is attacked before any bookkeeping, so watching
     // for a chord never costs the keyboard its latency.
     engine.attackStabNote(source, midi)
@@ -324,32 +355,37 @@ export default function App() {
     setChordPlay((played) =>
       chordRef.current.maxNotes > played.maxNotes ? chordRef.current : played,
     )
-  }
+  }, [])
 
-  const handleStabRelease = (source: string) => {
+  const handleStabRelease = useCallback((source: string) => {
     engine.releaseStabNote(source)
     chordRef.current = observeChordRelease(chordRef.current, source)
-  }
+  }, [])
 
-  const handleDismissLesson = () => {
+  // Which lesson these act on is read back out of the document inside the
+  // updater rather than closed over, so they never change identity either.
+  const handleDismissLesson = useCallback(() => {
     setProject((p) => {
-      const next = updateLessonProgress(p, activeLesson.id, { dismissed: true })
-      if (!next.lessonProgress[activeLesson.id]?.completed) return next
+      const lessonId = activeArcLesson(ARC, p.lessonProgress, p.activeLessonId).id
+      const next = updateLessonProgress(p, lessonId, { dismissed: true })
+      if (!next.lessonProgress[lessonId]?.completed) return next
       // Putting away a finished lesson moves the deck on to the next unearned
       // one — the celebration is never cut short, and the path keeps its
       // momentum. With the arc finished there is nowhere to move on to.
-      const following = nextUnfinishedLessonId(ARC, next.lessonProgress, activeLesson.id)
+      const following = nextUnfinishedLessonId(ARC, next.lessonProgress, lessonId)
       return following ? enterLesson(next, following) : next
     })
-  }
+  }, [])
 
-  const handleSelectLesson = (lessonId: string) => {
+  const handleSelectLesson = useCallback((lessonId: string) => {
     setProject((p) => enterLesson(p, lessonId))
-  }
+  }, [])
 
-  const handleResumeLesson = () => {
-    setProject((p) => enterLesson(p, activeLesson.id))
-  }
+  const handleResumeLesson = useCallback(() => {
+    setProject((p) =>
+      enterLesson(p, activeArcLesson(ARC, p.lessonProgress, p.activeLessonId).id),
+    )
+  }, [])
 
   const removeShareFromAddress = () => {
     const url = new URL(window.location.href)
@@ -435,6 +471,8 @@ export default function App() {
         inert={finaleVisible}
         aria-hidden={finaleVisible || undefined}
       >
+      <SkipLinks />
+
       <header className="deck-header">
         <h1 className="brand">
           Elevated <em>BPM</em>
@@ -485,11 +523,17 @@ export default function App() {
 
       {/* The master strip: deck-global transport, the main-out scope, and the
           two macro knobs — filter and drive — that shape the whole mix. */}
-      <section className="panel master-panel" aria-label="Master">
-        <div className="panel-title">
-          <span className="panel-title-name">Master</span>
-          <span className="panel-title-model">MAIN OUT · MX-01</span>
-        </div>
+      <section
+        className="panel master-panel"
+        id={DECK_SECTION_IDS.master}
+        tabIndex={-1}
+        aria-labelledby={sectionTitleId(DECK_SECTION_IDS.master)}
+      >
+        <PanelTitle
+          sectionId={DECK_SECTION_IDS.master}
+          name="Master"
+          model="MAIN OUT · MX-01"
+        />
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}
@@ -506,18 +550,24 @@ export default function App() {
                 spec={param}
                 value={masterSettings[param.id]}
                 spotlit={spotlitParams.includes(param.id)}
-                onChange={(value) => handleMasterParamChange(param.id, value)}
+                onChange={handleMasterParamChange}
               />
             ))}
           </div>
         </div>
       </section>
 
-      <section className="panel" aria-label="Drum machine">
-        <div className="panel-title">
-          <span className="panel-title-name">Drum Machine</span>
-          <span className="panel-title-model">RHYTHM SECTION · DR-909</span>
-        </div>
+      <section
+        className="panel"
+        id={DECK_SECTION_IDS.drums}
+        tabIndex={-1}
+        aria-labelledby={sectionTitleId(DECK_SECTION_IDS.drums)}
+      >
+        <PanelTitle
+          sectionId={DECK_SECTION_IDS.drums}
+          name="Drum Machine"
+          model="RHYTHM SECTION · DR-909"
+        />
         {pattern.lanes.map((lane) => {
           const mix = project.mixer[lane.id]
           // With any solo engaged, a lane that is not soloed is silenced —
@@ -531,9 +581,9 @@ export default function App() {
               muted={mix?.muted ?? false}
               soloed={mix?.soloed ?? false}
               silenced={silenced}
-              onCycleStep={(stepIndex) => handleCycleStep(lane.id, stepIndex)}
-              onToggleMute={() => handleToggleMute(lane.id)}
-              onToggleSolo={() => handleToggleSolo(lane.id)}
+              onCycleStep={handleCycleStep}
+              onToggleMute={handleToggleMute}
+              onToggleSolo={handleToggleSolo}
             />
           )
         })}
@@ -545,11 +595,9 @@ export default function App() {
         settings={bassSettings}
         spotlitLane={spotlitNoteLanes.includes('bass')}
         spotlitParams={spotlitParams}
-        onToggleStep={(stepIndex) => handleToggleNoteStep('bass', stepIndex)}
-        onTranspose={(stepIndex, semitones) =>
-          handleTransposeNote('bass', stepIndex, semitones)
-        }
-        onResize={(stepIndex, steps) => handleResizeNote('bass', stepIndex, steps)}
+        onToggleStep={handleToggleNoteStep}
+        onTranspose={handleTransposeNote}
+        onResize={handleResizeNote}
         onParamChange={handleBassParamChange}
       />
 
@@ -560,11 +608,9 @@ export default function App() {
         onAttack={handleStabAttack}
         onRelease={handleStabRelease}
         getSoundingNotes={engine.getSoundingStabNotes}
-        onToggleStep={(stepIndex) => handleToggleNoteStep('stab', stepIndex)}
-        onTranspose={(stepIndex, semitones) =>
-          handleTransposeNote('stab', stepIndex, semitones)
-        }
-        onResize={(stepIndex, steps) => handleResizeNote('stab', stepIndex, steps)}
+        onToggleStep={handleToggleNoteStep}
+        onTranspose={handleTransposeNote}
+        onResize={handleResizeNote}
       />
     </main>
       {finaleVisible && <FinaleMoment onClose={handleCloseFinale} />}

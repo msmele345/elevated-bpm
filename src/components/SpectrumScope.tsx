@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import * as engine from '../audio/engine'
 import {
   barBinRanges,
@@ -23,7 +23,7 @@ const UNLIT_ALPHA = 0.16
  * React state, so it can hold 60fps without a single re-render; frames where
  * no segment changes skip the repaint entirely.
  */
-export function SpectrumScope() {
+function Scope() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -121,3 +121,6 @@ export function SpectrumScope() {
     </div>
   )
 }
+
+/** Propless, so this renders once and then only its own rAF loop touches it. */
+export const SpectrumScope = memo(Scope)

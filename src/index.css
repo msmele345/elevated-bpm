@@ -308,6 +308,60 @@ body::before {
   opacity: calc(0.24 + var(--pulse) * 0.4 + var(--breathe) * 0.14);
 }
 
+/* ── Skip links ────────────────────────────────────────────────────
+   A groovebox is a wall of controls: the drum machine alone is ninety
+   Tab stops. These sit off-screen until focused so the first few Tabs
+   into the page offer a way straight to any panel. Never display:none
+   or visibility:hidden — that would take them out of the tab order,
+   which is the one thing they exist for. Absolutely positioned so they
+   claim no room in the deck's vertical rhythm. */
+.skip-links {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6;
+}
+
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  padding: 9px 16px;
+  border-radius: 0 0 9px 9px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+/* :focus, not :focus-visible — a skip link is only ever reached by
+   keyboard, and it has to show itself the instant it takes focus. */
+.skip-link:focus {
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A section that has just been jumped to takes focus itself; say so
+   quietly rather than ringing an entire panel like a button. */
+.deck [tabindex='-1']:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
 .deck-header {
   display: flex;
   align-items: baseline;
@@ -904,8 +958,11 @@ body::before {
   box-shadow: var(--key-pressed);
 }
 
+/* One focus color across the whole deck, including here: --led is the
+   step's own quad color, so a ring drawn in it read as another way of
+   saying "this step is lit" rather than "this is where you are". */
 .step:focus-visible {
-  outline: 2px solid var(--led);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -1617,6 +1674,7 @@ body::before {
 }
 
 .arc-tag {
+  margin: 0;
   font-family: var(--font-display);
   font-size: 0.62rem;
   font-weight: 600;
@@ -1765,6 +1823,7 @@ body::before {
 }
 
 .panel-title-name {
+  margin: 0;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 0.9rem;
@@ -1878,9 +1937,22 @@ body::before {
   text-shadow: 0 0 8px rgba(255, 243, 214, 0.8);
 }
 
+/* The only control on the deck whose face can be near-white, so a single
+   bright ring is not enough: a lit white key is orange and an unlit one is
+   cream. Two bands — dark outside, --focus inside — keep the indicator
+   visible on every key in every state. */
 .stab-key:focus-visible {
-  outline: 3px solid var(--quad-1);
+  outline: 4px solid var(--focus);
   outline-offset: -4px;
+}
+
+.stab-key:focus-visible::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 4px solid rgba(6, 7, 8, 0.92);
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .stab-note-name {

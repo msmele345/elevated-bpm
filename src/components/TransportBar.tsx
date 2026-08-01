@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { MAX_BPM, MIN_BPM } from '../audio/engine'
 
 interface TransportBarProps {
@@ -9,7 +10,7 @@ interface TransportBarProps {
   onBpmChange: (bpm: number) => void
 }
 
-export function TransportBar({
+function Transport({
   isPlaying,
   bpm,
   spotlitTempo = false,
@@ -47,3 +48,5 @@ export function TransportBar({
     </div>
   )
 }
+
+export const TransportBar = memo(Transport)

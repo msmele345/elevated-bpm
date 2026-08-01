@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import * as engine from '../audio/engine'
 import { roomLightAt } from '../model/roomLight'
 
@@ -13,8 +13,17 @@ import { roomLightAt } from '../model/roomLight'
  * The loop also runs while stopped: --pulse rests at 0 while --breathe and
  * --cool keep the room dimly alive. Values are quantized to centi-units so
  * style writes only happen when a value actually changes.
+ *
+ * Tempo is read through a ref rather than taken as a dependency: dragging the
+ * fader emits a BPM per input event, and rebuilding this effect that often
+ * would cancel and re-request the frame — and forget the last written values,
+ * forcing three style writes — dozens of times a second, during the one
+ * interaction most likely to be happening while the loop runs.
  */
 export function useRoomLight(isPlaying: boolean, bpm: number): void {
+  const bpmRef = useRef(bpm)
+  bpmRef.current = bpm
+
   useEffect(() => {
     let rafId = 0
     let lastPulse = -1
@@ -28,7 +37,7 @@ export function useRoomLight(isPlaying: boolean, bpm: number): void {
       const light = roomLightAt({
         ticks: engine.getTransportTicks(),
         ticksPerBeat,
-        bpm,
+        bpm: bpmRef.current,
         nowSeconds: nowMs / 1000,
       })
       const pulse = Math.round(light.pulse * 100) / 100
@@ -51,5 +60,5 @@ export function useRoomLight(isPlaying: boolean, bpm: number): void {
 
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [isPlaying, bpm])
+  }, [isPlaying])
 }

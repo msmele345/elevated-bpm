@@ -8,6 +8,11 @@ describe('finaleKeyAction', () => {
     expect(finaleKeyAction({ key: 'u', code: 'KeyU' })).toBe('block')
   })
 
+  it('keeps Tab inside the dialog, so focus cannot wander onto the deck behind it', () => {
+    expect(finaleKeyAction({ key: 'Tab', code: 'Tab' })).toBe('block')
+    expect(finaleKeyAction({ key: 'Tab', code: 'Tab', shiftKey: true })).toBe('block')
+  })
+
   it('passes native button keys and browser shortcuts through', () => {
     expect(finaleKeyAction({ key: 'Enter', code: 'Enter' })).toBe('pass')
     expect(finaleKeyAction({ key: ' ', code: 'Space' })).toBe('pass')

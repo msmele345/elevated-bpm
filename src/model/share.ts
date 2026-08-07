@@ -1,5 +1,6 @@
 import {
   activePattern,
+  migrateProjectState,
   PROJECT_STATE_VERSION,
   type InstrumentSettings,
   type ProjectState,
@@ -25,6 +26,19 @@ export type SharedProjectResult =
       message: string
     }
 
+/**
+ * Curriculum progress and preferences belong to whoever opens a link, never to
+ * whoever sent it. Blanked on the way out so a sender never ships their own
+ * progress, and again on the way in so an older payload carrying a stale
+ * progress map reads as a valid beat rather than a rejected link.
+ */
+function recipientOwnedBlanks(): Pick<
+  ProjectState,
+  'lessonProgress' | 'prefs' | 'activeLessonId'
+> {
+  return { lessonProgress: {}, prefs: {}, activeLessonId: null }
+}
+
 function projectForSharing(project: ProjectState): ProjectState {
   const pattern = activePattern(project)
   return {
@@ -33,10 +47,8 @@ function projectForSharing(project: ProjectState): ProjectState {
     activePatternId: pattern.id,
     transport: project.transport,
     instrumentSettings: project.instrumentSettings,
-    lessonProgress: {},
-    prefs: {},
     mixer: project.mixer,
-    activeLessonId: null,
+    ...recipientOwnedBlanks(),
   }
 }
 
@@ -251,8 +263,11 @@ export async function readSharedBeat(urlValue: string): Promise<SharedProjectRes
 
   const separator = encoded.indexOf('.')
   if (separator < 1 || !/^\d+$/.test(encoded.slice(0, separator))) return malformedShare()
-  const version = Number(encoded.slice(0, separator))
-  if (version !== PROJECT_STATE_VERSION) {
+  // The prefix stays a cheap pre-decompression guard, but only one mismatch is
+  // beyond repair: a payload from a build newer than this one. Everything at or
+  // below the current version is lifted by the same migration a saved document
+  // takes, so a link outlives the schema bumps that follow it.
+  if (Number(encoded.slice(0, separator)) > PROJECT_STATE_VERSION) {
     return {
       status: 'error',
       code: 'unsupported-version',
@@ -262,7 +277,15 @@ export async function readSharedBeat(urlValue: string): Promise<SharedProjectRes
   }
   try {
     const compressed = base64UrlToBytes(encoded.slice(separator + 1))
-    const project: unknown = JSON.parse(await decompress(compressed))
+    // Migration both returns null and throws on bodies it cannot read, so it
+    // belongs inside this catch: a payload that fails to lift is a damaged
+    // link, not an incompatible one.
+    const migrated = migrateProjectState(JSON.parse(await decompress(compressed)))
+    if (migrated === null) return malformedShare()
+
+    // Validate the migrated document, so the structural checks keep asserting
+    // the shape the deck actually runs today.
+    const project: ProjectState = { ...migrated, ...recipientOwnedBlanks() }
     if (!isSharedProject(project)) return malformedShare()
     return { status: 'ready', project }
   } catch {

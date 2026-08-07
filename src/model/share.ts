@@ -284,8 +284,10 @@ export async function readSharedBeat(urlValue: string): Promise<SharedProjectRes
     if (migrated === null) return malformedShare()
 
     // Validate the migrated document, so the structural checks keep asserting
-    // the shape the deck actually runs today.
-    const project: ProjectState = { ...migrated, ...recipientOwnedBlanks() }
+    // the shape the deck actually runs today. Left unknown so isSharedProject
+    // stays the only thing that narrows it — migration hands back the current
+    // version by assertion, not by checking.
+    const project: unknown = { ...migrated, ...recipientOwnedBlanks() }
     if (!isSharedProject(project)) return malformedShare()
     return { status: 'ready', project }
   } catch {

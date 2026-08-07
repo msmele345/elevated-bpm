@@ -14,11 +14,13 @@ import {
   type ProjectState,
 } from './projectState'
 import { DEFAULT_MASTER_SETTINGS } from './master'
+import { createInitialPattern, cycleStep } from './pattern'
 import {
   createShareUrl,
   PRACTICAL_SHARE_URL_LIMIT,
   projectWithSharedBeat,
   readSharedBeat,
+  SHARE_QUERY_PARAM,
 } from './share'
 import type { DrumLaneId, NoteLaneId } from './types'
 
@@ -84,6 +86,11 @@ describe('share URL', () => {
     const url = await createShareUrl(source, 'https://elevated-bpm.example/deck?ref=friend')
     const shared = await readSharedBeat(url)
 
+    // Outgoing links are always stamped current; only the reader is tolerant,
+    // so nothing else here would notice the writer drifting to a stale prefix.
+    expect(new URL(url).searchParams.get(SHARE_QUERY_PARAM)).toMatch(
+      new RegExp(`^${PROJECT_STATE_VERSION}\\.`),
+    )
     expect(shared).toEqual({
       status: 'ready',
       project: {
@@ -151,6 +158,24 @@ describe('share URL', () => {
     expect(shared.project.instrumentSettings.bass).toEqual(sender.instrumentSettings.bass)
     // The version it predates arrives at its neutral default, not missing.
     expect(shared.project.instrumentSettings.master).toEqual(DEFAULT_MASTER_SETTINGS)
+  })
+
+  it('lifts a payload through every migration step, not only the most recent one', async () => {
+    // v0 predates the document itself — one bare pattern and a flat bpm — so a
+    // link this old only opens if the reader runs the whole chain rather than
+    // special-casing the version below current.
+    const pattern = cycleStep(createInitialPattern(), 'kick', 0)
+
+    const shared = await readSharedBeat(
+      await legacyShareUrl(0, { version: 0, pattern, bpm: 125 }),
+    )
+
+    if (shared.status !== 'ready') {
+      throw new Error(`Expected the whole migration chain to run, got ${shared.status}`)
+    }
+    expect(shared.project.version).toBe(PROJECT_STATE_VERSION)
+    expect(activePattern(shared.project).lanes[0].steps[0].on).toBe(true)
+    expect(shared.project.transport.bpm).toBe(125)
   })
 
   it('blanks curriculum progress an older link carries rather than refusing the beat', async () => {

@@ -157,7 +157,7 @@ Sharing tells the truth about what it can do. A share link carries the pattern a
 
 ### Storage
 
-- The `ProjectState` document advances to **v8**, with a v7 → v8 migration that defaults sampler settings the same way the master bus macros were defaulted at v7. The document gains the sampler's pad state (region reference, tune, fit target, name) and the active curriculum arc id.
+- The `ProjectState` document advances to **v9**, with a v8 → v9 migration that defaults sampler settings the same way the master bus macros were defaulted at v7. (This spec originally claimed v8; EB2-02 ships the FX bus at v8 and blocks this slice, so the sampler follows it.) The document gains the sampler's pad state (region reference, tune, fit target, name) and the active curriculum arc id.
 - `ProjectState` continues to hold **no binary data**. It stores identifiers only, so it stays JSON, stays diffable, stays migratable, and stays cheap to autosave.
 - Audio lives in a **separate object store** in the same IndexedDB database, which advances its own version. That store is deliberately two-part, and the halves have different value:
   - **Slices** — the rendered audio for each pad's committed region. Small. Required to make sound. Treated as precious.

@@ -56,6 +56,47 @@ export function nudgeParam(spec: ParamSpec, value: number, deltaNormalized: numb
   return denormalizeParam(spec, normalizeParam(spec, value) + deltaNormalized)
 }
 
+/**
+ * A patch: one number per knob of a param list. Bass, master and FX are all
+ * this shape, which is what lets the three below be written once.
+ */
+export type Patch<Id extends string> = Record<Id, number>
+
+/** The spec behind one knob of a param list. */
+export function specOf<Id extends string>(
+  params: ReadonlyArray<ParamSpec & { id: Id }>,
+  id: Id,
+): ParamSpec {
+  return params.find((param) => param.id === id)!
+}
+
+/** Immutably set one knob of a patch, clamped to its range. */
+export function setPatchParam<Id extends string, P extends Patch<Id>>(
+  params: ReadonlyArray<ParamSpec & { id: Id }>,
+  patch: P,
+  id: Id,
+  value: number,
+): P {
+  return { ...patch, [id]: clampParam(specOf(params, id), value) }
+}
+
+/**
+ * Build a patch from whatever was persisted (or nothing). Every knob is clamped
+ * or defaulted, so a document written by an older build — or a hand-edited one —
+ * can never hand an instrument an out-of-range value.
+ */
+export function createPatch<Id extends string, P extends Patch<Id>>(
+  params: ReadonlyArray<ParamSpec & { id: Id }>,
+  defaults: P,
+  saved: unknown,
+): P {
+  const raw = (saved ?? {}) as Partial<Record<Id, unknown>>
+  return params.reduce<P>((patch, param) => {
+    const value = raw[param.id]
+    return typeof value === 'number' ? setPatchParam(params, patch, param.id, value) : patch
+  }, defaults)
+}
+
 /** Panel/screen-reader readout for a value, in the units an engineer expects. */
 export function formatParam(spec: ParamSpec, value: number): string {
   if (spec.unit === 'Hz' && value >= 1000) return `${(value / 1000).toFixed(2)} kHz`

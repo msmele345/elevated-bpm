@@ -35,7 +35,12 @@ export function isDeckParamId(value: unknown): value is DeckParamId {
   return typeof value === 'string' && DECK_PARAM_IDS.has(value)
 }
 
-/** The spec behind one knob anywhere on the deck, or undefined if it has none. */
+/**
+ * The spec behind one knob anywhere on the deck. A knob the deck is known to
+ * have always resolves; an untrusted id — a hand-authored lesson, say — may not.
+ */
+export function deckParamSpec(id: DeckParamId): ParamSpec & { id: DeckParamId }
+export function deckParamSpec(id: string): (ParamSpec & { id: DeckParamId }) | undefined
 export function deckParamSpec(id: string): (ParamSpec & { id: DeckParamId }) | undefined {
   return DECK_PARAMS.find((param) => param.id === id)
 }

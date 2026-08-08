@@ -21,10 +21,11 @@ import {
   lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './model/arc'
-import { bassParamSpec, type BassParamId } from './model/bass'
+import type { BassParamId } from './model/bass'
+import { deckParamSpec } from './model/deckParams'
 import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
-import { FX_PARAMS, fxParamSpec, type FxParamId } from './model/fx'
-import { MASTER_PARAMS, masterParamSpec, type MasterParamId } from './model/master'
+import { FX_PARAMS, type FxParamId } from './model/fx'
+import { MASTER_PARAMS, type MasterParamId } from './model/master'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
   spotlightsTarget,
@@ -342,17 +343,17 @@ export default function App() {
     // Sound design is something you do to a running loop, so only motion over
     // playing audio counts toward a sweep goal. Read from the ref rather than
     // the state so this handler never has to change identity.
-    setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
   const handleMasterParamChange = useCallback((id: MasterParamId, value: number) => {
     setProject((p) => setMasterParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, masterParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
   const handleFxParamChange = useCallback((id: FxParamId, value: number) => {
     setProject((p) => setFxParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, fxParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
   const handleBpmChange = useCallback((next: number) => {

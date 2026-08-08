@@ -1,4 +1,4 @@
-import { clampParam, type ParamSpec } from './knob'
+import { createPatch, setPatchParam, specOf, type ParamSpec } from './knob'
 import { MIN_BPM } from './transport'
 
 /**
@@ -48,25 +48,17 @@ export const DEFAULT_FX_SETTINGS: FxSettings = {
 
 /** The spec behind one FX knob — its range, default, and taper. */
 export function fxParamSpec(id: FxParamId): ParamSpec {
-  return FX_PARAMS.find((param) => param.id === id)!
+  return specOf(FX_PARAMS, id)
 }
 
 /** Immutably set one FX control, clamped to its range. */
 export function setFxParam(settings: FxSettings, id: FxParamId, value: number): FxSettings {
-  return { ...settings, [id]: clampParam(fxParamSpec(id), value) }
+  return setPatchParam(FX_PARAMS, settings, id, value)
 }
 
-/**
- * Build the patch from whatever was persisted (or nothing). Every control is
- * clamped or defaulted, so a document written by an older build — or a
- * hand-edited one — can never hand the bus an out-of-range value.
- */
+/** Build the patch from whatever was persisted (or nothing), repairing it. */
 export function createFxSettings(saved: unknown): FxSettings {
-  const raw = (saved ?? {}) as Partial<Record<FxParamId, unknown>>
-  return FX_PARAMS.reduce<FxSettings>((settings, param) => {
-    const value = raw[param.id]
-    return typeof value === 'number' ? setFxParam(settings, param.id, value) : settings
-  }, DEFAULT_FX_SETTINGS)
+  return createPatch(FX_PARAMS, DEFAULT_FX_SETTINGS, saved)
 }
 
 /** What the audio engine sets on the FX nodes for one FxSettings. */
@@ -122,10 +114,14 @@ export const DELAY_SIXTEENTHS = 3
  * The delay time at a given tempo, in seconds.
  *
  * The division is musical, so the repeats move with the transport instead of
- * sitting at a fixed millisecond value. Tone's notation (`"8n."`) would express
- * this, but a time-unit Param converts notation to seconds *once*, at the
- * moment it is set — it does not track later tempo changes — so the engine
- * retunes the delay line from here whenever the BPM moves.
+ * sitting at a fixed millisecond value. Tone's notation (`"8n."`) expresses the
+ * division but does not keep it: a time-unit Param converts notation to seconds
+ * *once*, when it is set, and does not track later tempo changes. Tone's other
+ * offer, `Transport.syncSignal`, does reciprocate a time-domain target — but it
+ * is typed for `Signal` where a delay time is a `Param`, and it works by driving
+ * the parameter from an always-on audio-rate reciprocal chain, which is a lot of
+ * machinery to modulate a delay line with. So the engine retunes from here
+ * instead, whenever the BPM moves.
  */
 export function delaySeconds(bpm: number): number {
   // One 16th is 15/bpm seconds (a quarter note is 60/bpm).

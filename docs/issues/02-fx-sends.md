@@ -225,12 +225,27 @@ reverb").
 
 **The delay is retuned by hand on tempo change, deliberately.** The issue asks to
 "use Tone's notation-based delay time and let it follow BPM, never compute
-milliseconds from `bpm` by hand". Tone does not offer the first half: `delayTime`
-is a time-unit `Param` that converts notation to seconds *once*, when it is set
-(`Param._fromType` → `toSeconds`), and does not track later tempo changes.
-`delaySeconds(bpm)` is therefore a pure, unit-tested model function called from
-`setBpm` — the single door tempo already walks through — and ramped over the same
-0.1 s, which pitch-bends the tail like a tape delay instead of clicking.
+milliseconds from `bpm` by hand". Notation alone does not do this: `delayTime` is
+a time-unit `Param` that converts notation to seconds *once*, when it is set
+(`Param._fromType` → `toSeconds`), and does not track later tempo changes. Tone
+has one mechanism that would — `Transport.syncSignal`, which does reciprocate a
+time-domain target rather than scaling with the tempo — but it is typed for
+`Signal` where a delay time is a `Param`, and it works by driving the parameter
+from an always-on audio-rate reciprocal chain (`Pow(-1)` between two gains).
+That is a lot of permanently running machinery, modulating a delay line at audio
+rate, to avoid one line of arithmetic. So `delaySeconds(bpm)` is a pure,
+unit-tested model function called from `setBpm` — the single door tempo already
+walks through — and ramped over the same 0.1 s, which pitch-bends the tail like a
+tape delay instead of clicking. The rule's intent is kept: the division is
+musical, it follows the transport, and no millisecond value is hand-written.
+
+**The delay and reverb do not rest at zero, only the sends do.** The issue says
+"**All FX params rest neutral**: sends at zero". The binding half — that an
+untouched deck is bit-identical to the one before this slice — is met by the
+sends alone, since nothing reaches the bus while they are closed. Feedback and
+Reverb therefore ship at 40%, so that the first send a user opens sounds like an
+effect rather than a bypass they then have to go and find two more knobs to
+undo. Called out here because it is a literal deviation from that sentence.
 
 **`ProjectState` v8 belongs to this slice.** `docs/specs/sp-04-sampler.md` also
 claims v8 for the sampler's pad state; since EB2-02 blocks EB2-03, the FX bus

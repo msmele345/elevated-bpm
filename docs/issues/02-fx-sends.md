@@ -177,11 +177,20 @@ Do not await IR generation inside `unlockAudio`.
       (`share.test.ts`): a driven patch round-trips, an out-of-range and a
       missing patch are both refused as `malformed`, a pre-FX link migrates in
       with sends closed, and the dense-pattern payload still clears the
-      2,000-character limit. In-browser the Share action succeeded on a project
-      carrying a driven FX patch; decoding the copied link itself was not
-      completed in the browser because reading the clipboard needs a permission
-      prompt that blocks automation — the round-trip is proven at the model and
-      mounted-app seams instead
+      2,000-character limit. Also verified end to end in-browser: a deck driven
+      to drum send 100 / feedback 0 / reverb 100 produced a **686-character**
+      link whose decoded payload carried exactly that patch — plus the bass
+      patch, master drive 45, BPM 126 and the 1/5/9/13 kick — with
+      `lessonProgress`, `prefs` and `activeLessonId` blanked even though the
+      sender had two lessons earned. Opening that link on a deck holding a
+      *different* saved project (sends closed, 145 BPM, no kick) showed the
+      shared beat with **Keep this beat** / **Back to my project**, while
+      IndexedDB still held the recipient's own document well past the autosave
+      debounce; **Back to my project** restored it exactly and cleared `?p=`
+      from the address bar. After the first gesture the shared patch was
+      confirmed **on the recipient's audio nodes** (drum send gain 0.8, bass
+      send 0, feedback 0, reverb wet 0.85, delay 357.1 ms = the dotted eighth at
+      the shared 126 BPM, master drive 0.45, bass cutoff 2400 Hz)
 - [x] A `paramSwept` goal can name any knob on the deck — bass, master or FX —
       and a goal naming a knob that does not exist still fails at parse time
       (**G12**) — `DECK_PARAMS` (`src/model/deckParams.ts`) gathers bass, master

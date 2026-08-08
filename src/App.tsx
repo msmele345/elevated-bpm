@@ -221,6 +221,14 @@ export default function App() {
     }
   }, [])
 
+  // A pending save must not outlive the deck. The handlers above already
+  // flushed on every path a user takes to leave, so anything still pending at
+  // unmount is an orphan whose write would reach for a torn-down IndexedDB.
+  useEffect(() => {
+    const autosaver = autosaverRef.current
+    return () => autosaver.cancel()
+  }, [])
+
   // Goal detection: re-evaluated on every user edit — a step tap or a knob
   // move — and never on the audio clock. Completion is latched in the
   // document, so undoing the work later doesn't revoke it and the earned

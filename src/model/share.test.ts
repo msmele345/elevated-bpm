@@ -5,6 +5,7 @@ import {
   cycleActivePatternStep,
   PROJECT_STATE_VERSION,
   setBassParamValue,
+  setFxParamValue,
   setMasterParamValue,
   setTransportBpm,
   resizeActivePatternNote,
@@ -13,6 +14,7 @@ import {
   transposeActivePatternNote,
   type ProjectState,
 } from './projectState'
+import { DEFAULT_FX_SETTINGS } from './fx'
 import { DEFAULT_MASTER_SETTINGS } from './master'
 import { createInitialPattern, cycleStep } from './pattern'
 import {
@@ -63,25 +65,36 @@ function v6ShareDocument(
 
 describe('share URL', () => {
   it('reproduces the active pattern and every setting that affects how it sounds', async () => {
-    const source = setMasterParamValue(
-      toggleLaneMute(
-        setBassParamValue(
-          setTransportBpm(
-            toggleActivePatternNoteStep(
-              cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
-              'stab',
-              7,
+    const source = setFxParamValue(
+      setFxParamValue(
+        setMasterParamValue(
+          toggleLaneMute(
+            setBassParamValue(
+              setTransportBpm(
+                toggleActivePatternNoteStep(
+                  cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
+                  'stab',
+                  7,
+                ),
+                142,
+              ),
+              'cutoff',
+              3200,
             ),
-            142,
+            'openHat',
           ),
-          'cutoff',
-          3200,
+          'drive',
+          45,
         ),
-        'openHat',
+        'stabSend',
+        65,
       ),
-      'drive',
-      45,
+      'feedback',
+      70,
     )
+
+    // Everything that shapes the sound travels, the FX bus included.
+    expect(source.instrumentSettings.fx.stabSend).toBe(65)
 
     const url = await createShareUrl(source, 'https://elevated-bpm.example/deck?ref=friend')
     const shared = await readSharedBeat(url)
@@ -158,6 +171,9 @@ describe('share URL', () => {
     expect(shared.project.instrumentSettings.bass).toEqual(sender.instrumentSettings.bass)
     // The version it predates arrives at its neutral default, not missing.
     expect(shared.project.instrumentSettings.master).toEqual(DEFAULT_MASTER_SETTINGS)
+    // A link written before the FX bus existed arrives with every send closed,
+    // so an old beat still sounds the way its sender heard it.
+    expect(shared.project.instrumentSettings.fx).toEqual(DEFAULT_FX_SETTINGS)
   })
 
   it('lifts a payload through every migration step, not only the most recent one', async () => {
@@ -262,6 +278,24 @@ describe('share URL', () => {
     const missing = createInitialProjectState()
     missing.instrumentSettings = {
       bass: missing.instrumentSettings.bass,
+    } as typeof missing.instrumentSettings
+
+    for (const invalid of [outOfRange, missing]) {
+      const url = await createShareUrl(invalid, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('rejects a payload whose FX patch is missing or out of range', async () => {
+    const outOfRange = createInitialProjectState()
+    outOfRange.instrumentSettings.fx = { ...DEFAULT_FX_SETTINGS, stabSend: 400 }
+    const missing = createInitialProjectState()
+    missing.instrumentSettings = {
+      bass: missing.instrumentSettings.bass,
+      master: missing.instrumentSettings.master,
     } as typeof missing.instrumentSettings
 
     for (const invalid of [outOfRange, missing]) {

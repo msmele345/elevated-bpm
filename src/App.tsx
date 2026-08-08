@@ -21,9 +21,11 @@ import {
   lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './model/arc'
-import { bassParamSpec, type BassParamId } from './model/bass'
+import type { BassParamId } from './model/bass'
+import { deckParamSpec } from './model/deckParams'
 import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
-import { MASTER_PARAMS, masterParamSpec, type MasterParamId } from './model/master'
+import { FX_PARAMS, type FxParamId } from './model/fx'
+import { MASTER_PARAMS, type MasterParamId } from './model/master'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
   spotlightsTarget,
@@ -40,6 +42,7 @@ import {
   openingProjectState,
   resizeActivePatternNote,
   setBassParamValue,
+  setFxParamValue,
   setMasterParamValue,
   setTransportBpm,
   toggleActivePatternNoteStep,
@@ -63,6 +66,9 @@ import { ARC } from './lessons'
 // Long enough to coalesce a burst of step taps into one IndexedDB write,
 // short enough that a save has almost always landed before a refresh.
 const AUTOSAVE_DELAY_MS = 400
+
+/** Names the send group, so its five knobs are announced as one block. */
+const FX_GROUP_LABEL_ID = 'deck-fx-bus-label'
 
 export default function App() {
   // ProjectState is the single source of truth: pattern edits, transport
@@ -114,6 +120,7 @@ export default function App() {
   const stabLane = pattern.noteLanes.find((lane) => lane.id === 'stab')!
   const bassSettings = project.instrumentSettings.bass
   const masterSettings = project.instrumentSettings.master
+  const fxSettings = project.instrumentSettings.fx
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
 
@@ -276,6 +283,12 @@ export default function App() {
     engine.setMasterSettings(masterSettings)
   }, [masterSettings])
 
+  // And the FX bus: sends and the reverb mix ramp too, so opening a send while
+  // the loop runs fades the echo in rather than switching it on.
+  useEffect(() => {
+    engine.setFxSettings(fxSettings)
+  }, [fxSettings])
+
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
   // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
@@ -330,12 +343,17 @@ export default function App() {
     // Sound design is something you do to a running loop, so only motion over
     // playing audio counts toward a sweep goal. Read from the ref rather than
     // the state so this handler never has to change identity.
-    setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
   const handleMasterParamChange = useCallback((id: MasterParamId, value: number) => {
     setProject((p) => setMasterParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, masterParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  }, [])
+
+  const handleFxParamChange = useCallback((id: FxParamId, value: number) => {
+    setProject((p) => setFxParamValue(p, id, value))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
   const handleBpmChange = useCallback((next: number) => {
@@ -559,6 +577,24 @@ export default function App() {
                 value={masterSettings[param.id]}
                 spotlit={spotlitParams.includes(param.id)}
                 onChange={handleMasterParamChange}
+              />
+            ))}
+          </div>
+        </div>
+        {/* The send bus, grouped apart from the macros: three send levels and
+            the two controls shaping what they arrive into. */}
+        <div className="fx-bus">
+          <span className="fx-bus-name" id={FX_GROUP_LABEL_ID}>
+            Send FX · delay 1/8 dotted → reverb
+          </span>
+          <div className="knob-row fx-knobs" role="group" aria-labelledby={FX_GROUP_LABEL_ID}>
+            {FX_PARAMS.map((param) => (
+              <Knob
+                key={param.id}
+                spec={param}
+                value={fxSettings[param.id]}
+                spotlit={spotlitParams.includes(param.id)}
+                onChange={handleFxParamChange}
               />
             ))}
           </div>

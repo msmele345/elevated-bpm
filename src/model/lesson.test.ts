@@ -50,6 +50,18 @@ describe('parseLesson', () => {
     expect(lesson.goal).toEqual([{ type: 'paramSwept', param: 'cutoff', minTravel: 0.5 }])
   })
 
+  it('parses a paramSwept goal naming any knob on the deck, not only the bass synth’s', () => {
+    // The registry is deck-wide: a sound-design lesson can be written about the
+    // master macros or the FX bus without the goal vocabulary growing a case.
+    for (const param of ['filter', 'drive', 'stabSend', 'feedback']) {
+      const lesson = parseLesson({
+        ...validLesson,
+        goal: [{ type: 'paramSwept', param, minTravel: 0.5 }],
+      })
+      expect(lesson.goal).toEqual([{ type: 'paramSwept', param, minTravel: 0.5 }])
+    }
+  })
+
   it('rejects a paramSwept goal without a param or with unreachable travel', () => {
     const noParam = { ...validLesson, goal: [{ type: 'paramSwept', minTravel: 0.5 }] }
     expect(() => parseLesson(noParam)).toThrow(/param/)

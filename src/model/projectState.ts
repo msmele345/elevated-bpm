@@ -6,6 +6,13 @@ import {
   type BassSettings,
 } from './bass'
 import {
+  createFxSettings,
+  DEFAULT_FX_SETTINGS,
+  setFxParam,
+  type FxParamId,
+  type FxSettings,
+} from './fx'
+import {
   createMasterSettings,
   DEFAULT_MASTER_SETTINGS,
   setMasterParam,
@@ -27,8 +34,9 @@ import type { DrumLaneId, NoteLaneId, Pattern } from './types'
 
 // v2 grew the pattern to the full kit; v3 added the per-lane mute/solo mixer;
 // v4 added bass; v5 the sequenced stab note lane; v6 remembers which lesson of
-// the arc the user is on; v7 added the master-bus macros (filter, drive).
-export const PROJECT_STATE_VERSION = 7
+// the arc the user is on; v7 added the master-bus macros (filter, drive);
+// v8 added the shared FX bus and its per-instrument send levels.
+export const PROJECT_STATE_VERSION = 8
 
 /** Per-lesson progress; keyed by lesson id in the document. */
 export interface LessonProgress {
@@ -41,6 +49,8 @@ export interface InstrumentSettings {
   bass: BassSettings
   /** The master strip's macro filter and drive across the whole mix. */
   master: MasterSettings
+  /** The shared delay/reverb bus and the send level of each instrument into it. */
+  fx: FxSettings
 }
 
 export interface ProjectState {
@@ -67,7 +77,11 @@ export function createInitialProjectState(): ProjectState {
     patterns: [pattern],
     activePatternId: pattern.id,
     transport: { bpm: DEFAULT_BPM },
-    instrumentSettings: { bass: DEFAULT_BASS_SETTINGS, master: DEFAULT_MASTER_SETTINGS },
+    instrumentSettings: {
+      bass: DEFAULT_BASS_SETTINGS,
+      master: DEFAULT_MASTER_SETTINGS,
+      fx: DEFAULT_FX_SETTINGS,
+    },
     lessonProgress: {},
     prefs: {},
     mixer: {},
@@ -184,6 +198,21 @@ export function setMasterParamValue(
   }
 }
 
+/** Immutably set one FX control in the document, clamped to its range. */
+export function setFxParamValue(
+  state: ProjectState,
+  id: FxParamId,
+  value: number,
+): ProjectState {
+  return {
+    ...state,
+    instrumentSettings: {
+      ...state.instrumentSettings,
+      fx: setFxParam(state.instrumentSettings.fx, id, value),
+    },
+  }
+}
+
 /** Immutably set the transport BPM, clamped to the playable range. */
 export function setTransportBpm(state: ProjectState, bpm: number): ProjectState {
   return { ...state, transport: { ...state.transport, bpm: clampBpm(bpm) } }
@@ -259,32 +288,43 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
   // Each step lifts the document one version; they chain so an ancient save
   // reaches the current shape through the same path a recent one takes.
   if (doc.version === 0) {
-    return migrateV6ToV7(
-      migrateV5ToV6(
-        migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(migrateV0ToV1(doc))))),
+    return migrateV7ToV8(
+      migrateV6ToV7(
+        migrateV5ToV6(
+          migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(migrateV0ToV1(doc))))),
+        ),
       ),
     )
   }
   if (doc.version === 1) {
-    return migrateV6ToV7(
-      migrateV5ToV6(
-        migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(doc as ProjectStateV1)))),
+    return migrateV7ToV8(
+      migrateV6ToV7(
+        migrateV5ToV6(
+          migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(doc as ProjectStateV1)))),
+        ),
       ),
     )
   }
   if (doc.version === 2) {
-    return migrateV6ToV7(
-      migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(doc as ProjectStateV2)))),
+    return migrateV7ToV8(
+      migrateV6ToV7(
+        migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(doc as ProjectStateV2)))),
+      ),
     )
   }
   if (doc.version === 3) {
-    return migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(doc as ProjectStateV3))))
+    return migrateV7ToV8(
+      migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(doc as ProjectStateV3)))),
+    )
   }
   if (doc.version === 4) {
-    return migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(doc as ProjectStateV4)))
+    return migrateV7ToV8(migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(doc as ProjectStateV4))))
   }
-  if (doc.version === 5) return migrateV6ToV7(migrateV5ToV6(doc as ProjectStateV5))
-  if (doc.version === 6) return migrateV6ToV7(doc as ProjectStateV6)
+  if (doc.version === 5) {
+    return migrateV7ToV8(migrateV6ToV7(migrateV5ToV6(doc as ProjectStateV5)))
+  }
+  if (doc.version === 6) return migrateV7ToV8(migrateV6ToV7(doc as ProjectStateV6))
+  if (doc.version === 7) return migrateV7ToV8(doc as ProjectStateV7)
   if (doc.version === PROJECT_STATE_VERSION) return raw as ProjectState
   return null
 }
@@ -336,6 +376,15 @@ type ProjectStateV6 = Omit<ProjectState, 'version' | 'instrumentSettings'> & {
   instrumentSettings: InstrumentSettingsPreV7
 }
 
+/** Instrument patches before v8 had no FX bus: every voice ran dry to the master. */
+type InstrumentSettingsPreV8 = InstrumentSettingsPreV7 & { master: MasterSettings }
+
+/** v7 had the master macros, but no send bus behind them. */
+type ProjectStateV7 = Omit<ProjectState, 'version' | 'instrumentSettings'> & {
+  version: 7
+  instrumentSettings: InstrumentSettingsPreV8
+}
+
 function migrateV0ToV1(doc: object): ProjectStateV1 {
   const { pattern, bpm } = doc as ProjectStateV0
   return {
@@ -382,7 +431,7 @@ function migrateV5ToV6(doc: ProjectStateV5): ProjectStateV6 {
   return { ...doc, version: 6, activeLessonId: null }
 }
 
-function migrateV6ToV7(doc: ProjectStateV6): ProjectState {
+function migrateV6ToV7(doc: ProjectStateV6): ProjectStateV7 {
   return {
     ...doc,
     version: 7,
@@ -392,6 +441,21 @@ function migrateV6ToV7(doc: ProjectStateV6): ProjectState {
       ...doc.instrumentSettings,
       master: createMasterSettings(
         (doc.instrumentSettings as unknown as Record<string, unknown>).master,
+      ),
+    },
+  }
+}
+
+function migrateV7ToV8(doc: ProjectStateV7): ProjectState {
+  return {
+    ...doc,
+    version: 8,
+    // Every send closed, exactly as the master macros arrived neutral at v7: an
+    // upgraded document has to sound the way its owner left it.
+    instrumentSettings: {
+      ...doc.instrumentSettings,
+      fx: createFxSettings(
+        (doc.instrumentSettings as unknown as Record<string, unknown>).fx,
       ),
     },
   }

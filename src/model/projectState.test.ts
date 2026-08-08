@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BASS_PARAMS, DEFAULT_BASS_SETTINGS } from './bass'
+import { DEFAULT_FX_SETTINGS, FX_PARAMS } from './fx'
 import { DEFAULT_MASTER_SETTINGS, MASTER_PARAMS } from './master'
 import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
 import { createDemoPattern, createInitialPattern } from './pattern'
@@ -12,6 +13,7 @@ import {
   migrateProjectState,
   resizeActivePatternNote,
   setBassParamValue,
+  setFxParamValue,
   setMasterParamValue,
   setTransportBpm,
   cycleActivePatternStep,
@@ -35,6 +37,7 @@ describe('createInitialProjectState', () => {
     expect(state.instrumentSettings).toEqual({
       bass: DEFAULT_BASS_SETTINGS,
       master: DEFAULT_MASTER_SETTINGS,
+      fx: DEFAULT_FX_SETTINGS,
     })
     expect(state.prefs).toEqual({})
     // No lesson picked yet: the document follows the arc's own path until the
@@ -200,6 +203,25 @@ describe('setMasterParamValue', () => {
   })
 })
 
+describe('setFxParamValue', () => {
+  it('stores an FX value in instrumentSettings, clamped, without touching the other patches', () => {
+    const state = createInitialProjectState()
+    const sent = setFxParamValue(state, 'stabSend', 55)
+
+    expect(sent.instrumentSettings.fx.stabSend).toBe(55)
+    expect(sent.instrumentSettings.fx.drumSend).toBe(DEFAULT_FX_SETTINGS.drumSend)
+    expect(sent.instrumentSettings.bass).toBe(state.instrumentSettings.bass)
+    expect(sent.instrumentSettings.master).toBe(state.instrumentSettings.master)
+    expect(activePattern(sent)).toBe(activePattern(state))
+    expect(state.instrumentSettings.fx.stabSend).toBe(DEFAULT_FX_SETTINGS.stabSend)
+
+    const feedback = FX_PARAMS.find((param) => param.id === 'feedback')!
+    expect(setFxParamValue(state, 'feedback', 1e6).instrumentSettings.fx.feedback).toBe(
+      feedback.max,
+    )
+  })
+})
+
 describe('mixer', () => {
   it('starts with an empty mixer — every lane audible', () => {
     expect(createInitialProjectState().mixer).toEqual({})
@@ -269,12 +291,58 @@ describe('migrateProjectState', () => {
       patterns: [pattern],
       activePatternId: pattern.id,
       transport: { bpm: 125 },
-      instrumentSettings: { bass: DEFAULT_BASS_SETTINGS, master: DEFAULT_MASTER_SETTINGS },
+      instrumentSettings: {
+        bass: DEFAULT_BASS_SETTINGS,
+        master: DEFAULT_MASTER_SETTINGS,
+        fx: DEFAULT_FX_SETTINGS,
+      },
       lessonProgress: {},
       prefs: {},
       mixer: {},
       activeLessonId: null,
     })
+  })
+
+  it('gives a v7 document (no FX bus) closed sends, keeping its beat, patches and earned lessons', () => {
+    const v7 = {
+      ...updateLessonProgress(
+        setMasterParamValue(
+          setTransportBpm(setBassParamValue(createInitialProjectState(), 'cutoff', 2400), 126),
+          'drive',
+          35,
+        ),
+        'four-on-the-floor',
+        { completed: true, dismissed: true },
+      ),
+      version: 7,
+    } as Record<string, unknown>
+    const settings = v7.instrumentSettings as Record<string, unknown>
+    delete settings.fx
+
+    const migrated = migrateProjectState(JSON.parse(JSON.stringify(v7)))!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    // Sends closed: an upgraded document has to sound exactly as it did before.
+    expect(migrated.instrumentSettings.fx).toEqual(DEFAULT_FX_SETTINGS)
+    expect(migrated.instrumentSettings.bass.cutoff).toBe(2400)
+    expect(migrated.instrumentSettings.master.drive).toBe(35)
+    expect(migrated.transport.bpm).toBe(126)
+    expect(migrated.lessonProgress['four-on-the-floor']).toEqual({
+      completed: true,
+      dismissed: true,
+    })
+  })
+
+  it('repairs a hand-edited FX patch on the way in rather than handing the bus a bad value', () => {
+    const v7 = { ...createInitialProjectState(), version: 7 } as Record<string, unknown>
+    ;(v7.instrumentSettings as Record<string, unknown>).fx = { bassSend: 1e6 }
+
+    const migrated = migrateProjectState(JSON.parse(JSON.stringify(v7)))!
+
+    expect(migrated.instrumentSettings.fx.bassSend).toBe(
+      FX_PARAMS.find((param) => param.id === 'bassSend')!.max,
+    )
+    expect(migrated.instrumentSettings.fx.drumSend).toBe(DEFAULT_FX_SETTINGS.drumSend)
   })
 
   it('gives a v6 document (no master macros) the neutral master patch, keeping its bass patch', () => {

@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const recorded = vi.hoisted(() => ({
   stepRow: [] as Record<string, unknown>[],
   noteRow: [] as Record<string, unknown>[],
+  panel: [] as { name: string; props: Record<string, unknown> }[],
 }))
 
 vi.mock('./components/StepRow', async () => {
@@ -55,6 +56,7 @@ vi.mock('./audio/engine', async () => {
     setMixer: () => undefined,
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
+    setFxSettings: () => undefined,
     setBpm: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
@@ -65,6 +67,34 @@ vi.mock('./audio/engine', async () => {
     getSpectrum: () => null,
     getCurrentStep: () => -1,
     getTransportTicks: () => -1,
+  }
+})
+
+/**
+ * The panels themselves, not just their lanes: a knob move that rebuilt the
+ * bass panel would rebuild its three knobs with it.
+ */
+vi.mock('./components/BassPanel', async () => {
+  const actual = await vi.importActual<typeof import('./components/BassPanel')>(
+    './components/BassPanel',
+  )
+  return {
+    BassPanel: (props: Record<string, unknown>) => {
+      recorded.panel.push({ name: 'BassPanel', props })
+      return createElement(actual.BassPanel as never, props as never)
+    },
+  }
+})
+
+vi.mock('./components/StabKeyboard', async () => {
+  const actual = await vi.importActual<typeof import('./components/StabKeyboard')>(
+    './components/StabKeyboard',
+  )
+  return {
+    StabKeyboard: (props: Record<string, unknown>) => {
+      recorded.panel.push({ name: 'StabKeyboard', props })
+      return createElement(actual.StabKeyboard as never, props as never)
+    },
   }
 })
 
@@ -98,9 +128,26 @@ function changedPropsPerLane(records: Records, mark: number): Map<string, string
   return changed
 }
 
+/** The same comparison as above, for whole panels rather than single lanes. */
+function changedPropsPerPanel(mark: number): Map<string, string[]> {
+  const before = new Map<string, Record<string, unknown>>()
+  for (const { name, props } of recorded.panel.slice(0, mark)) before.set(name, props)
+
+  const changed = new Map<string, string[]>()
+  for (const name of before.keys()) changed.set(name, [])
+  for (const { name, props } of recorded.panel.slice(mark)) {
+    const previous = before.get(name)
+    expect(previous, `panel ${name} rendered without ever rendering before`).toBeDefined()
+    const keys = Object.keys(props).filter((key) => !Object.is(props[key], previous![key]))
+    changed.set(name, [...new Set([...(changed.get(name) ?? []), ...keys])])
+  }
+  return changed
+}
+
 beforeEach(() => {
   recorded.stepRow.length = 0
   recorded.noteRow.length = 0
+  recorded.panel.length = 0
   vi.stubGlobal('indexedDB', indexedDB)
   vi.stubGlobal('requestAnimationFrame', () => 1)
   vi.stubGlobal('cancelAnimationFrame', () => undefined)
@@ -138,6 +185,41 @@ describe('deck render cost', () => {
     // Five drum lanes and two note lanes were on the deck before the knob moved.
     expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(5)
     expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
+  })
+
+  it('leaves every drum and note lane on identical props when an FX knob moves mid-playback', async () => {
+    // The FX knobs are new props flowing through App onto the Master strip.
+    // A send dragged over a running loop must not rebuild the instrument it is
+    // sending — that is the dropped frame the deck is not allowed to have.
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const drumMark = recorded.stepRow.length
+    const noteMark = recorded.noteRow.length
+    const panelMark = recorded.panel.length
+    const drumSend = screen.getByRole('slider', { name: 'Drum Send' })
+    fireEvent.keyDown(drumSend, { key: 'ArrowUp' })
+    fireEvent.keyDown(drumSend, { key: 'ArrowUp' })
+
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, drumMark)) {
+      expect(changed, `drum lane ${id}`).toEqual([])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, noteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
+    for (const [name, changed] of changedPropsPerPanel(panelMark)) {
+      expect(changed, `panel ${name}`).toEqual([])
+    }
+    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(5)
+    expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
+    // The bass panel and the stab keyboard were both on the deck beforehand.
+    expect(changedPropsPerPanel(panelMark).size).toBe(2)
   })
 
   it('leaves the other lanes on identical props when one lane is edited', async () => {

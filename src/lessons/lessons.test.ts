@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { detectLessonCompletion } from '../model/arc'
-import { BASS_PARAMS } from '../model/bass'
+import { DECK_PARAM_IDS } from '../model/deckParams'
 import {
   isGoalMet,
   spotlitParamIds,
@@ -320,7 +320,7 @@ describe('the curriculum arc', () => {
   it('names only knobs the deck actually has', () => {
     // A spotlight or goal pointing at a knob that does not exist would be a
     // lesson the user can never complete and never see highlighted.
-    const knobIds = new Set(BASS_PARAMS.map((param) => param.id as string))
+    const knobIds = DECK_PARAM_IDS
     for (const lesson of ARC) {
       for (const paramId of spotlitParamIds(lesson)) expect(knobIds).toContain(paramId)
       for (const goal of lesson.goal) {

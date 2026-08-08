@@ -1,4 +1,4 @@
-import { clampParam, type ParamSpec } from './knob'
+import { createPatch, setPatchParam, specOf, type ParamSpec } from './knob'
 
 /**
  * The bass instrument's patch: the 303 vocabulary this phase teaches — filter
@@ -33,7 +33,7 @@ export const BASS_PARAMS: ReadonlyArray<ParamSpec & { id: BassParamId }> = [
 
 /** The spec behind one bass knob — its range, default, and taper. */
 export function bassParamSpec(id: BassParamId): ParamSpec {
-  return BASS_PARAMS.find((param) => param.id === id)!
+  return specOf(BASS_PARAMS, id)
 }
 
 export const DEFAULT_BASS_SETTINGS: BassSettings = {
@@ -48,18 +48,10 @@ export function setBassParam(
   id: BassParamId,
   value: number,
 ): BassSettings {
-  return { ...settings, [id]: clampParam(bassParamSpec(id), value) }
+  return setPatchParam(BASS_PARAMS, settings, id, value)
 }
 
-/**
- * Build a patch from whatever was persisted (or nothing). Every knob is
- * clamped or defaulted, so a document written by an older build — or a
- * hand-edited one — can never hand the synth an out-of-range value.
- */
+/** Build a patch from whatever was persisted (or nothing), repairing it. */
 export function createBassSettings(saved: unknown): BassSettings {
-  const raw = (saved ?? {}) as Partial<Record<BassParamId, unknown>>
-  return BASS_PARAMS.reduce<BassSettings>((settings, param) => {
-    const value = raw[param.id]
-    return typeof value === 'number' ? setBassParam(settings, param.id, value) : settings
-  }, DEFAULT_BASS_SETTINGS)
+  return createPatch(BASS_PARAMS, DEFAULT_BASS_SETTINGS, saved)
 }

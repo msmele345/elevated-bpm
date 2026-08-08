@@ -19,6 +19,7 @@ vi.mock('./audio/engine', async () => {
     setMixer: () => undefined,
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
+    setFxSettings: () => undefined,
     setBpm: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),

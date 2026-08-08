@@ -47,4 +47,26 @@ describe('createAutosaver', () => {
     createAutosaver(save, 500).flush()
     expect(save).not.toHaveBeenCalled()
   })
+
+  it('cancel drops a pending save so it never fires', () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const autosaver = createAutosaver(save, 500)
+
+    autosaver.schedule(createInitialProjectState())
+    autosaver.cancel()
+
+    vi.advanceTimersByTime(1000)
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it('a flush after cancel does not resurrect the dropped state', () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const autosaver = createAutosaver(save, 500)
+
+    autosaver.schedule(createInitialProjectState())
+    autosaver.cancel()
+    autosaver.flush()
+
+    expect(save).not.toHaveBeenCalled()
+  })
 })

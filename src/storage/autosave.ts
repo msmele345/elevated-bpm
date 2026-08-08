@@ -11,6 +11,13 @@ export interface Autosaver {
   schedule(state: ProjectState): void
   /** Save any pending state now (e.g. on pagehide, before the timer fires). */
   flush(): void
+  /**
+   * Drop any pending save without writing it. For teardown: a debounced write
+   * must not outlive the deck that scheduled it and fire into a torn-down
+   * world. Durability on the paths that matter — refresh, tab close — is
+   * already covered by `flush`.
+   */
+  cancel(): void
 }
 
 export function createAutosaver(
@@ -37,6 +44,11 @@ export function createAutosaver(
     flush() {
       if (timer !== null) clearTimeout(timer)
       fire()
+    },
+    cancel() {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+      pending = null
     },
   }
 }

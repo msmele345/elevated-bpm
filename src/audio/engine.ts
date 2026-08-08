@@ -12,14 +12,22 @@ import {
   masterBusParams,
   type MasterSettings,
 } from '../model/master'
-import type { Mixer } from '../model/mixer'
+import { laneIsAudible, type Mixer } from '../model/mixer'
 import { midiToFrequency, noteEventsAtStep } from '../model/note'
 import { SCOPE_SPEC } from '../model/scope'
+import {
+  CURATED_SAMPLE_SOURCE,
+  createPadSoundingLanes,
+  createSamplerSettings,
+  isPadLaneId,
+  type SamplerSettings,
+} from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
-import { STEP_COUNT, type DrumLaneId, type Pattern } from '../model/types'
+import { STEP_COUNT, type LaneId, type PadLaneId, type Pattern } from '../model/types'
 import { voiceStep } from './hits'
-import { KIT_SAMPLES } from './kit'
+import { KIT_SAMPLES, PAD_SAMPLES } from './kit'
+import { triggerPadVoice } from './padVoice'
 import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -38,6 +46,7 @@ export const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 let bpm = DEFAULT_BPM
 let currentPattern: Pattern | null = null
 let currentMixer: Mixer = {}
+let currentSamplerSettings: SamplerSettings = createSamplerSettings()
 let repeatScheduled = false
 
 /**
@@ -48,7 +57,7 @@ interface Voice {
   player: Tone.Player
   gain: Tone.Gain
 }
-let voices: Record<DrumLaneId, Voice> | null = null
+let voices: Record<LaneId, Voice> | null = null
 let samplesLoaded: Promise<void> | null = null
 
 /**
@@ -101,7 +110,7 @@ interface SendTap {
   send: Tone.Gain
 }
 
-type SendTapId = 'drums' | 'bass' | 'stab'
+type SendTapId = 'drums' | 'bass' | 'stab' | 'sampler'
 
 /**
  * The shared FX bus: sends sum into one input, run through the delay and then
@@ -130,6 +139,8 @@ let analyser: Tone.Analyser | null = null
 // the same source-aware hold boundary.
 const stabNoteHolds = createStabNoteHolds()
 const stabSoundingNotes = createStabSoundingNotes()
+const heldPadSources = new Set<string>()
+const padSoundingLanes = createPadSoundingLanes()
 
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {
@@ -139,6 +150,11 @@ export function setPattern(pattern: Pattern): void {
 /** Point the scheduler at the latest mute/solo state. Cheap; call on every edit. */
 export function setMixer(mixer: Mixer): void {
   currentMixer = mixer
+}
+
+/** Point pad hits at the latest regions and Tune values. Cheap; call on every edit. */
+export function setSamplerSettings(settings: SamplerSettings): void {
+  currentSamplerSettings = settings
 }
 
 /**
@@ -182,6 +198,7 @@ export function setFxSettings(next: FxSettings): void {
   fx.taps.drums.send.gain.rampTo(bus.drumSend, 0.02)
   fx.taps.bass.send.gain.rampTo(bus.bassSend, 0.02)
   fx.taps.stab.send.gain.rampTo(bus.stabSend, 0.02)
+  fx.taps.sampler.send.gain.rampTo(bus.samplerSend, 0.02)
   fx.delay.feedback.rampTo(bus.feedback, 0.02)
   fx.reverb.wet.rampTo(bus.reverbWet, 0.02)
 }
@@ -284,6 +301,7 @@ function createFxBus(dry: Tone.ToneAudioNode): FxBus {
       drums: createSendTap(dry, input),
       bass: createSendTap(dry, input),
       stab: createSendTap(dry, input),
+      sampler: createSendTap(dry, input),
     },
   }
 }
@@ -331,15 +349,17 @@ function ensureVoices(): void {
   // Every instrument reaches the master through its own send tap, so each one
   // is already on the FX bus rather than being retrofitted onto it later.
   const taps = (fx = createFxBus(master.input)).taps
+  const sampleUrls: Record<LaneId, string> = { ...KIT_SAMPLES, ...PAD_SAMPLES }
   voices = Object.fromEntries(
-    (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(([laneId, url]) => {
-      // One send for the whole kit: the lane gains sum into the drum tap, so a
-      // lane's accent velocity still rides through to its echo.
-      const gain = new Tone.Gain(1).connect(taps.drums.input)
+    (Object.entries(sampleUrls) as [LaneId, string][]).map(([laneId, url]) => {
+      // One send for the whole kit and one for the sampler. Per-lane accent
+      // gains sit before those taps, so velocity rides through to the echo.
+      const destination = isPadLaneId(laneId) ? taps.sampler.input : taps.drums.input
+      const gain = new Tone.Gain(1).connect(destination)
       const player = new Tone.Player(url).connect(gain)
       return [laneId, { player, gain }]
     }),
-  ) as Record<DrumLaneId, Voice>
+  ) as Record<LaneId, Voice>
   bass = createBassVoice(taps.bass.input)
   // Live and sequenced stabs share the tap, so both are on the send.
   stab = createStabVoices(() => createStabSynth(taps.stab.input))
@@ -407,6 +427,48 @@ export function releaseStabNote(source: string): void {
   stabSoundingNotes.releaseLive(release.midi)
 }
 
+/** Fire a one-shot pad from pointer, keyboard, or a future MIDI source. */
+export function attackPad(inputSourceId: string, padId: PadLaneId): void {
+  if (heldPadSources.has(inputSourceId)) return
+  heldPadSources.add(inputSourceId)
+  // Unlike the synthesized stabs, a pad cannot start until its buffer exists.
+  // Queue the first gesture behind the shared preload instead of throwing it
+  // away while Tone.Player is still loading.
+  void unlockAudio().then(() => {
+    if (!laneIsAudible(padId, currentMixer)) return
+    const now = Tone.immediate()
+    triggerPlayablePad(padId, 1, now, now)
+  })
+}
+
+/** Release an input source so its next press can retrigger; one-shots keep ringing. */
+export function releasePad(inputSourceId: string): void {
+  heldPadSources.delete(inputSourceId)
+}
+
+/** Keep live and sequenced pad hits on the same playable-source boundary. */
+function triggerPlayablePad(
+  padId: PadLaneId,
+  gain: number,
+  time: number,
+  currentTime: number,
+): void {
+  const voice = voices?.[padId]
+  const pad = currentSamplerSettings[padId]
+  // The tracer has one shipped source. Later intake replaces the Player's
+  // buffer before assigning other source ids; until then an unknown id is
+  // metadata without playable audio and must stay silent.
+  if (!voice || pad.region?.sourceId !== CURATED_SAMPLE_SOURCE.id) return
+  for (const window of triggerPadVoice(voice, pad, gain, time, currentTime)) {
+    padSoundingLanes.schedule(padId, window.startsAt, window.endsAt)
+  }
+}
+
+/** Current live + sequenced pad ids, read by the panel's rAF loop. */
+export function getSoundingPadIds(): readonly PadLaneId[] {
+  return padSoundingLanes.atTime(Tone.immediate())
+}
+
 /** Current live + sequenced stab pitches, read by the keyboard's rAF loop. */
 export function getSoundingStabNotes(): readonly number[] {
   return stabSoundingNotes.atTime(Tone.immediate())
@@ -442,8 +504,12 @@ export async function play(): Promise<void> {
       // sample-locked; each fires at its own accent velocity.
       for (const hit of starts) {
         const voice = voices[hit.laneId]
-        voice.gain.gain.setValueAtTime(hit.gain, time)
-        voice.player.start(time)
+        if (isPadLaneId(hit.laneId)) {
+          triggerPlayablePad(hit.laneId, hit.gain, time, Tone.immediate())
+        } else {
+          voice.gain.gain.setValueAtTime(hit.gain, time)
+          voice.player.start(time)
+        }
       }
       // Every note lane resolves from this same scheduled 16th as the drums.
       // Bass uses its monophonic voice. Programmed stabs use a separate

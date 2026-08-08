@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { audibleLaneIds, type Mixer } from './mixer'
-import type { DrumLaneId } from './types'
+import { audibleLaneIds, laneIsAudible, type Mixer } from './mixer'
+import type { DrumLaneId, LaneId } from './types'
 
 const ALL: DrumLaneId[] = ['kick', 'snare', 'closedHat', 'openHat', 'perc']
 
@@ -25,5 +25,24 @@ describe('audibleLaneIds', () => {
   it('solo overrides mute: a lane that is both muted and soloed still sounds', () => {
     const mixer: Mixer = { kick: { muted: true, soloed: true } }
     expect(audibleLaneIds(ALL, mixer)).toEqual(['kick'])
+  })
+
+  it('resolves drums and pads against one global solo rule', () => {
+    const lanes: LaneId[] = [...ALL, 'pad1', 'pad2', 'pad3', 'pad4']
+
+    expect(audibleLaneIds(lanes, { kick: { muted: false, soloed: true } })).toEqual([
+      'kick',
+    ])
+    expect(audibleLaneIds(lanes, { pad3: { muted: false, soloed: true } })).toEqual([
+      'pad3',
+    ])
+  })
+})
+
+describe('laneIsAudible', () => {
+  it('applies the global mixer rule to a live pad before it reaches its voice', () => {
+    expect(laneIsAudible('pad1', { pad1: { muted: true, soloed: false } })).toBe(false)
+    expect(laneIsAudible('pad1', { kick: { muted: false, soloed: true } })).toBe(false)
+    expect(laneIsAudible('pad1', { pad1: { muted: true, soloed: true } })).toBe(true)
   })
 })

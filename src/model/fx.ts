@@ -12,7 +12,13 @@ import { MIN_BPM } from './transport'
  * the bus existed.
  */
 
-export type FxParamId = 'drumSend' | 'bassSend' | 'stabSend' | 'feedback' | 'reverb'
+export type FxParamId =
+  | 'drumSend'
+  | 'bassSend'
+  | 'stabSend'
+  | 'samplerSend'
+  | 'feedback'
+  | 'reverb'
 
 export interface FxSettings {
   /** How much of the drum kit is sent to the FX bus, 0 (dry) to 100 (%). */
@@ -21,6 +27,8 @@ export interface FxSettings {
   bassSend: number
   /** How much of the stabs are sent to the FX bus, 0 (dry) to 100 (%). */
   stabSend: number
+  /** How much of the sampler is sent independently to the FX bus. */
+  samplerSend: number
   /** How much of the delay's output feeds back in — the length of the trail. */
   feedback: number
   /** How much reverb sits on the repeats, 0 (crisp echo) to 100 (%). */
@@ -31,6 +39,7 @@ export const FX_PARAMS: ReadonlyArray<ParamSpec & { id: FxParamId }> = [
   { id: 'drumSend', label: 'Drum Send', min: 0, max: 100, default: 0, unit: '%' },
   { id: 'bassSend', label: 'Bass Send', min: 0, max: 100, default: 0, unit: '%' },
   { id: 'stabSend', label: 'Stab Send', min: 0, max: 100, default: 0, unit: '%' },
+  { id: 'samplerSend', label: 'Sampler Send', min: 0, max: 100, default: 0, unit: '%' },
   // The delay and reverb rest somewhere musical rather than at zero: with every
   // send closed they are inaudible either way, so the first send a user opens
   // should already sound like an effect instead of a bypass.
@@ -42,6 +51,7 @@ export const DEFAULT_FX_SETTINGS: FxSettings = {
   drumSend: 0,
   bassSend: 0,
   stabSend: 0,
+  samplerSend: 0,
   feedback: 40,
   reverb: 40,
 }
@@ -67,6 +77,7 @@ export interface FxBusParams {
   drumSend: number
   bassSend: number
   stabSend: number
+  samplerSend: number
   /** Delay feedback coefficient, 0..1. */
   feedback: number
   /** Dry/wet of the reverb stage sitting after the delay. */
@@ -99,6 +110,7 @@ export function fxBusParams(settings: FxSettings): FxBusParams {
     drumSend: send(settings.drumSend, 'drumSend'),
     bassSend: send(settings.bassSend, 'bassSend'),
     stabSend: send(settings.stabSend, 'stabSend'),
+    samplerSend: send(settings.samplerSend, 'samplerSend'),
     feedback: amount(settings.feedback, fxParamSpec('feedback')) * MAX_FEEDBACK,
     reverbWet: amount(settings.reverb, fxParamSpec('reverb')) * MAX_REVERB_WET,
   }

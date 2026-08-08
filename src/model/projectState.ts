@@ -21,9 +21,25 @@ import {
 } from './master'
 import type { LaneMix, Mixer } from './mixer'
 import { resizeNoteStep, toggleNoteStep, transposeNoteStep, withNoteLanes } from './note'
-import { createDemoPattern, createInitialPattern, cycleStep, withFullKit } from './pattern'
+import {
+  createDemoPattern,
+  createInitialPattern,
+  cycleStep,
+  withFullKit,
+  withPadLanes,
+} from './pattern'
+import {
+  CURATED_SAMPLE_SOURCE,
+  SAMPLER_PARAMS,
+  assignSourceToPad,
+  createSamplerSettings,
+  setPadTune,
+  type SampleSource,
+  type SamplerParamId,
+  type SamplerSettings,
+} from './sampler'
 import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
-import type { DrumLaneId, NoteLaneId, Pattern } from './types'
+import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 
 /**
  * ProjectState is the single versioned state document (see
@@ -35,8 +51,9 @@ import type { DrumLaneId, NoteLaneId, Pattern } from './types'
 // v2 grew the pattern to the full kit; v3 added the per-lane mute/solo mixer;
 // v4 added bass; v5 the sequenced stab note lane; v6 remembers which lesson of
 // the arc the user is on; v7 added the master-bus macros (filter, drive);
-// v8 added the shared FX bus and its per-instrument send levels.
-export const PROJECT_STATE_VERSION = 8
+// v8 added the shared FX bus and its per-instrument send levels; v9 adds the
+// sampler's source metadata, pad lanes and pad settings.
+export const PROJECT_STATE_VERSION = 9
 
 /** Per-lesson progress; keyed by lesson id in the document. */
 export interface LessonProgress {
@@ -51,6 +68,8 @@ export interface InstrumentSettings {
   master: MasterSettings
   /** The shared delay/reverb bus and the send level of each instrument into it. */
   fx: FxSettings
+  /** Four fixed sampler pads: source region, Tune, future fit target, and name. */
+  sampler: SamplerSettings
 }
 
 export interface ProjectState {
@@ -59,6 +78,8 @@ export interface ProjectState {
   activePatternId: string
   transport: TransportSettings
   instrumentSettings: InstrumentSettings
+  /** Audio-source metadata only; sample bytes live outside this document. */
+  sources: SampleSource[]
   lessonProgress: Record<string, LessonProgress>
   prefs: Record<string, unknown>
   /** Per-lane mute/solo. Absent lanes are audible and un-soloed. */
@@ -81,7 +102,9 @@ export function createInitialProjectState(): ProjectState {
       bass: DEFAULT_BASS_SETTINGS,
       master: DEFAULT_MASTER_SETTINGS,
       fx: DEFAULT_FX_SETTINGS,
+      sampler: createSamplerSettings(),
     },
+    sources: [CURATED_SAMPLE_SOURCE],
     lessonProgress: {},
     prefs: {},
     mixer: {},
@@ -117,7 +140,7 @@ export function activePattern(state: ProjectState): Pattern {
 /** Immutably advance one step of the active pattern (off → on → accent → off). */
 export function cycleActivePatternStep(
   state: ProjectState,
-  laneId: DrumLaneId,
+  laneId: LaneId,
   stepIndex: number,
 ): ProjectState {
   return {
@@ -213,6 +236,39 @@ export function setFxParamValue(
   }
 }
 
+/** Assign a source already owned by the document to one sampler pad. */
+export function assignSourceToSamplerPad(
+  state: ProjectState,
+  padId: PadLaneId,
+  sourceId: string,
+): ProjectState {
+  const source = state.sources.find((candidate) => candidate.id === sourceId)
+  if (!source) return state
+  return {
+    ...state,
+    instrumentSettings: {
+      ...state.instrumentSettings,
+      sampler: assignSourceToPad(state.instrumentSettings.sampler, padId, source),
+    },
+  }
+}
+
+/** Immutably set one uniquely named pad Tune knob in the document. */
+export function setSamplerParamValue(
+  state: ProjectState,
+  id: SamplerParamId,
+  value: number,
+): ProjectState {
+  const padId = SAMPLER_PARAMS.find((param) => param.id === id)!.padId
+  return {
+    ...state,
+    instrumentSettings: {
+      ...state.instrumentSettings,
+      sampler: setPadTune(state.instrumentSettings.sampler, padId, value),
+    },
+  }
+}
+
 /** Immutably set the transport BPM, clamped to the playable range. */
 export function setTransportBpm(state: ProjectState, bpm: number): ProjectState {
   return { ...state, transport: { ...state.transport, bpm: clampBpm(bpm) } }
@@ -257,7 +313,7 @@ const AUDIBLE: LaneMix = { muted: false, soloed: false }
 /** Immutably flip one field of one lane's mixer strip. */
 function updateLaneMix(
   state: ProjectState,
-  laneId: DrumLaneId,
+  laneId: LaneId,
   patch: Partial<LaneMix>,
 ): ProjectState {
   const current = state.mixer[laneId] ?? AUDIBLE
@@ -268,12 +324,12 @@ function updateLaneMix(
 }
 
 /** Immutably toggle a lane's mute. */
-export function toggleLaneMute(state: ProjectState, laneId: DrumLaneId): ProjectState {
+export function toggleLaneMute(state: ProjectState, laneId: LaneId): ProjectState {
   return updateLaneMix(state, laneId, { muted: !(state.mixer[laneId]?.muted ?? false) })
 }
 
 /** Immutably toggle a lane's solo. */
-export function toggleLaneSolo(state: ProjectState, laneId: DrumLaneId): ProjectState {
+export function toggleLaneSolo(state: ProjectState, laneId: LaneId): ProjectState {
   return updateLaneMix(state, laneId, { soloed: !(state.mixer[laneId]?.soloed ?? false) })
 }
 
@@ -287,52 +343,36 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
   const doc = raw as { version?: unknown }
   // Each step lifts the document one version; they chain so an ancient save
   // reaches the current shape through the same path a recent one takes.
-  if (doc.version === 0) {
-    return migrateV7ToV8(
-      migrateV6ToV7(
-        migrateV5ToV6(
-          migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(migrateV0ToV1(doc))))),
-        ),
-      ),
-    )
+  switch (doc.version) {
+    case 0:
+      return migrateProjectState(migrateV0ToV1(doc))
+    case 1:
+      return migrateProjectState(migrateV1ToV2(doc as ProjectStateV1))
+    case 2:
+      return migrateProjectState(migrateV2ToV3(doc as ProjectStateV2))
+    case 3:
+      return migrateProjectState(migrateV3ToV4(doc as ProjectStateV3))
+    case 4:
+      return migrateProjectState(migrateV4ToV5(doc as ProjectStateV4))
+    case 5:
+      return migrateProjectState(migrateV5ToV6(doc as ProjectStateV5))
+    case 6:
+      return migrateProjectState(migrateV6ToV7(doc as ProjectStateV6))
+    case 7:
+      return migrateProjectState(migrateV7ToV8(doc as ProjectStateV7))
+    case 8:
+      return migrateV8ToV9(doc as ProjectStateV8)
+    case PROJECT_STATE_VERSION:
+      return raw as ProjectState
+    default:
+      return null
   }
-  if (doc.version === 1) {
-    return migrateV7ToV8(
-      migrateV6ToV7(
-        migrateV5ToV6(
-          migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(migrateV1ToV2(doc as ProjectStateV1)))),
-        ),
-      ),
-    )
-  }
-  if (doc.version === 2) {
-    return migrateV7ToV8(
-      migrateV6ToV7(
-        migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(migrateV2ToV3(doc as ProjectStateV2)))),
-      ),
-    )
-  }
-  if (doc.version === 3) {
-    return migrateV7ToV8(
-      migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(migrateV3ToV4(doc as ProjectStateV3)))),
-    )
-  }
-  if (doc.version === 4) {
-    return migrateV7ToV8(migrateV6ToV7(migrateV5ToV6(migrateV4ToV5(doc as ProjectStateV4))))
-  }
-  if (doc.version === 5) {
-    return migrateV7ToV8(migrateV6ToV7(migrateV5ToV6(doc as ProjectStateV5)))
-  }
-  if (doc.version === 6) return migrateV7ToV8(migrateV6ToV7(doc as ProjectStateV6))
-  if (doc.version === 7) return migrateV7ToV8(doc as ProjectStateV7)
-  if (doc.version === PROJECT_STATE_VERSION) return raw as ProjectState
-  return null
 }
 
 /** Fields shared by every document version, before the version-specific bits. */
 type ProjectStateBase = Omit<
   ProjectState,
-  'version' | 'mixer' | 'instrumentSettings' | 'activeLessonId'
+  'version' | 'mixer' | 'instrumentSettings' | 'activeLessonId' | 'sources'
 > & {
   instrumentSettings: Record<string, unknown>
 }
@@ -361,17 +401,17 @@ interface InstrumentSettingsPreV7 {
 /** v4 added the bass lane and synth patch, but no stab lane yet. */
 type ProjectStateV4 = Omit<
   ProjectState,
-  'version' | 'activeLessonId' | 'instrumentSettings'
+  'version' | 'activeLessonId' | 'instrumentSettings' | 'sources'
 > & { version: 4; instrumentSettings: InstrumentSettingsPreV7 }
 
 /** v5 had every instrument, but the arc was a fixed order with no place to be on it. */
 type ProjectStateV5 = Omit<
   ProjectState,
-  'version' | 'activeLessonId' | 'instrumentSettings'
+  'version' | 'activeLessonId' | 'instrumentSettings' | 'sources'
 > & { version: 5; instrumentSettings: InstrumentSettingsPreV7 }
 
 /** v6 knew where the user was on the arc, but the main out had no macros yet. */
-type ProjectStateV6 = Omit<ProjectState, 'version' | 'instrumentSettings'> & {
+type ProjectStateV6 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sources'> & {
   version: 6
   instrumentSettings: InstrumentSettingsPreV7
 }
@@ -380,9 +420,16 @@ type ProjectStateV6 = Omit<ProjectState, 'version' | 'instrumentSettings'> & {
 type InstrumentSettingsPreV8 = InstrumentSettingsPreV7 & { master: MasterSettings }
 
 /** v7 had the master macros, but no send bus behind them. */
-type ProjectStateV7 = Omit<ProjectState, 'version' | 'instrumentSettings'> & {
+type ProjectStateV7 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sources'> & {
   version: 7
   instrumentSettings: InstrumentSettingsPreV8
+}
+
+/** v8 had the complete FX patch, but no sampler document fields yet. */
+type InstrumentSettingsPreV9 = Omit<InstrumentSettings, 'sampler'>
+type ProjectStateV8 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sources'> & {
+  version: 8
+  instrumentSettings: InstrumentSettingsPreV9
 }
 
 function migrateV0ToV1(doc: object): ProjectStateV1 {
@@ -446,7 +493,7 @@ function migrateV6ToV7(doc: ProjectStateV6): ProjectStateV7 {
   }
 }
 
-function migrateV7ToV8(doc: ProjectStateV7): ProjectState {
+function migrateV7ToV8(doc: ProjectStateV7): ProjectStateV8 {
   return {
     ...doc,
     version: 8,
@@ -456,6 +503,22 @@ function migrateV7ToV8(doc: ProjectStateV7): ProjectState {
       ...doc.instrumentSettings,
       fx: createFxSettings(
         (doc.instrumentSettings as unknown as Record<string, unknown>).fx,
+      ),
+    },
+  }
+}
+
+function migrateV8ToV9(doc: ProjectStateV8): ProjectState {
+  return {
+    ...doc,
+    version: 9,
+    patterns: doc.patterns.map(withPadLanes),
+    sources: [CURATED_SAMPLE_SOURCE],
+    instrumentSettings: {
+      ...doc.instrumentSettings,
+      fx: createFxSettings(doc.instrumentSettings.fx),
+      sampler: createSamplerSettings(
+        (doc.instrumentSettings as unknown as Record<string, unknown>).sampler,
       ),
     },
   }

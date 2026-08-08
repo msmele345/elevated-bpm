@@ -11,6 +11,14 @@ import { MASTER_PARAMS } from './master'
 import type { Mixer } from './mixer'
 import { MAX_NOTE_LENGTH, MIN_NOTE_LENGTH, NOTE_LANES } from './note'
 import { KIT_LANES } from './pattern'
+import {
+  MAX_FIT_STEPS,
+  MIN_FIT_STEPS,
+  PAD_LANES,
+  SAMPLER_PARAMS,
+  type SampleSource,
+  type SamplerSettings,
+} from './sampler'
 import { STEP_COUNT, type Pattern } from './types'
 import { MAX_BPM, MIN_BPM } from './transport'
 
@@ -48,6 +56,7 @@ function projectForSharing(project: ProjectState): ProjectState {
     activePatternId: pattern.id,
     transport: project.transport,
     instrumentSettings: project.instrumentSettings,
+    sources: project.sources,
     mixer: project.mixer,
     ...recipientOwnedBlanks(),
   }
@@ -150,19 +159,27 @@ function isPattern(value: unknown): value is Pattern {
     typeof value.id !== 'string' ||
     typeof value.name !== 'string' ||
     !Array.isArray(value.lanes) ||
+    !Array.isArray(value.padLanes) ||
     !Array.isArray(value.noteLanes) ||
     value.lanes.length !== KIT_LANES.length ||
+    value.padLanes.length !== PAD_LANES.length ||
     value.noteLanes.length !== NOTE_LANES.length
   ) {
     return false
   }
 
   const lanes = value.lanes
+  const padLanes = value.padLanes
   const noteLanes = value.noteLanes
   const drumsValid = KIT_LANES.every((spec, laneIndex) =>
     isLane(lanes[laneIndex], spec.id, isDrumStep),
   )
   if (!drumsValid) return false
+
+  const padsValid = PAD_LANES.every((spec, laneIndex) =>
+    isLane(padLanes[laneIndex], spec.id, isDrumStep),
+  )
+  if (!padsValid) return false
 
   return NOTE_LANES.every((spec, laneIndex) =>
     isLane(noteLanes[laneIndex], spec.id, (step) =>
@@ -187,16 +204,78 @@ function isInstrumentSettings(value: unknown): value is InstrumentSettings {
     isRecord(value) &&
     isPatch(value.bass, BASS_PARAMS) &&
     isPatch(value.master, MASTER_PARAMS) &&
-    isPatch(value.fx, FX_PARAMS)
+    isPatch(value.fx, FX_PARAMS) &&
+    isSamplerSettings(value.sampler)
   )
+}
+
+function isRegion(value: unknown): boolean {
+  return (
+    value === null ||
+    (isRecord(value) &&
+      typeof value.sourceId === 'string' &&
+      value.sourceId.length > 0 &&
+      isFiniteNumber(value.start) &&
+      value.start >= 0 &&
+      isFiniteNumber(value.duration) &&
+      value.duration > 0)
+  )
+}
+
+function isSamplerSettings(value: unknown): value is SamplerSettings {
+  if (!isRecord(value) || Object.keys(value).length !== PAD_LANES.length) return false
+  return PAD_LANES.every((pad) => {
+    const settings = value[pad.id]
+    const tune = SAMPLER_PARAMS.find((param) => param.padId === pad.id)!
+    return (
+      isRecord(settings) &&
+      isRegion(settings.region) &&
+      isFiniteNumber(settings.tune) &&
+      settings.tune >= tune.min &&
+      settings.tune <= tune.max &&
+      (settings.fit === null ||
+        (Number.isInteger(settings.fit) &&
+          (settings.fit as number) >= MIN_FIT_STEPS &&
+          (settings.fit as number) <= MAX_FIT_STEPS)) &&
+      typeof settings.name === 'string' &&
+      settings.name.trim().length > 0
+    )
+  })
+}
+
+function isSources(value: unknown): value is SampleSource[] {
+  if (!Array.isArray(value)) return false
+  const ids = new Set<string>()
+  for (const source of value) {
+    if (
+      !isRecord(source) ||
+      typeof source.id !== 'string' ||
+      source.id.length === 0 ||
+      ids.has(source.id) ||
+      typeof source.name !== 'string' ||
+      source.name.trim().length === 0 ||
+      !['shipped', 'upload', 'recording'].includes(source.origin as string) ||
+      !isFiniteNumber(source.duration) ||
+      source.duration <= 0 ||
+      !Number.isInteger(source.channels) ||
+      (source.channels as number) < 1
+    ) {
+      return false
+    }
+    ids.add(source.id)
+  }
+  return true
 }
 
 function isMixer(value: unknown): value is Mixer {
   if (!isRecord(value)) return false
-  const laneIds = new Set(KIT_LANES.map(({ id }) => id))
+  const laneIds = new Set<string>([
+    ...KIT_LANES.map(({ id }) => id),
+    ...PAD_LANES.map(({ id }) => id),
+  ])
   return Object.entries(value).every(
     ([laneId, mix]) =>
-      laneIds.has(laneId as (typeof KIT_LANES)[number]['id']) &&
+      laneIds.has(laneId) &&
       isRecord(mix) &&
       typeof mix.muted === 'boolean' &&
       typeof mix.soloed === 'boolean',
@@ -217,6 +296,7 @@ function isSharedProject(value: unknown): value is ProjectState {
     value.transport.bpm >= MIN_BPM &&
     value.transport.bpm <= MAX_BPM &&
     isInstrumentSettings(value.instrumentSettings) &&
+    isSources(value.sources) &&
     isRecord(value.lessonProgress) &&
     Object.keys(value.lessonProgress).length === 0 &&
     isRecord(value.prefs) &&
@@ -251,6 +331,7 @@ export function projectWithSharedBeat(
     activePatternId: pattern.id,
     transport: sharedProject.transport,
     instrumentSettings: sharedProject.instrumentSettings,
+    sources: sharedProject.sources,
     mixer: sharedProject.mixer,
   }
 }

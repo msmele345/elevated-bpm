@@ -16,13 +16,14 @@ describe('FX_PARAMS', () => {
       'drumSend',
       'bassSend',
       'stabSend',
+      'samplerSend',
       'feedback',
       'reverb',
     ])
   })
 
   it('rests with every send at zero, so an untouched deck sounds exactly as it did before the bus', () => {
-    for (const id of ['drumSend', 'bassSend', 'stabSend'] as const) {
+    for (const id of ['drumSend', 'bassSend', 'stabSend', 'samplerSend'] as const) {
       const spec = FX_PARAMS.find((param) => param.id === id)!
       expect([id, DEFAULT_FX_SETTINGS[id]]).toEqual([id, spec.min])
       expect([id, spec.min]).toEqual([id, 0])
@@ -73,14 +74,16 @@ describe('fxBusParams', () => {
     expect(bus.drumSend).toBe(0)
     expect(bus.bassSend).toBe(0)
     expect(bus.stabSend).toBe(0)
+    expect(bus.samplerSend).toBe(0)
   })
 
   it('opens each send independently, so one instrument can be washed and another dry', () => {
-    const bus = fxBusParams({ ...DEFAULT_FX_SETTINGS, stabSend: 100 })
+    const bus = fxBusParams({ ...DEFAULT_FX_SETTINGS, samplerSend: 100 })
 
-    expect(bus.stabSend).toBeGreaterThan(0)
+    expect(bus.samplerSend).toBeGreaterThan(0)
     expect(bus.drumSend).toBe(0)
     expect(bus.bassSend).toBe(0)
+    expect(bus.stabSend).toBe(0)
   })
 
   it('keeps a fully open send below unity, so a hot echo cannot outrun the dry mix', () => {

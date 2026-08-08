@@ -35,6 +35,19 @@ describe('cycleStep', () => {
     expect(result.lanes.find((l) => l.id === 'snare')!.steps.some((s) => s.on)).toBe(false)
     expect(kickSteps(initial)[0].on).toBe(false)
   })
+
+  it('uses the same three-state cycle for a pad lane without touching the kit', () => {
+    const initial = createInitialPattern()
+    const on = cycleStep(initial, 'pad3', 6)
+    const accented = cycleStep(on, 'pad3', 6)
+
+    expect(accented.padLanes.find((lane) => lane.id === 'pad3')!.steps[6]).toEqual({
+      on: true,
+      accent: true,
+    })
+    expect(accented.lanes).toBe(initial.lanes)
+    expect(initial.padLanes.find((lane) => lane.id === 'pad3')!.steps[6].on).toBe(false)
+  })
 })
 
 describe('createInitialPattern', () => {
@@ -51,6 +64,16 @@ describe('createInitialPattern', () => {
       expect(lane.steps).toHaveLength(STEP_COUNT)
       expect(lane.steps.every((step) => step.on === false && step.accent === false)).toBe(true)
       expect(lane.label.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('creates four separate empty pad lanes for the sampler panel', () => {
+    const pattern = createInitialPattern()
+
+    expect(pattern.padLanes.map((lane) => lane.id)).toEqual(['pad1', 'pad2', 'pad3', 'pad4'])
+    for (const lane of pattern.padLanes) {
+      expect(lane.steps).toHaveLength(STEP_COUNT)
+      expect(lane.steps.every((step) => !step.on && !step.accent)).toBe(true)
     }
   })
 })

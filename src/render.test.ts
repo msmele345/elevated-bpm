@@ -55,6 +55,7 @@ vi.mock('./audio/engine', async () => {
     setMixer: () => undefined,
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
+    setFxSettings: () => undefined,
     setBpm: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
@@ -136,6 +137,35 @@ describe('deck render cost', () => {
       expect(changed, `note lane ${id}`).toEqual([])
     }
     // Five drum lanes and two note lanes were on the deck before the knob moved.
+    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(5)
+    expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
+  })
+
+  it('leaves every drum and note lane on identical props when an FX knob moves mid-playback', async () => {
+    // The FX knobs are new props flowing through App onto the Master strip.
+    // A send dragged over a running loop must not rebuild the instrument it is
+    // sending — that is the dropped frame the deck is not allowed to have.
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const drumMark = recorded.stepRow.length
+    const noteMark = recorded.noteRow.length
+    const drumSend = screen.getByRole('slider', { name: 'Drum Send' })
+    fireEvent.keyDown(drumSend, { key: 'ArrowUp' })
+    fireEvent.keyDown(drumSend, { key: 'ArrowUp' })
+
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, drumMark)) {
+      expect(changed, `drum lane ${id}`).toEqual([])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, noteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
     expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(5)
     expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
   })

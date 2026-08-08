@@ -783,6 +783,34 @@ body::before {
   }
 }
 
+/* ── Master strip: the send FX bus ─────────────────────────────────── */
+/* A second row under the macros, separated by the same hairline the strip
+   uses everywhere: three send levels and the two controls shaping what they
+   arrive into. Its name doubles as the group's accessible label and as the
+   signal-flow legend a hardware send section would silkscreen. */
+.fx-bus {
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.fx-bus-name {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.fx-bus .knob-row.fx-knobs {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
+  flex-wrap: wrap;
+}
+
 /* ── Master strip: the main-out spectrum scope ─────────────────────── */
 /* A recessed display window under the transport: 16 log-spaced bars — one
    per step, in the step grid's quad colors — drawn as LED segment ladders on

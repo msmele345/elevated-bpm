@@ -6,6 +6,7 @@ import {
   type ProjectState,
 } from './projectState'
 import { BASS_PARAMS } from './bass'
+import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
 import type { Mixer } from './mixer'
 import { MAX_NOTE_LENGTH, MIN_NOTE_LENGTH, NOTE_LANES } from './note'
@@ -183,7 +184,10 @@ function isPatch(
 
 function isInstrumentSettings(value: unknown): value is InstrumentSettings {
   return (
-    isRecord(value) && isPatch(value.bass, BASS_PARAMS) && isPatch(value.master, MASTER_PARAMS)
+    isRecord(value) &&
+    isPatch(value.bass, BASS_PARAMS) &&
+    isPatch(value.master, MASTER_PARAMS) &&
+    isPatch(value.fx, FX_PARAMS)
   )
 }
 

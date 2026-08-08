@@ -1,6 +1,13 @@
 import * as Tone from 'tone'
 import { DEFAULT_BASS_SETTINGS, type BassSettings } from '../model/bass'
 import {
+  DEFAULT_FX_SETTINGS,
+  delaySeconds,
+  fxBusParams,
+  MAX_DELAY_SECONDS,
+  type FxSettings,
+} from '../model/fx'
+import {
   DEFAULT_MASTER_SETTINGS,
   masterBusParams,
   type MasterSettings,
@@ -79,6 +86,40 @@ let master: MasterBus | null = null
 let masterSettings: MasterSettings = DEFAULT_MASTER_SETTINGS
 
 /**
+ * One instrument's tap into the FX bus. Every voice of the instrument connects
+ * here instead of straight to the master, and the tap fans out to both the dry
+ * mix and the send. That is what makes a send *post-fader in spirit*: a lane the
+ * sequencer never fires reaches neither path, so muting a lane mutes its echo.
+ *
+ * This is the contract a later instrument follows rather than being retrofitted
+ * into: give it a tap and it is on the bus.
+ */
+interface SendTap {
+  /** Where the instrument's voices connect. */
+  input: Tone.Gain
+  /** Level into the FX bus. */
+  send: Tone.Gain
+}
+
+type SendTapId = 'drums' | 'bass' | 'stab'
+
+/**
+ * The shared FX bus: sends sum into one input, run through the delay and then
+ * the reverb, and return to the *master input* — upstream of the macro filter,
+ * so closing that filter sweeps the tails along with the mix. Returning after
+ * it would leave repeats ringing brightly through a closed filter, which is the
+ * wrong sound and the opposite of the dub move this exists for.
+ */
+interface FxBus {
+  input: Tone.Gain
+  delay: Tone.FeedbackDelay
+  reverb: Tone.Reverb
+  taps: Record<SendTapId, SendTap>
+}
+let fx: FxBus | null = null
+let fxSettings: FxSettings = DEFAULT_FX_SETTINGS
+
+/**
  * Master spectrum tap for the scope. An analyser only pulls samples when its
  * value is read — it sits off the destination as a dead-end branch, never in
  * the signal path, so drawing (or not drawing) it cannot affect the audio.
@@ -129,12 +170,34 @@ export function setMasterSettings(next: MasterSettings): void {
   }
 }
 
+/**
+ * Apply the FX patch. Same contract as the bass and master patches — cheap,
+ * idempotent, safe to call on every pointer move — with sends and the reverb
+ * mix ramped so a dragged knob is heard as a fade rather than a step.
+ */
+export function setFxSettings(next: FxSettings): void {
+  fxSettings = next
+  if (!fx) return
+  const bus = fxBusParams(next)
+  fx.taps.drums.send.gain.rampTo(bus.drumSend, 0.02)
+  fx.taps.bass.send.gain.rampTo(bus.bassSend, 0.02)
+  fx.taps.stab.send.gain.rampTo(bus.stabSend, 0.02)
+  fx.delay.feedback.rampTo(bus.feedback, 0.02)
+  fx.reverb.wet.rampTo(bus.reverbWet, 0.02)
+}
+
 export function setBpm(next: number): void {
   bpm = clampBpm(next)
   // Ramp instead of jumping so mid-playback tempo changes are click-free;
   // step scheduling derives from transport ticks, so the sequence position
   // is unaffected by the tempo curve.
   Tone.getTransport().bpm.rampTo(bpm, 0.1)
+  // The delay's division is musical, but Tone converts a notation delay time to
+  // seconds *once*, when it is set — a time-unit Param does not follow later
+  // tempo changes — so the repeats are retuned here, at the one door tempo walks
+  // through. Ramped alongside the transport: gliding a delay line pitch-bends
+  // its tail the way a tape delay does, where a jump would click.
+  fx?.delay.delayTime.rampTo(delaySeconds(bpm), 0.1)
 }
 
 /** One 16th in seconds at the current tempo — a note length in steps × this. */
@@ -177,6 +240,65 @@ function createMasterBus(): MasterBus {
   return { input, filter, drive }
 }
 
+/**
+ * How long the send reverb rings. Fixed rather than a knob: Tone.Reverb builds
+ * a new impulse response whenever its decay changes, which is far too expensive
+ * to do under a dragged control. The knob rides the wet mix instead.
+ */
+const REVERB_DECAY_SECONDS = 2.4
+
+/**
+ * Build the FX chain. Delay before reverb, the conventional order — the reverb
+ * smears the repeats, rather than the repeats multiplying an already smeared
+ * signal.
+ *
+ * Nothing here is awaited. Tone.Reverb generates its impulse response
+ * asynchronously and exposes a `ready` promise; waiting on that during the first
+ * user gesture is exactly the stall the deck's first-click promise forbids. The
+ * reverb simply passes its (delayed) input through until the IR lands, which is
+ * also why its wet mix is capped below 1 — the return is never silent while the
+ * convolver is still empty.
+ */
+function createFxBus(dry: Tone.ToneAudioNode): FxBus {
+  const reverb = new Tone.Reverb({
+    decay: REVERB_DECAY_SECONDS,
+    preDelay: 0.01,
+    wet: 0,
+  }).connect(dry)
+  const delay = new Tone.FeedbackDelay({
+    delayTime: delaySeconds(bpm),
+    // A delay line's ceiling is fixed when it is built, so it has to cover the
+    // longest division the transport's slowest tempo can ask for.
+    maxDelay: MAX_DELAY_SECONDS,
+    feedback: 0,
+    // Fully wet: the dry signal already reached the master on its own path, and
+    // a second copy through the send would just thicken the mix.
+    wet: 1,
+  }).connect(reverb)
+  const input = new Tone.Gain(1).connect(delay)
+  return {
+    input,
+    delay,
+    reverb,
+    taps: {
+      drums: createSendTap(dry, input),
+      bass: createSendTap(dry, input),
+      stab: createSendTap(dry, input),
+    },
+  }
+}
+
+/** A fan-out from one instrument's voices to the dry mix and the FX bus. */
+function createSendTap(dry: Tone.ToneAudioNode, fxInput: Tone.ToneAudioNode): SendTap {
+  // Resting at zero, so the bus is inaudible until the user opens a send —
+  // an untouched deck runs the same unity-gain dry path it always did.
+  const send = new Tone.Gain(0).connect(fxInput)
+  const input = new Tone.Gain(1)
+  input.connect(dry)
+  input.connect(send)
+  return { input, send }
+}
+
 function createBassVoice(destination: Tone.ToneAudioNode): BassVoice {
   const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 })
   const synth = new Tone.Synth({
@@ -206,16 +328,21 @@ function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.S
 function ensureVoices(): void {
   if (samplesLoaded) return
   master = createMasterBus()
-  const bus = master.input
+  // Every instrument reaches the master through its own send tap, so each one
+  // is already on the FX bus rather than being retrofitted onto it later.
+  const taps = (fx = createFxBus(master.input)).taps
   voices = Object.fromEntries(
     (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(([laneId, url]) => {
-      const gain = new Tone.Gain(1).connect(bus)
+      // One send for the whole kit: the lane gains sum into the drum tap, so a
+      // lane's accent velocity still rides through to its echo.
+      const gain = new Tone.Gain(1).connect(taps.drums.input)
       const player = new Tone.Player(url).connect(gain)
       return [laneId, { player, gain }]
     }),
   ) as Record<DrumLaneId, Voice>
-  bass = createBassVoice(bus)
-  stab = createStabVoices(() => createStabSynth(bus))
+  bass = createBassVoice(taps.bass.input)
+  // Live and sequenced stabs share the tap, so both are on the send.
+  stab = createStabVoices(() => createStabSynth(taps.stab.input))
   analyser = new Tone.Analyser('fft', SCOPE_SPEC.binCount)
   // Snappier than the analyser's 0.8 default: the scope does its own fall
   // decay, so internal smoothing only has to keep single frames from jittering.
@@ -223,6 +350,7 @@ function ensureVoices(): void {
   Tone.getDestination().connect(analyser)
   setBassSettings(bassSettings)
   setMasterSettings(masterSettings)
+  setFxSettings(fxSettings)
   samplesLoaded = Tone.loaded()
   Tone.getTransport().bpm.value = bpm
   if (import.meta.env.DEV) {
@@ -236,6 +364,7 @@ function ensureVoices(): void {
       bass,
       stab,
       master,
+      fx,
     }
   }
 }

@@ -1,5 +1,14 @@
 import { createNoteLanes } from './note'
-import { STEP_COUNT, type DrumLaneId, type DrumStep, type Pattern } from './types'
+import { isPadLaneId, PAD_LANES } from './sampler'
+import {
+  STEP_COUNT,
+  type DrumLaneId,
+  type DrumStep,
+  type LaneId,
+  type PadLane,
+  type Pattern,
+  type StepLane,
+} from './types'
 
 function emptySteps(): DrumStep[] {
   return Array.from({ length: STEP_COUNT }, () => ({ on: false, accent: false }))
@@ -24,6 +33,7 @@ export function createInitialPattern(): Pattern {
     id: 'pattern-1',
     name: 'Pattern 1',
     lanes: KIT_LANES.map(({ id, label }) => ({ id, label, steps: emptySteps() })),
+    padLanes: PAD_LANES.map(({ id, label }) => ({ id, label, steps: emptySteps() })),
     noteLanes: createNoteLanes(),
   }
 }
@@ -89,28 +99,55 @@ export function withFullKit(pattern: Pattern): Pattern {
   }
 }
 
-/** Immutably replace one step of one lane, leaving other lanes by reference. */
-function mapStep(
-  pattern: Pattern,
-  laneId: DrumLaneId,
-  stepIndex: number,
-  next: (step: DrumStep) => DrumStep,
-): Pattern {
+/** Return the pattern with all four sampler lanes present, preserving existing programming. */
+export function withPadLanes(pattern: Pattern): Pattern {
+  const saved = (pattern as Partial<Pattern>).padLanes ?? []
   return {
     ...pattern,
-    lanes: pattern.lanes.map((lane) =>
-      lane.id === laneId
-        ? {
-            ...lane,
-            steps: lane.steps.map((step, i) => (i === stepIndex ? next(step) : step)),
-          }
-        : lane,
+    padLanes: PAD_LANES.map(
+      ({ id, label }) =>
+        saved.find((lane: PadLane) => lane.id === id) ?? { id, label, steps: emptySteps() },
     ),
   }
 }
 
+/** Immutably replace one step of one lane, leaving other lanes by reference. */
+function mapLaneStep<Id extends LaneId>(
+  lanes: StepLane<Id>[],
+  laneId: Id,
+  stepIndex: number,
+  next: (step: DrumStep) => DrumStep,
+): StepLane<Id>[] {
+  return lanes.map((lane) =>
+    lane.id === laneId
+      ? {
+          ...lane,
+          steps: lane.steps.map((step, i) => (i === stepIndex ? next(step) : step)),
+        }
+      : lane,
+  )
+}
+
+function mapStep(
+  pattern: Pattern,
+  laneId: LaneId,
+  stepIndex: number,
+  next: (step: DrumStep) => DrumStep,
+): Pattern {
+  if (isPadLaneId(laneId)) {
+    return {
+      ...pattern,
+      padLanes: mapLaneStep(pattern.padLanes, laneId, stepIndex, next),
+    }
+  }
+  return {
+    ...pattern,
+    lanes: mapLaneStep(pattern.lanes, laneId, stepIndex, next),
+  }
+}
+
 /** Immutably toggle one step of one lane on/off, clearing accent when off. */
-export function toggleStep(pattern: Pattern, laneId: DrumLaneId, stepIndex: number): Pattern {
+export function toggleStep(pattern: Pattern, laneId: LaneId, stepIndex: number): Pattern {
   return mapStep(pattern, laneId, stepIndex, (step) => ({ ...step, on: !step.on }))
 }
 
@@ -119,7 +156,7 @@ export function toggleStep(pattern: Pattern, laneId: DrumLaneId, stepIndex: numb
  * off. A single click is the whole accent interface, so there is no hidden
  * modifier and no second row of controls.
  */
-export function cycleStep(pattern: Pattern, laneId: DrumLaneId, stepIndex: number): Pattern {
+export function cycleStep(pattern: Pattern, laneId: LaneId, stepIndex: number): Pattern {
   return mapStep(pattern, laneId, stepIndex, (step) => {
     if (!step.on) return { on: true, accent: false }
     if (!step.accent) return { on: true, accent: true }

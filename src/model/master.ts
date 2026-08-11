@@ -1,4 +1,4 @@
-import { clampParam, type ParamSpec } from './knob'
+import { createPatch, setPatchParam, specOf, type ParamSpec } from './knob'
 
 /**
  * The master strip's macros: one filter and one drive across the whole mix —
@@ -36,20 +36,12 @@ export const DEFAULT_MASTER_SETTINGS: MasterSettings = {
 
 /** The spec behind one master knob — its range, default, and taper. */
 export function masterParamSpec(id: MasterParamId): ParamSpec {
-  return MASTER_PARAMS.find((param) => param.id === id)!
+  return specOf(MASTER_PARAMS, id)
 }
 
-/**
- * Build the macros from whatever was persisted (or nothing). Every knob is
- * clamped or defaulted, so a document written by an older build — or a
- * hand-edited one — can never hand the bus an out-of-range value.
- */
+/** Build the macros from whatever was persisted (or nothing), repairing them. */
 export function createMasterSettings(saved: unknown): MasterSettings {
-  const raw = (saved ?? {}) as Partial<Record<MasterParamId, unknown>>
-  return MASTER_PARAMS.reduce<MasterSettings>((settings, param) => {
-    const value = raw[param.id]
-    return typeof value === 'number' ? setMasterParam(settings, param.id, value) : settings
-  }, DEFAULT_MASTER_SETTINGS)
+  return createPatch(MASTER_PARAMS, DEFAULT_MASTER_SETTINGS, saved)
 }
 
 /** What the audio engine sets on the bus nodes for one MasterSettings. */
@@ -85,5 +77,5 @@ export function setMasterParam(
   id: MasterParamId,
   value: number,
 ): MasterSettings {
-  return { ...settings, [id]: clampParam(masterParamSpec(id), value) }
+  return setPatchParam(MASTER_PARAMS, settings, id, value)
 }

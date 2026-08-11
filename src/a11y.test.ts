@@ -19,13 +19,18 @@ vi.mock('./audio/engine', async () => {
     setMixer: () => undefined,
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
+    setFxSettings: () => undefined,
+    setSamplerSettings: () => undefined,
     setBpm: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
     stop: () => undefined,
     attackStabNote: () => undefined,
     releaseStabNote: () => undefined,
+    attackPad: () => undefined,
+    releasePad: () => undefined,
     getSoundingStabNotes: () => [],
+    getSoundingPadIds: () => [],
     getSpectrum: () => null,
     getCurrentStep: () => -1,
     getTransportTicks: () => -1,
@@ -139,7 +144,7 @@ describe('deck accessibility', () => {
     // screen reader user navigates the deck by.
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(
-      expect.arrayContaining(['Master', 'Drum Machine', 'Bass Line', 'Chord Stab']),
+      expect.arrayContaining(['Master', 'Drum Machine', 'Sampler', 'Bass Line', 'Chord Stab']),
     )
   })
 
@@ -147,5 +152,11 @@ describe('deck accessibility', () => {
     await renderDeck()
 
     expect(screen.getByRole('group', { name: 'Live stab keyboard' })).toBeTruthy()
+  })
+
+  it('exposes the four live sampler pads as a named group', async () => {
+    await renderDeck()
+
+    expect(screen.getByRole('group', { name: 'Live sampler pads' })).toBeTruthy()
   })
 })

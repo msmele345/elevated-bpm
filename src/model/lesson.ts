@@ -1,5 +1,5 @@
-import { BASS_PARAMS, type BassParamId } from './bass'
 import { NO_CHORD_PLAY, type ChordPlay } from './chordPlay'
+import { DECK_PARAM_IDS, isDeckParamId, type DeckParamId } from './deckParams'
 import { NOTE_LANES } from './note'
 import { NO_PARAM_MOTION, paramTravel, type ParamMotion } from './paramMotion'
 import { KIT_LANES } from './pattern'
@@ -87,7 +87,8 @@ export interface ChordPlayedGoal {
  */
 export interface ParamSweptGoal {
   type: 'paramSwept'
-  param: BassParamId
+  /** Any knob on the deck — bass, master, or FX. */
+  param: DeckParamId
   minTravel: number
 }
 
@@ -220,11 +221,6 @@ function fail(lessonId: string, message: string): never {
 
 const DRUM_LANE_IDS: string[] = KIT_LANES.map((lane) => lane.id)
 const NOTE_LANE_IDS: string[] = NOTE_LANES.map((lane) => lane.id)
-const PARAM_IDS: ReadonlySet<string> = new Set(BASS_PARAMS.map((param) => param.id))
-
-function isBassParamId(value: unknown): value is BassParamId {
-  return typeof value === 'string' && PARAM_IDS.has(value)
-}
 
 /**
  * A lane the deck actually has. Authoring a lesson is a JSON-only job, so a
@@ -380,10 +376,10 @@ function parseParamSweptGoal(
   if (goal.param === undefined) {
     fail(lessonId, `goal[${index}] is missing a param`)
   }
-  if (!isBassParamId(goal.param)) {
+  if (!isDeckParamId(goal.param)) {
     fail(
       lessonId,
-      `goal[${index}] names param "${goal.param}"; the deck has ${[...PARAM_IDS].join(', ')}`,
+      `goal[${index}] names param "${goal.param}"; the deck has ${[...DECK_PARAM_IDS].join(', ')}`,
     )
   }
   // Travel is a fraction of the knob's range, so anything outside (0, 1] is

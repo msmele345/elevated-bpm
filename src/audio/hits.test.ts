@@ -70,6 +70,38 @@ describe('hitsAtStep', () => {
     const hits = hitsAtStep(pattern, 0, { closedHat: { muted: false, soloed: true } })
     expect(hits.map((h) => h.laneId)).toEqual(['closedHat'])
   })
+
+  it('voices pad lanes on the same step and with the same accent gain as the kit', () => {
+    const pattern = program(createInitialPattern(), [
+      ['kick', 3],
+      ['pad1', 3, true],
+      ['pad4', 3],
+    ])
+
+    expect(hitsAtStep(pattern, 3)).toEqual([
+      { laneId: 'kick', gain: UNACCENTED_GAIN },
+      { laneId: 'pad1', gain: ACCENT_GAIN },
+      { laneId: 'pad4', gain: UNACCENTED_GAIN },
+    ])
+  })
+
+  it('applies one solo rule across kit and pad lanes', () => {
+    const pattern = program(createInitialPattern(), [
+      ['kick', 0],
+      ['pad2', 0],
+    ])
+
+    expect(
+      hitsAtStep(pattern, 0, { kick: { muted: false, soloed: true } }).map(
+        (hit) => hit.laneId,
+      ),
+    ).toEqual(['kick'])
+    expect(
+      hitsAtStep(pattern, 0, { pad2: { muted: false, soloed: true } }).map(
+        (hit) => hit.laneId,
+      ),
+    ).toEqual(['pad2'])
+  })
 })
 
 describe('voiceStep — open-hat choke (909 behavior)', () => {

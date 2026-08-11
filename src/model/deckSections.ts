@@ -11,6 +11,7 @@ export const DECK_SECTION_IDS = {
   curriculum: 'deck-curriculum',
   master: 'deck-master',
   drums: 'deck-drums',
+  sampler: 'deck-sampler',
   bass: 'deck-bass',
   stabs: 'deck-stabs',
 } as const
@@ -26,6 +27,7 @@ export const DECK_SECTIONS: readonly DeckSection[] = [
   { id: DECK_SECTION_IDS.curriculum, label: 'Curriculum' },
   { id: DECK_SECTION_IDS.master, label: 'Master' },
   { id: DECK_SECTION_IDS.drums, label: 'Drum machine' },
+  { id: DECK_SECTION_IDS.sampler, label: 'Sampler' },
   { id: DECK_SECTION_IDS.bass, label: 'Bass synth' },
   { id: DECK_SECTION_IDS.stabs, label: 'Stab synth' },
 ]

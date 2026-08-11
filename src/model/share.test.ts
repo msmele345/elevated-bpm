@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   activePattern,
+  assignSourceToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
   PROJECT_STATE_VERSION,
   setBassParamValue,
+  setFxParamValue,
   setMasterParamValue,
+  setSamplerParamValue,
   setTransportBpm,
   resizeActivePatternNote,
   toggleActivePatternNoteStep,
@@ -13,8 +16,10 @@ import {
   transposeActivePatternNote,
   type ProjectState,
 } from './projectState'
+import { DEFAULT_FX_SETTINGS } from './fx'
 import { DEFAULT_MASTER_SETTINGS } from './master'
 import { createInitialPattern, cycleStep } from './pattern'
+import { CURATED_SAMPLE_SOURCE, samplerParamForPad } from './sampler'
 import {
   createShareUrl,
   PRACTICAL_SHARE_URL_LIMIT,
@@ -22,7 +27,7 @@ import {
   readSharedBeat,
   SHARE_QUERY_PARAM,
 } from './share'
-import type { DrumLaneId, NoteLaneId } from './types'
+import type { DrumLaneId, NoteLaneId, PadLaneId } from './types'
 
 /**
  * Encode a payload the way an older build did, rather than through the current
@@ -63,25 +68,36 @@ function v6ShareDocument(
 
 describe('share URL', () => {
   it('reproduces the active pattern and every setting that affects how it sounds', async () => {
-    const source = setMasterParamValue(
-      toggleLaneMute(
-        setBassParamValue(
-          setTransportBpm(
-            toggleActivePatternNoteStep(
-              cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
-              'stab',
-              7,
+    const source = setFxParamValue(
+      setFxParamValue(
+        setMasterParamValue(
+          toggleLaneMute(
+            setBassParamValue(
+              setTransportBpm(
+                toggleActivePatternNoteStep(
+                  cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
+                  'stab',
+                  7,
+                ),
+                142,
+              ),
+              'cutoff',
+              3200,
             ),
-            142,
+            'openHat',
           ),
-          'cutoff',
-          3200,
+          'drive',
+          45,
         ),
-        'openHat',
+        'stabSend',
+        65,
       ),
-      'drive',
-      45,
+      'feedback',
+      70,
     )
+
+    // Everything that shapes the sound travels, the FX bus included.
+    expect(source.instrumentSettings.fx.stabSend).toBe(65)
 
     const url = await createShareUrl(source, 'https://elevated-bpm.example/deck?ref=friend')
     const shared = await readSharedBeat(url)
@@ -99,6 +115,7 @@ describe('share URL', () => {
         activePatternId: source.activePatternId,
         transport: source.transport,
         instrumentSettings: source.instrumentSettings,
+        sources: source.sources,
         lessonProgress: {},
         prefs: {},
         mixer: source.mixer,
@@ -107,15 +124,56 @@ describe('share URL', () => {
     })
   })
 
+  it('round-trips pad programming, assignment, Tune, fit and pad mixer keys', async () => {
+    let source = assignSourceToSamplerPad(
+      createInitialProjectState(),
+      'pad2',
+      CURATED_SAMPLE_SOURCE.id,
+    )
+    source = cycleActivePatternStep(source, 'pad2', 5)
+    source = cycleActivePatternStep(source, 'pad2', 5)
+    source = setSamplerParamValue(source, samplerParamForPad('pad2').id, -7)
+    source = toggleLaneMute(source, 'pad4')
+    source = {
+      ...source,
+      instrumentSettings: {
+        ...source.instrumentSettings,
+        sampler: {
+          ...source.instrumentSettings.sampler,
+          pad2: { ...source.instrumentSettings.sampler.pad2, fit: 4 },
+        },
+      },
+    }
+
+    const shared = await readSharedBeat(
+      await createShareUrl(source, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error('Expected a playable shared sampler beat')
+    expect(activePattern(shared.project).padLanes).toEqual(activePattern(source).padLanes)
+    expect(shared.project.instrumentSettings.sampler).toEqual(source.instrumentSettings.sampler)
+    expect(shared.project.mixer.pad4).toEqual({ muted: true, soloed: false })
+    expect(shared.project.sources).toEqual([CURATED_SAMPLE_SOURCE])
+  })
+
   it('keeps a densely programmed beat within the practical 2,000-character URL limit', async () => {
     let source = createInitialProjectState()
     const drumLanes: DrumLaneId[] = ['kick', 'snare', 'closedHat', 'openHat', 'perc']
+    const padLanes: PadLaneId[] = ['pad1', 'pad2', 'pad3', 'pad4']
     const noteLanes: NoteLaneId[] = ['bass', 'stab']
 
     for (const lane of drumLanes) {
       for (let step = 0; step < 16; step += 1) {
         source = cycleActivePatternStep(source, lane, step)
         if ((step + drumLanes.indexOf(lane)) % 2 === 0) {
+          source = cycleActivePatternStep(source, lane, step)
+        }
+      }
+    }
+    for (const lane of padLanes) {
+      for (let step = 0; step < 16; step += 1) {
+        source = cycleActivePatternStep(source, lane, step)
+        if ((step + padLanes.indexOf(lane)) % 2 === 0) {
           source = cycleActivePatternStep(source, lane, step)
         }
       }
@@ -158,6 +216,12 @@ describe('share URL', () => {
     expect(shared.project.instrumentSettings.bass).toEqual(sender.instrumentSettings.bass)
     // The version it predates arrives at its neutral default, not missing.
     expect(shared.project.instrumentSettings.master).toEqual(DEFAULT_MASTER_SETTINGS)
+    // A link written before the FX bus existed arrives with every send closed,
+    // so an old beat still sounds the way its sender heard it.
+    expect(shared.project.instrumentSettings.fx).toEqual(DEFAULT_FX_SETTINGS)
+    expect(shared.project.sources).toEqual([CURATED_SAMPLE_SOURCE])
+    expect(activePattern(shared.project).padLanes.every((lane) => lane.steps.every((step) => !step.on)))
+      .toBe(true)
   })
 
   it('lifts a payload through every migration step, not only the most recent one', async () => {
@@ -247,7 +311,9 @@ describe('share URL', () => {
 
   it('rejects compressed JSON that is not a complete playable beat', async () => {
     const invalid = createInitialProjectState()
-    invalid.patterns = [{ id: 'pattern-1', name: 'Broken', lanes: [], noteLanes: [] }]
+    invalid.patterns = [
+      { id: 'pattern-1', name: 'Broken', lanes: [], padLanes: [], noteLanes: [] },
+    ]
     const url = await createShareUrl(invalid, 'https://elevated-bpm.example/')
 
     await expect(readSharedBeat(url)).resolves.toMatchObject({
@@ -271,6 +337,50 @@ describe('share URL', () => {
         code: 'malformed',
       })
     }
+  })
+
+  it('rejects a payload whose FX patch is missing or out of range', async () => {
+    const outOfRange = createInitialProjectState()
+    outOfRange.instrumentSettings.fx = { ...DEFAULT_FX_SETTINGS, stabSend: 400 }
+    const missing = createInitialProjectState()
+    missing.instrumentSettings = {
+      bass: missing.instrumentSettings.bass,
+      master: missing.instrumentSettings.master,
+    } as typeof missing.instrumentSettings
+
+    for (const invalid of [outOfRange, missing]) {
+      const url = await createShareUrl(invalid, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('rejects sampler settings outside the closed four-pad shape', async () => {
+    const outOfRange = createInitialProjectState()
+    outOfRange.instrumentSettings.sampler.pad1.tune = 999
+    const missingPad = createInitialProjectState()
+    delete (missingPad.instrumentSettings.sampler as Partial<
+      typeof missingPad.instrumentSettings.sampler
+    >).pad4
+
+    for (const invalid of [outOfRange, missingPad]) {
+      const url = await createShareUrl(invalid, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('rejects a mixer key for a pad the fixed deck does not have', async () => {
+    const invalid = createInitialProjectState()
+    ;(invalid.mixer as Record<string, unknown>).pad5 = { muted: false, soloed: true }
+
+    await expect(
+      readSharedBeat(await createShareUrl(invalid, 'https://elevated-bpm.example/')),
+    ).resolves.toMatchObject({ status: 'error', code: 'malformed' })
   })
 
   it('previews a shared beat without mutating recipient-only project state', async () => {
@@ -301,6 +411,7 @@ describe('share URL', () => {
     expect(activePattern(preview)).toEqual(senderPattern)
     expect(preview.transport).toEqual(sender.transport)
     expect(preview.instrumentSettings).toEqual(sender.instrumentSettings)
+    expect(preview.sources).toEqual(sender.sources)
     expect(preview.lessonProgress).toBe(recipient.lessonProgress)
     expect(preview.prefs).toBe(recipient.prefs)
     expect(activePattern(recipient)).toBe(ownPattern)

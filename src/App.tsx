@@ -6,6 +6,7 @@ import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
 import { PanelTitle } from './components/PanelTitle'
 import { ShareControls } from './components/ShareControls'
+import { SamplerPanel } from './components/SamplerPanel'
 import { SkipLinks } from './components/SkipLinks'
 import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
@@ -21,9 +22,11 @@ import {
   lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './model/arc'
-import { bassParamSpec, type BassParamId } from './model/bass'
+import type { BassParamId } from './model/bass'
+import { deckParamSpec } from './model/deckParams'
 import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
-import { MASTER_PARAMS, masterParamSpec, type MasterParamId } from './model/master'
+import { FX_PARAMS, type FxParamId } from './model/fx'
+import { MASTER_PARAMS, type MasterParamId } from './model/master'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
   spotlightsTarget,
@@ -34,13 +37,16 @@ import {
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activePattern,
+  assignSourceToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
   enterLesson,
   openingProjectState,
   resizeActivePatternNote,
   setBassParamValue,
+  setFxParamValue,
   setMasterParamValue,
+  setSamplerParamValue,
   setTransportBpm,
   toggleActivePatternNoteStep,
   toggleLaneMute,
@@ -54,7 +60,8 @@ import {
   readSharedBeat,
   SHARE_QUERY_PARAM,
 } from './model/share'
-import type { DrumLaneId, NoteLaneId } from './model/types'
+import type { SamplerParamId } from './model/sampler'
+import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
@@ -63,6 +70,9 @@ import { ARC } from './lessons'
 // Long enough to coalesce a burst of step taps into one IndexedDB write,
 // short enough that a save has almost always landed before a refresh.
 const AUTOSAVE_DELAY_MS = 400
+
+/** Names the send group, so its five knobs are announced as one block. */
+const FX_GROUP_LABEL_ID = 'deck-fx-bus-label'
 
 export default function App() {
   // ProjectState is the single source of truth: pattern edits, transport
@@ -114,6 +124,8 @@ export default function App() {
   const stabLane = pattern.noteLanes.find((lane) => lane.id === 'stab')!
   const bassSettings = project.instrumentSettings.bass
   const masterSettings = project.instrumentSettings.master
+  const fxSettings = project.instrumentSettings.fx
+  const samplerSettings = project.instrumentSettings.sampler
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
 
@@ -276,6 +288,18 @@ export default function App() {
     engine.setMasterSettings(masterSettings)
   }, [masterSettings])
 
+  // And the FX bus: sends and the reverb mix ramp too, so opening a send while
+  // the loop runs fades the echo in rather than switching it on.
+  useEffect(() => {
+    engine.setFxSettings(fxSettings)
+  }, [fxSettings])
+
+  // Pad regions and Tune values are read live at each scheduled or performed
+  // hit, so edits take effect without rebuilding or restarting the transport.
+  useEffect(() => {
+    engine.setSamplerSettings(samplerSettings)
+  }, [samplerSettings])
+
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
   // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
@@ -295,15 +319,15 @@ export default function App() {
   // handed to are memoized: a fresh closure is a changed prop, and a changed
   // prop would rebuild seven lanes and a keyboard on each pointer move of a
   // dragged knob — the dropped frame this deck must not have while playing.
-  const handleCycleStep = useCallback((laneId: DrumLaneId, stepIndex: number) => {
+  const handleCycleStep = useCallback((laneId: LaneId, stepIndex: number) => {
     setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
   }, [])
 
-  const handleToggleMute = useCallback((laneId: DrumLaneId) => {
+  const handleToggleMute = useCallback((laneId: LaneId) => {
     setProject((p) => toggleLaneMute(p, laneId))
   }, [])
 
-  const handleToggleSolo = useCallback((laneId: DrumLaneId) => {
+  const handleToggleSolo = useCallback((laneId: LaneId) => {
     setProject((p) => toggleLaneSolo(p, laneId))
   }, [])
 
@@ -330,12 +354,26 @@ export default function App() {
     // Sound design is something you do to a running loop, so only motion over
     // playing audio counts toward a sweep goal. Read from the ref rather than
     // the state so this handler never has to change identity.
-    setParamMotion((m) => observeParamMotion(m, bassParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
   const handleMasterParamChange = useCallback((id: MasterParamId, value: number) => {
     setProject((p) => setMasterParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, masterParamSpec(id), value, isPlayingRef.current))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  }, [])
+
+  const handleFxParamChange = useCallback((id: FxParamId, value: number) => {
+    setProject((p) => setFxParamValue(p, id, value))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  }, [])
+
+  const handleSamplerParamChange = useCallback((id: SamplerParamId, value: number) => {
+    setProject((p) => setSamplerParamValue(p, id, value))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  }, [])
+
+  const handleAssignSamplerSource = useCallback((padId: PadLaneId, sourceId: string) => {
+    setProject((p) => assignSourceToSamplerPad(p, padId, sourceId))
   }, [])
 
   const handleBpmChange = useCallback((next: number) => {
@@ -368,6 +406,14 @@ export default function App() {
   const handleStabRelease = useCallback((source: string) => {
     engine.releaseStabNote(source)
     chordRef.current = observeChordRelease(chordRef.current, source)
+  }, [])
+
+  const handlePadAttack = useCallback((inputSourceId: string, padId: PadLaneId) => {
+    engine.attackPad(inputSourceId, padId)
+  }, [])
+
+  const handlePadRelease = useCallback((inputSourceId: string) => {
+    engine.releasePad(inputSourceId)
   }, [])
 
   // Which lesson these act on is read back out of the document inside the
@@ -563,6 +609,24 @@ export default function App() {
             ))}
           </div>
         </div>
+        {/* The send bus, grouped apart from the macros: three send levels and
+            the two controls shaping what they arrive into. */}
+        <div className="fx-bus">
+          <span className="fx-bus-name" id={FX_GROUP_LABEL_ID}>
+            Send FX · delay 1/8 dotted → reverb
+          </span>
+          <div className="knob-row fx-knobs" role="group" aria-labelledby={FX_GROUP_LABEL_ID}>
+            {FX_PARAMS.map((param) => (
+              <Knob
+                key={param.id}
+                spec={param}
+                value={fxSettings[param.id]}
+                spotlit={spotlitParams.includes(param.id)}
+                onChange={handleFxParamChange}
+              />
+            ))}
+          </div>
+        </div>
       </section>
 
       <section
@@ -597,6 +661,22 @@ export default function App() {
         })}
         <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
       </section>
+
+      <SamplerPanel
+        lanes={pattern.padLanes}
+        settings={samplerSettings}
+        sources={project.sources}
+        mixer={project.mixer}
+        soloing={soloing}
+        onAssign={handleAssignSamplerSource}
+        onTuneChange={handleSamplerParamChange}
+        onAttack={handlePadAttack}
+        onRelease={handlePadRelease}
+        getSoundingPadIds={engine.getSoundingPadIds}
+        onCycleStep={handleCycleStep}
+        onToggleMute={handleToggleMute}
+        onToggleSolo={handleToggleSolo}
+      />
 
       <BassPanel
         lane={bassLane}

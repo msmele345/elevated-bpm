@@ -1,17 +1,17 @@
 import { memo } from 'react'
-import type { DrumLane, DrumLaneId } from '../model/types'
+import type { LaneId, StepLane } from '../model/types'
 
 interface StepRowProps {
-  lane: DrumLane
+  lane: StepLane<LaneId>
   /**
    * The lane names itself in every callback, so the deck can hand each row one
    * callback that never changes identity. Closing over the lane up there would
    * mean a fresh function per row per render, and the memo below would never
    * bail out on anything.
    */
-  onCycleStep: (laneId: DrumLaneId, stepIndex: number) => void
-  onToggleMute: (laneId: DrumLaneId) => void
-  onToggleSolo: (laneId: DrumLaneId) => void
+  onCycleStep: (laneId: LaneId, stepIndex: number) => void
+  onToggleMute: (laneId: LaneId) => void
+  onToggleSolo: (laneId: LaneId) => void
   spotlit?: boolean
   muted?: boolean
   soloed?: boolean

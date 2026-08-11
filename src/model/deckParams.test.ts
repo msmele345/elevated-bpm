@@ -3,14 +3,15 @@ import { BASS_PARAMS } from './bass'
 import { DECK_PARAMS, DECK_PARAM_IDS, deckParamSpec, isDeckParamId } from './deckParams'
 import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
+import { SAMPLER_PARAMS } from './sampler'
 
 describe('the deck param registry', () => {
-  it('holds every knob on the deck — bass, master, and FX', () => {
-    for (const param of [...BASS_PARAMS, ...MASTER_PARAMS, ...FX_PARAMS]) {
+  it('holds every knob on the deck — bass, master, FX, and sampler Tune', () => {
+    for (const param of [...BASS_PARAMS, ...MASTER_PARAMS, ...FX_PARAMS, ...SAMPLER_PARAMS]) {
       expect([param.id, deckParamSpec(param.id)]).toEqual([param.id, param])
     }
     expect(DECK_PARAMS.length).toBe(
-      BASS_PARAMS.length + MASTER_PARAMS.length + FX_PARAMS.length,
+      BASS_PARAMS.length + MASTER_PARAMS.length + FX_PARAMS.length + SAMPLER_PARAMS.length,
     )
   })
 

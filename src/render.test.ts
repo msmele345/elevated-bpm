@@ -57,13 +57,17 @@ vi.mock('./audio/engine', async () => {
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
     setFxSettings: () => undefined,
+    setSamplerSettings: () => undefined,
     setBpm: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
     stop: () => undefined,
     attackStabNote: () => undefined,
     releaseStabNote: () => undefined,
+    attackPad: () => undefined,
+    releasePad: () => undefined,
     getSoundingStabNotes: () => [],
+    getSoundingPadIds: () => [],
     getSpectrum: () => null,
     getCurrentStep: () => -1,
     getTransportTicks: () => -1,
@@ -94,6 +98,18 @@ vi.mock('./components/StabKeyboard', async () => {
     StabKeyboard: (props: Record<string, unknown>) => {
       recorded.panel.push({ name: 'StabKeyboard', props })
       return createElement(actual.StabKeyboard as never, props as never)
+    },
+  }
+})
+
+vi.mock('./components/SamplerPanel', async () => {
+  const actual = await vi.importActual<typeof import('./components/SamplerPanel')>(
+    './components/SamplerPanel',
+  )
+  return {
+    SamplerPanel: (props: Record<string, unknown>) => {
+      recorded.panel.push({ name: 'SamplerPanel', props })
+      return createElement(actual.SamplerPanel as never, props as never)
     },
   }
 })
@@ -182,8 +198,8 @@ describe('deck render cost', () => {
     for (const [id, changed] of changedPropsPerLane(recorded.noteRow, noteMark)) {
       expect(changed, `note lane ${id}`).toEqual([])
     }
-    // Five drum lanes and two note lanes were on the deck before the knob moved.
-    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(5)
+    // Five kit lanes, four pad lanes, and two note lanes were on the deck.
+    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(9)
     expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
   })
 
@@ -216,10 +232,10 @@ describe('deck render cost', () => {
     for (const [name, changed] of changedPropsPerPanel(panelMark)) {
       expect(changed, `panel ${name}`).toEqual([])
     }
-    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(5)
+    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(9)
     expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
-    // The bass panel and the stab keyboard were both on the deck beforehand.
-    expect(changedPropsPerPanel(panelMark).size).toBe(2)
+    // Bass, stab, and sampler panels were all on the deck beforehand.
+    expect(changedPropsPerPanel(panelMark).size).toBe(3)
   })
 
   it('leaves the other lanes on identical props when one lane is edited', async () => {
@@ -238,6 +254,24 @@ describe('deck render cost', () => {
     expect(changed.get('kick')).toEqual(['lane'])
     for (const [id, keys] of changed) {
       if (id !== 'kick') expect(keys, `drum lane ${id}`).toEqual([])
+    }
+  })
+
+  it('changes only one pad lane when that pad is programmed', async () => {
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+
+    const mark = recorded.stepRow.length
+    fireEvent.click(screen.getByRole('button', { name: 'Pad 3 step 7' }))
+
+    const changed = changedPropsPerLane(recorded.stepRow, mark)
+    expect(changed.get('pad3')).toEqual(['lane'])
+    for (const [id, keys] of changed) {
+      if (id !== 'pad3') expect(keys, `lane ${id}`).toEqual([])
     }
   })
 })

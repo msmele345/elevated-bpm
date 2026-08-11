@@ -14,6 +14,39 @@ import {
 import { createShareUrl, readSharedBeat } from './model/share'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 
+const engineSpies = vi.hoisted(() => ({
+  setPattern: vi.fn(),
+  setMixer: vi.fn(),
+  setBassSettings: vi.fn(),
+  setMasterSettings: vi.fn(),
+  setFxSettings: vi.fn(),
+  setSamplerSettings: vi.fn(),
+  setBpm: vi.fn(),
+  unlockAudio: vi.fn().mockResolvedValue(undefined),
+  play: vi.fn().mockResolvedValue(undefined),
+  stop: vi.fn(),
+  attackStabNote: vi.fn(),
+  releaseStabNote: vi.fn(),
+  attackPad: vi.fn(),
+  releasePad: vi.fn(),
+  getSoundingPadIds: vi.fn((): string[] => []),
+}))
+
+vi.mock('./audio/engine', async () => {
+  const transport = await import('./model/transport')
+  return {
+    ...engineSpies,
+    DEFAULT_BPM: transport.DEFAULT_BPM,
+    MIN_BPM: transport.MIN_BPM,
+    MAX_BPM: transport.MAX_BPM,
+    TICKS_PER_16TH: 48,
+    getSoundingStabNotes: () => [],
+    getSpectrum: () => null,
+    getCurrentStep: () => -1,
+    getTransportTicks: () => -1,
+  }
+})
+
 vi.mock('tone', () => {
   const transport = {
     PPQ: 192,
@@ -46,11 +79,103 @@ function deleteProjectDatabase(): Promise<void> {
 }
 
 beforeEach(async () => {
+  for (const spy of Object.values(engineSpies)) spy.mockClear()
+  engineSpies.getSoundingPadIds.mockReturnValue([])
   vi.stubGlobal('indexedDB', indexedDB)
   vi.stubGlobal('requestAnimationFrame', () => 1)
   vi.stubGlobal('cancelAnimationFrame', () => undefined)
   window.history.replaceState(null, '', '/')
   await deleteProjectDatabase()
+})
+
+describe('App sampler workflow', () => {
+  it('assigns the curated source, programs its lane, and plays it live without changing the pattern', async () => {
+    render(createElement(App))
+    const shareButton = screen.getByRole('button', { name: 'Share beat' })
+    await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
+
+    expect(screen.getByText('Warehouse Perc')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Assign Warehouse Perc to Pad 1' }))
+    expect(screen.getByRole('button', { name: 'Play Pad 1 — Warehouse Perc' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pad 1 step 1' }))
+    expect(screen.getByRole('button', { name: 'Pad 1 step 1' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    const before = JSON.stringify(activePattern((await loadProjectState())!))
+
+    fireEvent.keyDown(window, { code: 'Digit1', key: '1' })
+    fireEvent.keyUp(window, { code: 'Digit1', key: '1' })
+
+    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit1', 'pad1')
+    expect(engineSpies.releasePad).toHaveBeenCalledWith('computer:Digit1')
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(JSON.stringify(activePattern((await loadProjectState())!))).toBe(before)
+  })
+
+  it('keeps digits out of text entry while a focused tempo fader leaves pads playable', async () => {
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    const input = document.createElement('input')
+    input.type = 'text'
+    document.body.append(input)
+
+    fireEvent.keyDown(input, { code: 'Digit2', key: '2' })
+    expect(engineSpies.attackPad).not.toHaveBeenCalled()
+
+    const tempo = screen.getByRole('slider', { name: 'Tempo in beats per minute' })
+    fireEvent.keyDown(tempo, { code: 'Digit2', key: '2' })
+    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit2', 'pad2')
+    fireEvent.keyUp(tempo, { code: 'Digit2', key: '2' })
+    input.remove()
+  })
+
+  it('plays pads and stabs together and releases each input independently', async () => {
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+
+    fireEvent.keyDown(window, { code: 'Digit3', key: '3' })
+    fireEvent.keyDown(window, { code: 'KeyA', key: 'a' })
+    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit3', 'pad3')
+    expect(engineSpies.attackStabNote).toHaveBeenCalledWith('computer:KeyA', 60)
+
+    fireEvent.keyUp(window, { code: 'Digit3', key: '3' })
+    expect(engineSpies.releasePad).toHaveBeenCalledWith('computer:Digit3')
+    expect(engineSpies.releaseStabNote).not.toHaveBeenCalled()
+
+    fireEvent.keyUp(window, { code: 'KeyA', key: 'a' })
+    expect(engineSpies.releaseStabNote).toHaveBeenCalledWith('computer:KeyA')
+  })
+
+  it('lights live and sequenced pads from the engine clock on animation frames', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    const pad = screen.getByRole('button', { name: 'Play Pad 2 — empty' })
+
+    engineSpies.getSoundingPadIds.mockReturnValue(['pad2'])
+    for (const frame of [...frames]) frame(16)
+
+    expect(pad.hasAttribute('data-sounding')).toBe(true)
+    expect(pad.getAttribute('aria-pressed')).toBe('true')
+  })
 })
 
 afterEach(() => {

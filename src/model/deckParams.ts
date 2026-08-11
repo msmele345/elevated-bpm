@@ -2,6 +2,7 @@ import { BASS_PARAMS, type BassParamId } from './bass'
 import { FX_PARAMS, type FxParamId } from './fx'
 import type { ParamSpec } from './knob'
 import { MASTER_PARAMS, type MasterParamId } from './master'
+import { SAMPLER_PARAMS, type SamplerParamId } from './sampler'
 
 /**
  * Every knob on the deck, in one place.
@@ -16,12 +17,13 @@ import { MASTER_PARAMS, type MasterParamId } from './master'
  * anywhere makes it lesson-addressable without touching the curriculum code.
  */
 
-export type DeckParamId = BassParamId | MasterParamId | FxParamId
+export type DeckParamId = BassParamId | MasterParamId | FxParamId | SamplerParamId
 
 export const DECK_PARAMS: ReadonlyArray<ParamSpec & { id: DeckParamId }> = [
   ...BASS_PARAMS,
   ...MASTER_PARAMS,
   ...FX_PARAMS,
+  ...SAMPLER_PARAMS,
 ]
 
 /**

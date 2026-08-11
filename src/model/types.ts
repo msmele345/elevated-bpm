@@ -14,12 +14,18 @@ export interface DrumStep {
 
 export type DrumLaneId = 'kick' | 'snare' | 'closedHat' | 'openHat' | 'perc'
 
-/** A drum lane: 16 steps of on/off + accent. */
-export interface DrumLane {
-  id: DrumLaneId
+export type PadLaneId = 'pad1' | 'pad2' | 'pad3' | 'pad4'
+export type LaneId = DrumLaneId | PadLaneId
+
+/** A 16-step on/off + accent lane, shared by the kit and sampler pads. */
+export interface StepLane<Id extends LaneId> {
+  id: Id
   label: string
   steps: DrumStep[]
 }
+
+export type DrumLane = StepLane<DrumLaneId>
+export type PadLane = StepLane<PadLaneId>
 
 /**
  * One cell of a note lane: a pitch (MIDI note number) and a length in whole
@@ -49,5 +55,6 @@ export interface Pattern {
   id: string
   name: string
   lanes: DrumLane[]
+  padLanes: PadLane[]
   noteLanes: NoteLane[]
 }

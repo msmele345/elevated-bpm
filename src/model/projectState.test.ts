@@ -4,9 +4,15 @@ import { DEFAULT_FX_SETTINGS, FX_PARAMS } from './fx'
 import { DEFAULT_MASTER_SETTINGS, MASTER_PARAMS } from './master'
 import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
 import { createDemoPattern, createInitialPattern } from './pattern'
+import {
+  CURATED_SAMPLE_SOURCE,
+  createSamplerSettings,
+  samplerParamForPad,
+} from './sampler'
 import { DEFAULT_BPM } from './transport'
 import {
   activePattern,
+  assignSourceToSamplerPad,
   createInitialProjectState,
   openingProjectState,
   PROJECT_STATE_VERSION,
@@ -15,6 +21,7 @@ import {
   setBassParamValue,
   setFxParamValue,
   setMasterParamValue,
+  setSamplerParamValue,
   setTransportBpm,
   cycleActivePatternStep,
   enterLesson,
@@ -38,7 +45,9 @@ describe('createInitialProjectState', () => {
       bass: DEFAULT_BASS_SETTINGS,
       master: DEFAULT_MASTER_SETTINGS,
       fx: DEFAULT_FX_SETTINGS,
+      sampler: createSamplerSettings(),
     })
+    expect(state.sources).toEqual([CURATED_SAMPLE_SOURCE])
     expect(state.prefs).toEqual({})
     // No lesson picked yet: the document follows the arc's own path until the
     // user steps off it.
@@ -132,6 +141,51 @@ describe('cycleActivePatternStep', () => {
     expect(activePattern(next).lanes[0].steps[4].on).toBe(true)
     expect(activePattern(state).lanes[0].steps[4].on).toBe(false)
     expect(next).not.toBe(state)
+  })
+
+  it('cycles a pad step through the same document boundary as a drum step', () => {
+    const state = createInitialProjectState()
+    const next = cycleActivePatternStep(state, 'pad4', 9)
+
+    expect(activePattern(next).padLanes.find((lane) => lane.id === 'pad4')!.steps[9]).toEqual({
+      on: true,
+      accent: false,
+    })
+    expect(activePattern(next).lanes).toBe(activePattern(state).lanes)
+  })
+})
+
+describe('sampler editing', () => {
+  it('assigns the curated source to one pad as a whole-source region', () => {
+    const state = createInitialProjectState()
+    const assigned = assignSourceToSamplerPad(state, 'pad1', CURATED_SAMPLE_SOURCE.id)
+
+    expect(assigned.instrumentSettings.sampler.pad1).toEqual({
+      region: {
+        sourceId: CURATED_SAMPLE_SOURCE.id,
+        start: 0,
+        duration: CURATED_SAMPLE_SOURCE.duration,
+      },
+      tune: 0,
+      fit: null,
+      name: CURATED_SAMPLE_SOURCE.name,
+    })
+    expect(assigned.sources).toBe(state.sources)
+    expect(state.instrumentSettings.sampler.pad1.region).toBeNull()
+  })
+
+  it('ignores an assignment for a source the project does not have', () => {
+    const state = createInitialProjectState()
+    expect(assignSourceToSamplerPad(state, 'pad2', 'missing-source')).toBe(state)
+  })
+
+  it('stores a pad Tune knob value without changing its pattern or sibling pads', () => {
+    const state = createInitialProjectState()
+    const tuned = setSamplerParamValue(state, samplerParamForPad('pad3').id, 12)
+
+    expect(tuned.instrumentSettings.sampler.pad3.tune).toBe(12)
+    expect(tuned.instrumentSettings.sampler.pad2).toBe(state.instrumentSettings.sampler.pad2)
+    expect(activePattern(tuned)).toBe(activePattern(state))
   })
 })
 
@@ -242,6 +296,13 @@ describe('mixer', () => {
     const soloed = toggleLaneSolo(state, 'kick')
     expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true })
   })
+
+  it('stores pad mute and solo in the same mixer as the kit', () => {
+    const state = toggleLaneMute(createInitialProjectState(), 'pad2')
+    const soloed = toggleLaneSolo(state, 'pad2')
+
+    expect(soloed.mixer.pad2).toEqual({ muted: true, soloed: true })
+  })
 })
 
 describe('setTransportBpm', () => {
@@ -295,7 +356,9 @@ describe('migrateProjectState', () => {
         bass: DEFAULT_BASS_SETTINGS,
         master: DEFAULT_MASTER_SETTINGS,
         fx: DEFAULT_FX_SETTINGS,
+        sampler: createSamplerSettings(),
       },
+      sources: [CURATED_SAMPLE_SOURCE],
       lessonProgress: {},
       prefs: {},
       mixer: {},
@@ -327,6 +390,43 @@ describe('migrateProjectState', () => {
     expect(migrated.instrumentSettings.bass.cutoff).toBe(2400)
     expect(migrated.instrumentSettings.master.drive).toBe(35)
     expect(migrated.transport.bpm).toBe(126)
+    expect(migrated.lessonProgress['four-on-the-floor']).toEqual({
+      completed: true,
+      dismissed: true,
+    })
+  })
+
+  it('gives a v8 document empty pads and the curated source, keeping its beat, FX patch and lessons', () => {
+    const current = updateLessonProgress(
+      setFxParamValue(
+        cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
+        'drumSend',
+        65,
+      ),
+      'four-on-the-floor',
+      { completed: true, dismissed: true },
+    )
+    const v8 = JSON.parse(JSON.stringify({ ...current, version: 8 })) as Record<string, unknown>
+    delete v8.sources
+    v8.patterns = (v8.patterns as Array<Record<string, unknown>>).map((pattern) => {
+      const { padLanes: _padLanes, ...beforeSampler } = pattern
+      return beforeSampler
+    })
+    const v8Settings = v8.instrumentSettings as Record<string, unknown>
+    delete v8Settings.sampler
+    delete (v8Settings.fx as Record<string, unknown>).samplerSend
+
+    const migrated = migrateProjectState(v8)!
+
+    expect(migrated.version).toBe(9)
+    expect(migrated.sources).toEqual([CURATED_SAMPLE_SOURCE])
+    expect(migrated.instrumentSettings.sampler).toEqual(createSamplerSettings())
+    expect(migrated.patterns[0].padLanes).toHaveLength(4)
+    expect(migrated.patterns[0].padLanes.every((lane) => lane.steps.every((step) => !step.on)))
+      .toBe(true)
+    expect(migrated.patterns[0].lanes.find((lane) => lane.id === 'kick')!.steps[4].on).toBe(true)
+    expect(migrated.instrumentSettings.fx.drumSend).toBe(65)
+    expect(migrated.instrumentSettings.fx.samplerSend).toBe(0)
     expect(migrated.lessonProgress['four-on-the-floor']).toEqual({
       completed: true,
       dismissed: true,

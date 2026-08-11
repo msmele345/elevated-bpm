@@ -1,5 +1,5 @@
 import { audibleLaneIds, type Mixer } from '../model/mixer'
-import type { DrumLaneId, Pattern } from '../model/types'
+import type { LaneId, Pattern } from '../model/types'
 
 /**
  * What the sequencer should sound on one 16th, derived purely from the
@@ -14,7 +14,7 @@ export const UNACCENTED_GAIN = 0.62
 export const ACCENT_GAIN = 1
 
 export interface Hit {
-  laneId: DrumLaneId
+  laneId: LaneId
   gain: number
 }
 
@@ -23,7 +23,7 @@ export interface Hit {
  * 909 has one — a closed hat chokes the open hat — but the map keeps the rule
  * as data so more voices (e.g. a rim/clave pair) are a one-line addition.
  */
-const CHOKES: Partial<Record<DrumLaneId, DrumLaneId>> = {
+const CHOKES: Partial<Record<LaneId, LaneId>> = {
   closedHat: 'openHat',
 }
 
@@ -33,9 +33,10 @@ const CHOKES: Partial<Record<DrumLaneId, DrumLaneId>> = {
  * soloed, only soloed lanes sound (defaults to an all-audible mixer).
  */
 export function hitsAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer = {}): Hit[] {
-  const audible = new Set(audibleLaneIds(pattern.lanes.map((lane) => lane.id), mixer))
+  const lanes = [...pattern.lanes, ...pattern.padLanes]
+  const audible = new Set(audibleLaneIds(lanes.map((lane) => lane.id), mixer))
   const hits: Hit[] = []
-  for (const lane of pattern.lanes) {
+  for (const lane of lanes) {
     if (!audible.has(lane.id)) continue
     const step = lane.steps[stepIndex]
     if (!step?.on) continue
@@ -49,7 +50,7 @@ export interface StepVoicing {
   /** Lanes to trigger this step, each at its velocity, choked lanes removed. */
   starts: Hit[]
   /** Ringing lanes to silence at this step because a choker fired. */
-  chokes: DrumLaneId[]
+  chokes: LaneId[]
 }
 
 /**
@@ -61,8 +62,8 @@ export interface StepVoicing {
 export function voiceStep(pattern: Pattern, stepIndex: number, mixer: Mixer = {}): StepVoicing {
   const hits = hitsAtStep(pattern, stepIndex, mixer)
   const firing = new Set(hits.map((hit) => hit.laneId))
-  const chokes: DrumLaneId[] = []
-  for (const [choker, target] of Object.entries(CHOKES) as [DrumLaneId, DrumLaneId][]) {
+  const chokes: LaneId[] = []
+  for (const [choker, target] of Object.entries(CHOKES) as [LaneId, LaneId][]) {
     if (firing.has(choker)) chokes.push(target)
   }
   const choked = new Set(chokes)

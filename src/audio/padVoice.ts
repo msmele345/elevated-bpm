@@ -15,12 +15,6 @@ export interface PadGain {
   }
 }
 
-/** @deprecated The nodes the free function drives; replaced by {@link PadVoice}. */
-export interface PadVoiceNodes {
-  player: PadPlayer
-  gain: PadGain
-}
-
 export interface PadSoundWindow {
   startsAt: number
   endsAt: number
@@ -30,9 +24,6 @@ interface PendingPadHit extends PadSoundWindow {
   pad: PadSettings
   gain: number
 }
-
-/** Future hits already handed to each Tone.Player by transport lookahead. */
-const pendingHits = new WeakMap<PadVoiceNodes, PendingPadHit[]>()
 
 function plannedHit(pad: PadSettings, gain: number, time: number): PendingPadHit {
   const rate = tunePlaybackRate(pad.tune)
@@ -115,51 +106,4 @@ export function createPadVoice(player: PadPlayer, gain: PadGain): PadVoice {
       return [{ startsAt: next.startsAt, endsAt: next.endsAt }]
     },
   }
-}
-
-/**
- * Fire one pad through its existing player. Tone.Player turns a `start` while
- * the same player is active into a restart, so one player is monophonic while
- * the first hit still starts from its stopped state.
- *
- * @deprecated Superseded by {@link createPadVoice}, which owns its own queue.
- */
-export function triggerPadVoice(
-  voice: PadVoiceNodes,
-  pad: PadSettings,
-  gain: number,
-  time: number,
-  currentTime: number,
-): PadSoundWindow[] {
-  if (!pad.region) return []
-
-  const future = (pendingHits.get(voice) ?? []).filter((hit) => hit.startsAt > currentTime)
-  const next = plannedHit(pad, gain, time)
-  const insertedBeforeFuture = future.some((hit) => hit.startsAt >= time)
-
-  if (insertedBeforeFuture) {
-    voice.player.stop(time)
-    voice.gain.gain.cancelScheduledValues(time)
-    const replayedFuture = future
-      .filter((hit) => hit.startsAt > time)
-      .map((hit) => plannedHit(pad, hit.gain, hit.startsAt))
-    const rebuilt = [next, ...replayedFuture].sort(
-      (left, right) => left.startsAt - right.startsAt,
-    )
-    rebuilt.forEach((hit) => startHit(voice.player, voice.gain, hit))
-    pendingHits.set(
-      voice,
-      rebuilt.filter((hit) => hit.startsAt > currentTime),
-    )
-    return rebuilt.map(({ startsAt, endsAt }) => ({ startsAt, endsAt }))
-  }
-
-  startHit(voice.player, voice.gain, next)
-  pendingHits.set(
-    voice,
-    [...future, next]
-      .filter((hit) => hit.startsAt > currentTime)
-      .sort((left, right) => left.startsAt - right.startsAt),
-  )
-  return [{ startsAt: next.startsAt, endsAt: next.endsAt }]
 }

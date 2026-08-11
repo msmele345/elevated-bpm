@@ -13,7 +13,16 @@ const tone = vi.hoisted(() => {
   const loadedPromise = new Promise<void>((resolve) => {
     resolveLoaded = resolve
   })
+  // A second, independent lever: the curated asset reaching the sample
+  // registry is a step *after* its download, so first-click readiness cannot
+  // ride on the players' loaded promise alone.
+  let resolveCuratedLoad!: () => void
+  const curatedLoadPromise = new Promise<void>((resolve) => {
+    resolveCuratedLoad = resolve
+  })
   return {
+    curatedLoadPromise,
+    resolveCuratedLoad: () => resolveCuratedLoad(),
     players: [] as Array<{
       playbackRate: number
       buffer: { duration: number }
@@ -106,6 +115,14 @@ vi.mock('tone', () => {
 
   class Meter extends Node {}
 
+  class ToneAudioBuffer {
+    duration = 0.25
+    async load(_url: string) {
+      await tone.curatedLoadPromise
+      return this
+    }
+  }
+
   const transport = {
     PPQ: 192,
     bpm: new AudioParam(),
@@ -131,6 +148,7 @@ vi.mock('tone', () => {
     PolySynth,
     Analyser,
     Meter,
+    ToneAudioBuffer,
     getTransport: () => transport,
     getDestination: () => new Node(),
     gainToDb: (value: number) => value,
@@ -141,9 +159,9 @@ vi.mock('tone', () => {
 })
 
 async function flushPromises(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
-  await Promise.resolve()
+  // Readiness is a chain now — the players' loads and the curated registry
+  // fill are awaited together — so drain generously rather than counting ticks.
+  for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
 }
 
 describe('live sampler audio', () => {
@@ -164,6 +182,12 @@ describe('live sampler audio', () => {
     expect(pad1.start).not.toHaveBeenCalled()
 
     tone.resolveLoaded()
+    await flushPromises()
+    // The players have loaded, but the curated source has not reached the
+    // registry — a pad with nothing to play must not claim to be ready.
+    expect(pad1.start).not.toHaveBeenCalled()
+
+    tone.resolveCuratedLoad()
     await flushPromises()
     expect(pad1.start).toHaveBeenCalledTimes(1)
 

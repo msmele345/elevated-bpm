@@ -26,9 +26,15 @@ import {
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
-import { STEP_COUNT, type LaneId, type PadLaneId, type Pattern } from '../model/types'
+import {
+  STEP_COUNT,
+  type DrumLaneId,
+  type LaneId,
+  type PadLaneId,
+  type Pattern,
+} from '../model/types'
 import { voiceStep } from './hits'
-import { KIT_SAMPLES, PAD_SAMPLES } from './kit'
+import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
 import { createSampleRegistry } from './sampleRegistry'
 import { createStabVoices, type StabVoices } from './stabVoice'
@@ -356,6 +362,16 @@ function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.S
 }
 
 /**
+ * Decode the one shipped source into the registry. This is the ordinary
+ * producer path — the same one intake will use — not a special case for
+ * being shipped.
+ */
+async function loadCuratedSource(): Promise<void> {
+  const buffer = await new Tone.ToneAudioBuffer().load(CURATED_SAMPLE_URL)
+  sampleRegistry.register(CURATED_SAMPLE_SOURCE.id, buffer)
+}
+
+/**
  * Create every audio voice once. Sample loading continues asynchronously,
  * while the synthesized instruments are playable as soon as the AudioContext
  * starts — live keys never wait for drum assets to download.
@@ -366,27 +382,29 @@ function ensureVoices(): void {
   // Every instrument reaches the master through its own send tap, so each one
   // is already on the FX bus rather than being retrofitted onto it later.
   const taps = (fx = createFxBus(master.input)).taps
-  const sampleUrls: Record<LaneId, string> = { ...KIT_SAMPLES, ...PAD_SAMPLES }
-  voices = Object.fromEntries(
-    (Object.entries(sampleUrls) as [LaneId, string][]).map(([laneId, url]) => {
-      // One send for the whole kit and one for the sampler. Per-lane accent
-      // gains sit before those taps, so velocity rides through to the echo.
-      const destination = isPadLaneId(laneId) ? taps.sampler.input : taps.drums.input
-      const gain = new Tone.Gain(1).connect(destination)
+  // One send for the whole kit and one for the sampler. Per-lane accent gains
+  // sit before those taps, so velocity rides through to the echo.
+  const drumEntries = (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(
+    ([laneId, url]) => {
+      const gain = new Tone.Gain(1).connect(taps.drums.input)
       const player = new Tone.Player(url).connect(gain)
-      return [laneId, { player, gain }]
-    }),
-  ) as Record<LaneId, Voice>
+      return [laneId, { player, gain }] as const
+    },
+  )
+  // Pad players are built empty. A pad has no file of its own — its audio
+  // arrives from the registry at trigger time, whichever source it points at.
+  const padEntries = PAD_LANES.map((pad) => {
+    const gain = new Tone.Gain(1).connect(taps.sampler.input)
+    const player = new Tone.Player().connect(gain)
+    return [pad.id, { player, gain }] as const
+  })
+  voices = Object.fromEntries([...drumEntries, ...padEntries]) as Record<LaneId, Voice>
   padVoices = Object.fromEntries(
-    PAD_LANES.map((pad) => [
-      pad.id,
-      createPadVoice(voices![pad.id].player, voices![pad.id].gain, sampleRegistry),
+    padEntries.map(([padId, { player, gain }]) => [
+      padId,
+      createPadVoice(player, gain, sampleRegistry),
     ]),
   ) as Record<PadLaneId, PadVoice>
-  // The curated source is registered like any other — no special case. Its
-  // audio is the buffer the pad players are already loading from their URL;
-  // Tone fills that object in when the download lands.
-  sampleRegistry.register(CURATED_SAMPLE_SOURCE.id, voices[PAD_LANES[0].id].player.buffer)
   bass = createBassVoice(taps.bass.input)
   // Live and sequenced stabs share the tap, so both are on the send.
   stab = createStabVoices(() => createStabSynth(taps.stab.input))
@@ -398,7 +416,11 @@ function ensureVoices(): void {
   setBassSettings(bassSettings)
   setMasterSettings(masterSettings)
   setFxSettings(fxSettings)
-  samplesLoaded = Tone.loaded()
+  // Tone.loaded() covers every player built from a URL — which the pads are
+  // not. Registering the curated audio is a step *after* its download, so the
+  // first gesture has to wait for both: a cold cache would otherwise reach a
+  // pad that looks ready and holds nothing.
+  samplesLoaded = Promise.all([Tone.loaded(), loadCuratedSource()]).then(() => undefined)
   Tone.getTransport().bpm.value = bpm
   if (import.meta.env.DEV) {
     // Debug handle for tooling/tests; never used by app code.

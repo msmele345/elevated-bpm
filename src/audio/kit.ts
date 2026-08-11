@@ -1,4 +1,4 @@
-import type { DrumLaneId, PadLaneId } from '../model/types'
+import type { DrumLaneId } from '../model/types'
 
 /**
  * The default kit: which synthesized 909-style sample each lane plays. Sample
@@ -15,13 +15,9 @@ export const KIT_SAMPLES: Record<DrumLaneId, string> = {
 }
 
 /**
- * The tracer's four voices all point at the one curated shipped source. Tone's
- * buffer cache prevents four network reads; one Player per pad preserves the
- * hardware rule that pads choke themselves but never each other.
+ * Where the one shipped sample *source* lives. Not a lane map: no pad is bound
+ * to this file. It is decoded once into the sample registry under the curated
+ * source's id, and a pad reaches it only by holding a region into that source —
+ * the same way a pad will reach an uploaded one.
  */
-export const PAD_SAMPLES: Record<PadLaneId, string> = {
-  pad1: '/samples/perc-909.wav',
-  pad2: '/samples/perc-909.wav',
-  pad3: '/samples/perc-909.wav',
-  pad4: '/samples/perc-909.wav',
-}
+export const CURATED_SAMPLE_URL = '/samples/perc-909.wav'

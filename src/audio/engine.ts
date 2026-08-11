@@ -20,6 +20,7 @@ import {
   createPadSoundingLanes,
   createSamplerSettings,
   isPadLaneId,
+  type PadHitOrigin,
   type SamplerSettings,
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
@@ -437,7 +438,7 @@ export function attackPad(inputSourceId: string, padId: PadLaneId): void {
   void unlockAudio().then(() => {
     if (!laneIsAudible(padId, currentMixer)) return
     const now = Tone.immediate()
-    triggerPlayablePad(padId, 1, now, now)
+    triggerPlayablePad(padId, 1, now, now, 'live')
   })
 }
 
@@ -452,6 +453,7 @@ function triggerPlayablePad(
   gain: number,
   time: number,
   currentTime: number,
+  origin: PadHitOrigin,
 ): void {
   const voice = voices?.[padId]
   const pad = currentSamplerSettings[padId]
@@ -460,7 +462,7 @@ function triggerPlayablePad(
   // metadata without playable audio and must stay silent.
   if (!voice || pad.region?.sourceId !== CURATED_SAMPLE_SOURCE.id) return
   for (const window of triggerPadVoice(voice, pad, gain, time, currentTime)) {
-    padSoundingLanes.schedule(padId, window.startsAt, window.endsAt)
+    padSoundingLanes.schedule(padId, window.startsAt, window.endsAt, origin)
   }
 }
 
@@ -505,7 +507,7 @@ export async function play(): Promise<void> {
       for (const hit of starts) {
         const voice = voices[hit.laneId]
         if (isPadLaneId(hit.laneId)) {
-          triggerPlayablePad(hit.laneId, hit.gain, time, Tone.immediate())
+          triggerPlayablePad(hit.laneId, hit.gain, time, Tone.immediate(), 'sequenced')
         } else {
           voice.gain.gain.setValueAtTime(hit.gain, time)
           voice.player.start(time)
@@ -536,5 +538,6 @@ export function stop(): void {
   transport.stop()
   stab?.stopSequenced()
   stabSoundingNotes.clearSequenced()
+  padSoundingLanes.clearSequenced()
   // stop() resets transport position, so the next play starts on step 1.
 }

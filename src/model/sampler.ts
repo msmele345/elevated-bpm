@@ -197,33 +197,49 @@ export function padForKeyboardInput(input: PadKeyboardInput): PadLaneSpec | unde
   return PAD_LANES.find((pad) => pad.keyCode === input.code)
 }
 
+/** Which input opened a light window. Transport stop only owns its own. */
+export type PadHitOrigin = 'live' | 'sequenced'
+
 interface PadSoundWindow {
   padId: PadLaneId
+  origin: PadHitOrigin
   startsAt: number
   endsAt: number
 }
 
 export interface PadSoundingLanes {
-  schedule(padId: PadLaneId, startsAt: number, endsAt: number): void
+  schedule(
+    padId: PadLaneId,
+    startsAt: number,
+    endsAt: number,
+    origin: PadHitOrigin,
+  ): void
+  /** Drop transport-scheduled windows, leaving a held live hit lit. */
+  clearSequenced(): void
   /** Pads audible at a monotonically increasing audio-context time. */
   atTime(time: number): PadLaneId[]
 }
 
 /**
  * Audio-clock windows for pad LEDs. A retrigger clips an older window at the
- * new attack, matching the one-player-per-pad self-choke rule.
+ * new attack, matching the one-player-per-pad self-choke rule — and it clips
+ * across origins, because a live hit and a sequenced one share that one player.
  */
 export function createPadSoundingLanes(): PadSoundingLanes {
   let windows: PadSoundWindow[] = []
   return {
-    schedule(padId, startsAt, endsAt) {
+    schedule(padId, startsAt, endsAt, origin) {
       if (endsAt <= startsAt) return
       windows = windows.map((window) =>
         window.padId === padId && window.endsAt > startsAt
           ? { ...window, endsAt: Math.max(window.startsAt, startsAt) }
           : window,
       )
-      windows.push({ padId, startsAt, endsAt })
+      windows.push({ padId, origin, startsAt, endsAt })
+    },
+
+    clearSequenced() {
+      windows = windows.filter((window) => window.origin === 'live')
     },
 
     atTime(time) {

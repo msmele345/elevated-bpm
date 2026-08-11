@@ -185,4 +185,31 @@ describe('live sampler audio', () => {
       [43, 0, CURATED_SAMPLE_SOURCE.duration],
     ])
   })
+
+  it('stop clears sequenced pad lights without darkening a live pad', async () => {
+    const engine = await import('./engine')
+    const settings = assignSourceToPad(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+      'pad2',
+      CURATED_SAMPLE_SOURCE,
+    )
+    engine.setSamplerSettings(settings)
+    engine.setMixer({})
+
+    let pattern = cycleStep(createInitialPattern(), 'pad2', 0)
+    engine.setPattern(pattern)
+    await engine.play()
+
+    // A lookahead-scheduled hit whose window is still open at the audio clock's
+    // current time (the mock's Tone.immediate is 10).
+    tone.repeatCallbacks[0](9.9)
+    engine.attackPad('pointer:9', 'pad1')
+    await flushPromises()
+
+    expect(engine.getSoundingPadIds()).toEqual(['pad1', 'pad2'])
+
+    engine.stop()
+
+    expect(engine.getSoundingPadIds()).toEqual(['pad1'])
+  })
 })

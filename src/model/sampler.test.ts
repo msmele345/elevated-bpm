@@ -109,8 +109,8 @@ describe('padForKeyboardInput', () => {
 describe('createPadSoundingLanes', () => {
   it('reports live and sequenced pad light windows from audio time', () => {
     const sounding = createPadSoundingLanes()
-    sounding.schedule('pad1', 1, 1.25)
-    sounding.schedule('pad3', 1.1, 1.4)
+    sounding.schedule('pad1', 1, 1.25, 'live')
+    sounding.schedule('pad3', 1.1, 1.4, 'sequenced')
 
     expect(sounding.atTime(0.99)).toEqual([])
     expect(sounding.atTime(1.2)).toEqual(['pad1', 'pad3'])
@@ -120,10 +120,29 @@ describe('createPadSoundingLanes', () => {
 
   it('retriggering one monophonic pad replaces its prior light window', () => {
     const sounding = createPadSoundingLanes()
-    sounding.schedule('pad2', 2, 3)
-    sounding.schedule('pad2', 2.25, 2.5)
+    sounding.schedule('pad2', 2, 3, 'sequenced')
+    sounding.schedule('pad2', 2.25, 2.5, 'sequenced')
 
     expect(sounding.atTime(2.4)).toEqual(['pad2'])
     expect(sounding.atTime(2.6)).toEqual([])
+  })
+
+  it('clips a live window with a sequenced retrigger, because one pad is one player', () => {
+    const sounding = createPadSoundingLanes()
+    sounding.schedule('pad2', 2, 3, 'live')
+    sounding.schedule('pad2', 2.25, 2.5, 'sequenced')
+
+    expect(sounding.atTime(2.4)).toEqual(['pad2'])
+    expect(sounding.atTime(2.6)).toEqual([])
+  })
+
+  it('clears sequenced windows on transport stop without darkening a live hit', () => {
+    const sounding = createPadSoundingLanes()
+    sounding.schedule('pad1', 1, 2, 'live')
+    sounding.schedule('pad2', 1, 2, 'sequenced')
+
+    sounding.clearSequenced()
+
+    expect(sounding.atTime(1.5)).toEqual(['pad1'])
   })
 })

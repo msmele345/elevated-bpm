@@ -19,13 +19,37 @@ interface SamplerPadProps {
 function SamplerPadButton({ pad, settings, onAttack, onRelease }: SamplerPadProps) {
   const heldSources = useRef(new Set<string>())
 
-  useEffect(
-    () => () => {
+  // A Space held while focus moves away sends its keyup to whatever took focus,
+  // so listen globally. A hold that outlived its key would make the early return
+  // in attack() permanent and leave this pad's Space and Enter dead.
+  useEffect(() => {
+    const handleKeyUp = (event: globalThis.KeyboardEvent) => {
+      if (event.code !== 'Space' && event.code !== 'Enter') return
+      const inputSourceId = `button:${pad.id}:${event.code}`
+      if (!heldSources.current.delete(inputSourceId)) return
+      event.preventDefault()
+      onRelease(inputSourceId)
+    }
+
+    const releaseAll = () => {
       for (const inputSourceId of heldSources.current) onRelease(inputSourceId)
       heldSources.current.clear()
-    },
-    [onRelease],
-  )
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') releaseAll()
+    }
+
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', releaseAll)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', releaseAll)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      releaseAll()
+    }
+  }, [onRelease, pad.id])
 
   const attack = (inputSourceId: string) => {
     if (heldSources.current.has(inputSourceId)) return
@@ -62,12 +86,6 @@ function SamplerPadButton({ pad, settings, onAttack, onRelease }: SamplerPadProp
     attack(`button:${pad.id}:${event.code}`)
   }
 
-  const handleKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.code !== 'Space' && event.code !== 'Enter') return
-    event.preventDefault()
-    release(`button:${pad.id}:${event.code}`)
-  }
-
   const soundName = settings.region ? settings.name : 'empty'
 
   return (
@@ -78,7 +96,6 @@ function SamplerPadButton({ pad, settings, onAttack, onRelease }: SamplerPadProp
       aria-pressed={false}
       aria-label={`Play ${pad.label} — ${soundName}`}
       onKeyDown={handleKeyDown}
-      onKeyUp={handleKeyUp}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerRelease}
       onPointerCancel={handlePointerRelease}

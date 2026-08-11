@@ -30,6 +30,7 @@ import { STEP_COUNT, type LaneId, type PadLaneId, type Pattern } from '../model/
 import { voiceStep } from './hits'
 import { KIT_SAMPLES, PAD_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
+import { createSampleRegistry } from './sampleRegistry'
 import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -68,6 +69,13 @@ let voices: Record<LaneId, Voice> | null = null
  */
 let padVoices: Record<PadLaneId, PadVoice> | null = null
 let samplesLoaded: Promise<void> | null = null
+
+/**
+ * Decoded audio by source id — the one path from a source to sound. A pad
+ * resolves its region's source through here on every hit, so reassigning a pad
+ * is a document edit and nothing more.
+ */
+const sampleRegistry = createSampleRegistry()
 
 /**
  * The bass instrument: one sawtooth oscillator through a resonant lowpass.
@@ -370,8 +378,15 @@ function ensureVoices(): void {
     }),
   ) as Record<LaneId, Voice>
   padVoices = Object.fromEntries(
-    PAD_LANES.map((pad) => [pad.id, createPadVoice(voices![pad.id].player, voices![pad.id].gain)]),
+    PAD_LANES.map((pad) => [
+      pad.id,
+      createPadVoice(voices![pad.id].player, voices![pad.id].gain, sampleRegistry),
+    ]),
   ) as Record<PadLaneId, PadVoice>
+  // The curated source is registered like any other — no special case. Its
+  // audio is the buffer the pad players are already loading from their URL;
+  // Tone fills that object in when the download lands.
+  sampleRegistry.register(CURATED_SAMPLE_SOURCE.id, voices[PAD_LANES[0].id].player.buffer)
   bass = createBassVoice(taps.bass.input)
   // Live and sequenced stabs share the tap, so both are on the send.
   stab = createStabVoices(() => createStabSynth(taps.stab.input))
@@ -468,11 +483,10 @@ function triggerPlayablePad(
   origin: PadHitOrigin,
 ): void {
   const voice = padVoices?.[padId]
+  if (!voice) return
   const pad = currentSamplerSettings[padId]
-  // The tracer has one shipped source. Later intake replaces the Player's
-  // buffer before assigning other source ids; until then an unknown id is
-  // metadata without playable audio and must stay silent.
-  if (!voice || pad.region?.sourceId !== CURATED_SAMPLE_SOURCE.id) return
+  // Which sources may sound is the voice's question now, answered by the
+  // registry rather than by naming the one shipped source here.
   for (const window of voice.trigger(pad, gain, time, currentTime)) {
     padSoundingLanes.schedule(padId, window.startsAt, window.endsAt, origin)
   }

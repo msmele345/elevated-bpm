@@ -1,8 +1,10 @@
 import { tunePlaybackRate, type PadSettings } from '../model/sampler'
+import type { SampleBuffer, SampleRegistry } from './sampleRegistry'
 
 /** The small part of Tone.Player the sampler's one-shot contract needs. */
 export interface PadPlayer {
   playbackRate: number
+  buffer: SampleBuffer
   start(time: number, offset?: number, duration?: number): unknown
   stop(time: number): unknown
 }
@@ -64,12 +66,36 @@ export interface PadVoice {
   ): PadSoundWindow[]
 }
 
-export function createPadVoice(player: PadPlayer, gain: PadGain): PadVoice {
+export function createPadVoice(
+  player: PadPlayer,
+  gain: PadGain,
+  registry: SampleRegistry,
+): PadVoice {
   let pending: PendingPadHit[] = []
+  /** The source whose audio the player is currently holding. */
+  let heldSourceId: string | null = null
 
   return {
     trigger(pad, hitGain, time, currentTime) {
       if (!pad.region) return []
+      // A source the registry cannot make audio for is metadata without sound.
+      // This is the whole membership rule: not "is it the shipped one", just
+      // "do we hold its audio" — which stays true however many sources arrive.
+      const buffer = registry.get(pad.region.sourceId)
+      if (!buffer) return []
+
+      // Resolve at trigger time, and swap only on a real change. A pad can be
+      // reassigned mid-playback, so the hit asks what it should sound rather
+      // than trusting something to have pushed it here first.
+      //
+      // This runs before every start below — including the rebuild's replayed
+      // ones. A player's buffer is pad-global and live, exactly like its
+      // playbackRate, so a swap has to be part of the rebuild rather than a
+      // separate mutation racing it.
+      if (pad.region.sourceId !== heldSourceId) {
+        player.buffer = buffer
+        heldSourceId = pad.region.sourceId
+      }
 
       const future = pending.filter((hit) => hit.startsAt > currentTime)
       const next = plannedHit(pad, hitGain, time)

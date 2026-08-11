@@ -16,6 +16,7 @@ const tone = vi.hoisted(() => {
   return {
     players: [] as Array<{
       playbackRate: number
+      buffer: { duration: number }
       start: ReturnType<typeof vi.fn>
       stop: ReturnType<typeof vi.fn>
     }>,
@@ -54,6 +55,9 @@ vi.mock('tone', () => {
 
   class Player extends Node {
     playbackRate = 1
+    // Stands in for the decoded audio a URL-constructed player holds; the
+    // engine registers a pad's under its source id.
+    buffer = { duration: 0.25 }
     start = vi.fn()
     stop = vi.fn()
     constructor(_url: string) {
@@ -211,5 +215,22 @@ describe('live sampler audio', () => {
     engine.stop()
 
     expect(engine.getSoundingPadIds()).toEqual(['pad1'])
+  })
+
+  it('leaves a pad silent while no audio is registered for its source', async () => {
+    const engine = await import('./engine')
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad3', {
+        ...CURATED_SAMPLE_SOURCE,
+        id: 'upload-nothing-decoded-yet',
+        name: 'Not loaded',
+      }),
+    )
+    engine.setMixer({})
+
+    engine.attackPad('pointer:33', 'pad3')
+    await flushPromises()
+
+    expect(tone.players[7].start).not.toHaveBeenCalled()
   })
 })

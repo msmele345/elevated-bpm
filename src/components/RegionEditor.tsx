@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AnalysisAudio } from '../audio/engine'
 import { detectOnsets } from '../model/onset'
 import {
   formatTimecode,
+  fractionOfSource,
   jumpRegionEdgeToOnset,
   moveRegionEdge,
   regionEdgeAnnouncement,
@@ -104,15 +105,31 @@ export function RegionEditor({
     return () => previousFocus?.focus()
   }, [])
 
-  const moveEdge = (edge: RegionEdge, seconds: number) => {
-    onRegionChange(moveRegionEdge(region, edge, seconds, analysis.duration))
-  }
+  // The handles name themselves in these callbacks, so each is handed down
+  // once rather than rebuilt per render — the discipline Phase 9 set, applied
+  // to a control that emits a change on every pointer move. What the edit
+  // applies *to* is read from a ref, so a moving region never changes a
+  // handler's identity.
+  const regionRef = useRef(region)
+  regionRef.current = region
 
-  const jumpEdge = (edge: RegionEdge, direction: 'next' | 'previous') => {
-    onRegionChange(
-      jumpRegionEdgeToOnset(region, edge, direction, onsets, analysis.duration),
-    )
-  }
+  const moveEdge = useCallback(
+    (edge: RegionEdge, seconds: number) => {
+      onRegionChange(moveRegionEdge(regionRef.current, edge, seconds, analysis.duration))
+    },
+    [onRegionChange, analysis.duration],
+  )
+
+  const jumpEdge = useCallback(
+    (edge: RegionEdge, direction: 'next' | 'previous') => {
+      onRegionChange(
+        jumpRegionEdgeToOnset(regionRef.current, edge, direction, onsets, analysis.duration),
+      )
+    },
+    [onRegionChange, onsets, analysis.duration],
+  )
+
+  const auditionCurrent = useCallback(() => onAudition(regionRef.current), [onAudition])
 
   return (
     <div
@@ -148,8 +165,8 @@ export function RegionEditor({
             className="region-editor-selection"
             aria-hidden="true"
             style={{
-              left: `${(region.start / Math.max(analysis.duration, 1e-6)) * 100}%`,
-              width: `${(region.duration / Math.max(analysis.duration, 1e-6)) * 100}%`,
+              left: `${fractionOfSource(region.start, analysis.duration) * 100}%`,
+              width: `${fractionOfSource(region.duration, analysis.duration) * 100}%`,
             }}
           />
           {(['start', 'end'] as const).map((edge) => (
@@ -162,7 +179,7 @@ export function RegionEditor({
               trackRef={trackRef}
               onMove={moveEdge}
               onJump={jumpEdge}
-              onAudition={() => onAudition(region)}
+              onAudition={auditionCurrent}
             />
           ))}
         </div>
@@ -179,7 +196,7 @@ export function RegionEditor({
         </dl>
 
         <div className="region-editor-actions">
-          <button type="button" className="region-editor-audition" onClick={() => onAudition(region)}>
+          <button type="button" className="region-editor-audition" onClick={auditionCurrent}>
             Audition region
           </button>
           <label className="region-editor-target">

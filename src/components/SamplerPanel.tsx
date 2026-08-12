@@ -12,6 +12,7 @@ import {
   type SamplerParamId,
   type SamplerSettings,
 } from '../model/sampler'
+import { secondsPerStep } from '../model/transport'
 import type { LaneId, PadLane, PadLaneId } from '../model/types'
 import { Knob } from './Knob'
 import { PanelTitle } from './PanelTitle'
@@ -234,7 +235,7 @@ function SamplerInstrument({
           // A slice is exactly its region's audio, so the region's own
           // duration is what the rate arithmetic measures against.
           const rate = region
-            ? padPlaybackRate(settingsForPad, region.duration, 15 / bpm)
+            ? padPlaybackRate(settingsForPad, region.duration, secondsPerStep(bpm))
             : 1
           return (
             <div

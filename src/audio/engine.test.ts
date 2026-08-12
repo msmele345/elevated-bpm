@@ -313,3 +313,43 @@ describe('live sampler audio', () => {
     expect(pad4.start).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('committing a region', () => {
+  it('reports a region that renders nothing, so no pad claims a sound it cannot make', async () => {
+    // A region can land outside the decoded audio — a source that turned out
+    // shorter than the editor's analysis suggested. Saying so is what lets the
+    // caller leave the document alone.
+    const engine = await import('./engine')
+    const empty = {
+      sampleRate: tone.sampleRate,
+      length: 0,
+      numberOfChannels: 1,
+      getChannelData: () => new Float32Array(0),
+    }
+
+    const rendered = engine.renderPadSlice('pad3', empty, {
+      sourceId: 'source-1',
+      start: 0,
+      duration: 1,
+    })
+
+    expect(rendered).toBe(false)
+  })
+
+  it('reports a real render, which is what lets the document move', async () => {
+    const engine = await import('./engine')
+    const length = 100
+    const rendered = engine.renderPadSlice(
+      'pad3',
+      {
+        sampleRate: tone.sampleRate,
+        length,
+        numberOfChannels: 1,
+        getChannelData: () => Float32Array.from({ length }, () => 0.5),
+      },
+      { sourceId: 'source-1', start: 0, duration: 1 },
+    )
+
+    expect(rendered).toBe(true)
+  })
+})

@@ -1,5 +1,5 @@
 import type { SampleRegion } from './sampler'
-import { MIN_BPM } from './transport'
+import { MIN_BPM, secondsPerStep } from './transport'
 import { STEP_COUNT } from './types'
 
 /**
@@ -42,7 +42,7 @@ export const REGION_JUMP_SECONDS = 0.1
  * committing an untrimmed six-minute region would render tens of megabytes and
  * put back exactly the residency the slice architecture removes.
  */
-export const MAX_SLICE_SECONDS = ((STEP_COUNT * 15) / MIN_BPM) * 2
+export const MAX_SLICE_SECONDS = STEP_COUNT * secondsPerStep(MIN_BPM) * 2
 
 /** Where the region ends — the value the second thumb carries. */
 export function regionEnd(region: SampleRegion): number {
@@ -84,6 +84,14 @@ export function regionEdgeAnnouncement(seconds: number, onsets: readonly number[
   return `${timecode}, between onsets ${next} and ${next + 1} of ${total}`
 }
 
+/**
+ * Where a time sits along the source, 0..1 — what every part of the editor
+ * positions against. The guard is here rather than at four call sites.
+ */
+export function fractionOfSource(seconds: number, sourceDuration: number): number {
+  return seconds / Math.max(sourceDuration, 1e-6)
+}
+
 /** Where the region's current value sits along its own edge. */
 export function regionEdgeValue(region: SampleRegion, edge: RegionEdge): number {
   return edge === 'start' ? region.start : regionEnd(region)
@@ -106,21 +114,6 @@ export function regionEdgeRange(
         min: Math.min(sourceDuration, region.start + MIN_REGION_SECONDS),
         max: sourceDuration,
       }
-}
-
-/** Move one edge by a step of its own, from wherever it currently stands. */
-export function nudgeRegionEdge(
-  region: SampleRegion,
-  edge: RegionEdge,
-  deltaSeconds: number,
-  sourceDuration: number,
-): SampleRegion {
-  return moveRegionEdge(
-    region,
-    edge,
-    regionEdgeValue(region, edge) + deltaSeconds,
-    sourceDuration,
-  )
 }
 
 /**

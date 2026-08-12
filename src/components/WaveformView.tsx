@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef } from 'react'
 import type { AnalysisAudio } from '../audio/engine'
+import { fractionOfSource } from '../model/region'
 import type { SampleRegion } from '../model/sampler'
 import { waveformColumns, type WaveformColumn } from '../model/waveform'
 
@@ -88,7 +89,7 @@ function Waveform({ analysis, onsets, region }: WaveformViewProps) {
       ctx.globalAlpha = 0.7
       ctx.fillStyle = onsetInk
       for (const onset of onsets) {
-        const x = (onset / Math.max(analysis.duration, 1e-6)) * width
+        const x = fractionOfSource(onset, analysis.duration) * width
         ctx.fillRect(x, 0, 1, height * 0.16)
         ctx.fillRect(x, height * 0.84, 1, height * 0.16)
       }

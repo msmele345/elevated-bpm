@@ -4,7 +4,6 @@ import {
   SLICE_PEAK,
   renderSlice,
   sliceChannelData,
-  sliceDuration,
   type RenderableAudio,
 } from './slice'
 
@@ -132,9 +131,4 @@ describe('sliceChannelData', () => {
     expect(channels[1][0]).toBeCloseTo(SLICE_PEAK / 5, 3)
   })
 
-  it('knows how long it is, which is what the fit and light windows measure', () => {
-    const slice = renderSlice(audio(100, [ramp(100)]), region(0.2, 0.5))
-
-    expect(sliceDuration(slice)).toBeCloseTo(0.5)
-  })
 })

@@ -2,6 +2,7 @@ import { memo, useRef, type KeyboardEvent, type PointerEvent, type RefObject } f
 import {
   REGION_JUMP_SECONDS,
   REGION_NUDGE_SECONDS,
+  fractionOfSource,
   regionEdgeAnnouncement,
   regionEdgeRange,
   regionEdgeValue,
@@ -142,7 +143,7 @@ function RegionEdgeHandle({
       aria-valuenow={Number(value.toFixed(3))}
       aria-valuetext={announcement}
       data-edge={edge}
-      style={{ left: `${(value / Math.max(sourceDuration, 1e-6)) * 100}%` }}
+      style={{ left: `${fractionOfSource(value, sourceDuration) * 100}%` }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}

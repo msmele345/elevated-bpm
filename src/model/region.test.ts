@@ -3,11 +3,8 @@ import type { SampleRegion } from './sampler'
 import {
   MAX_SLICE_SECONDS,
   MIN_REGION_SECONDS,
-  REGION_JUMP_SECONDS,
-  REGION_NUDGE_SECONDS,
   clampRegionToSource,
   jumpRegionEdgeToOnset,
-  nudgeRegionEdge,
   moveRegionEdge,
   regionEdgeAnnouncement,
   regionEdgeValue,
@@ -148,20 +145,6 @@ describe('regionEdgeAnnouncement', () => {
 
   it('counts minutes once a source is longer than one', () => {
     expect(regionEdgeAnnouncement(83.25, [])).toBe('1:23.250')
-  })
-})
-
-describe('nudgeRegionEdge', () => {
-  it('moves an edge by a step of its own, and stops at its bound', () => {
-    const at = region(1, 4)
-
-    const fine = nudgeRegionEdge(at, 'start', REGION_NUDGE_SECONDS, SOURCE_DURATION)
-    const coarse = nudgeRegionEdge(at, 'end', REGION_JUMP_SECONDS, SOURCE_DURATION)
-    const parked = nudgeRegionEdge(at, 'start', -99, SOURCE_DURATION)
-
-    expect(fine.start).toBeCloseTo(1 + REGION_NUDGE_SECONDS)
-    expect(regionEnd(coarse)).toBeCloseTo(5 + REGION_JUMP_SECONDS)
-    expect(parked.start).toBe(0)
   })
 })
 

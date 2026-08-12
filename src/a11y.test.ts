@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { computeAccessibleName } from 'dom-accessibility-api'
 import { indexedDB } from 'fake-indexeddb'
 import { createElement } from 'react'
@@ -254,5 +262,44 @@ describe('region editor accessibility', () => {
     )
 
     expect(unnamed.map(identify)).toEqual([])
+  })
+})
+
+describe('region editor focus containment', () => {
+  async function openEditor(): Promise<HTMLElement> {
+    await renderDeck()
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Warehouse Perc' }))
+    return screen.findByRole('dialog')
+  }
+
+  it('keeps Tab inside the dialog, wrapping at both ends', async () => {
+    // Containing Tab is only fair because Escape always releases the dialog —
+    // and the deck behind is inert, so a Tab that escaped would land focus on
+    // a control the user cannot reach or see.
+    const dialog = await openEditor()
+    const stops = focusable(dialog)
+    const first = stops[0]
+    const last = stops[stops.length - 1]
+
+    last.focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+
+    first.focus()
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(last)
+  })
+
+  it('lets Tab move normally between the controls in between', async () => {
+    const dialog = await openEditor()
+    const stops = focusable(dialog)
+
+    stops[1].focus()
+    const event = createEvent.keyDown(window, { key: 'Tab' })
+    fireEvent(window, event)
+
+    // Not ours to handle: the browser's own Tab order takes it from here.
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(stops[1])
   })
 })

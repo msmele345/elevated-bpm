@@ -79,6 +79,31 @@ export function sliceFrames(
   return { offset, length }
 }
 
+/** Loudest sample in a span of one channel. */
+export function peakBetween(
+  samples: ArrayLike<number>,
+  offset: number,
+  length: number,
+): number {
+  let peak = 0
+  for (let frame = 0; frame < length; frame += 1) {
+    const magnitude = Math.abs(samples[offset + frame])
+    if (magnitude > peak) peak = magnitude
+  }
+  return peak
+}
+
+/**
+ * The gain that brings a peak to `SLICE_PEAK`, or unity for what is really
+ * silence — normalizing that would only amplify a noise floor into a hiss.
+ *
+ * Exported because auditioning has to apply the same gain the render will: a
+ * chop judged at one level and committed at another is not judged.
+ */
+export function normalizingGain(peak: number): number {
+  return peak < SILENCE_PEAK ? 1 : SLICE_PEAK / peak
+}
+
 /**
  * The one gain that brings a rendered region to `SLICE_PEAK`. Measured over
  * the region rather than the whole source — trimming past a loud transient
@@ -86,27 +111,19 @@ export function sliceFrames(
  * every channel, since per-channel gains would re-pan the audio rather than
  * level it.
  */
-function normalizingGain(
-  source: RenderableAudio,
-  offset: number,
-  length: number,
-): number {
+function regionGain(source: RenderableAudio, offset: number, length: number): number {
   let peak = 0
   for (let channel = 0; channel < source.numberOfChannels; channel += 1) {
-    const data = source.getChannelData(channel)
-    for (let frame = 0; frame < length; frame += 1) {
-      const magnitude = Math.abs(data[offset + frame])
-      if (magnitude > peak) peak = magnitude
-    }
+    peak = Math.max(peak, peakBetween(source.getChannelData(channel), offset, length))
   }
-  return peak < SILENCE_PEAK ? 1 : SLICE_PEAK / peak
+  return normalizingGain(peak)
 }
 
 /** Render a region of a decoded source into the slice the pad will play. */
 export function renderSlice(source: RenderableAudio, region: SampleRegion): Slice {
   const { offset, length } = sliceFrames(region, source.sampleRate, source.length)
   const channels = source.numberOfChannels
-  const gain = normalizingGain(source, offset, length)
+  const gain = regionGain(source, offset, length)
   const pcm = new Int16Array(length * channels)
   for (let channel = 0; channel < channels; channel += 1) {
     const data = source.getChannelData(channel)
@@ -121,11 +138,6 @@ export function renderSlice(source: RenderableAudio, region: SampleRegion): Slic
 function toPcm16(sample: number): number {
   const clamped = Math.min(1, Math.max(-1, sample))
   return Math.round(clamped * 32767)
-}
-
-/** How long a slice sounds at rate 1 — what fit and the pad's light measure. */
-export function sliceDuration(slice: Slice): number {
-  return slice.frames / slice.sampleRate
 }
 
 /**

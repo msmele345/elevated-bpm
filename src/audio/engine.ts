@@ -26,7 +26,7 @@ import {
   type SamplerSettings,
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
-import { clampBpm, DEFAULT_BPM } from '../model/transport'
+import { clampBpm, DEFAULT_BPM, secondsPerStep } from '../model/transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -34,7 +34,13 @@ import {
   type PadLaneId,
   type Pattern,
 } from '../model/types'
-import { renderSlice, sliceChannelData, type RenderableAudio } from '../model/slice'
+import {
+  normalizingGain,
+  peakBetween,
+  renderSlice,
+  sliceChannelData,
+  type RenderableAudio,
+} from '../model/slice'
 import { voiceStep } from './hits'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
@@ -226,10 +232,14 @@ export function renderPadSlice(
   padId: PadLaneId,
   source: RenderableAudio,
   region: SampleRegion,
-): void {
+): boolean {
   const slice = renderSlice(source, region)
-  if (slice.frames === 0) return
+  // A region that lands outside the decoded audio renders nothing, and a pad
+  // must never be given a document entry for a sound it cannot make. Saying so
+  // is what lets the caller leave the project alone.
+  if (slice.frames === 0) return false
   sliceRegistry.set(padId, Tone.ToneAudioBuffer.fromArray(sliceChannelData(slice)))
+  return true
 }
 
 /**
@@ -245,8 +255,7 @@ export async function commitPadRegion(
   const blob = await sourceBlob(region.sourceId)
   if (!blob) return false
   try {
-    renderPadSlice(padId, await decodeForRender(blob), region)
-    return true
+    return renderPadSlice(padId, await decodeForRender(blob), region)
   } catch {
     // A source the browser will no longer decode leaves the pad exactly as it
     // was, sounding whatever it sounded before.
@@ -305,6 +314,15 @@ export function auditionRegion(region: SampleRegion): void {
   ensureVoices()
   auditionPlayer ??= new Tone.Player().connect(fx?.taps.sampler.input ?? Tone.getDestination())
   auditionPlayer.buffer = new Tone.ToneAudioBuffer(analysis.buffer)
+  // Auditioned at the level it will commit at. A chop judged at one level and
+  // committed at another is not judged — so the same normalization the render
+  // applies is applied here, over the same span of the same audio.
+  const samples = analysis.buffer.getChannelData(0)
+  const rate = analysis.buffer.sampleRate
+  const gain = normalizingGain(
+    peakBetween(samples, Math.round(region.start * rate), Math.round(region.duration * rate)),
+  )
+  auditionPlayer.volume.value = Tone.gainToDb(gain)
   auditionPlayer.stop()
   auditionPlayer.start(Tone.immediate(), region.start, region.duration)
 }
@@ -384,9 +402,9 @@ export function setBpm(next: number): void {
   fx?.delay.delayTime.rampTo(delaySeconds(bpm), 0.1)
 }
 
-/** One 16th in seconds at the current tempo — a note length in steps × this. */
+/** One 16th at the current tempo — a note length in steps × this. */
 function secondsPer16th(): number {
-  return 15 / Tone.getTransport().bpm.value
+  return secondsPerStep(Tone.getTransport().bpm.value)
 }
 
 /** Step the transport is currently on (for the rAF playhead in AC4). */

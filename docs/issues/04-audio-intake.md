@@ -223,6 +223,12 @@ for an oversight.
   source, was assigned to Pad 3 through its select, and the master meter peaked
   at **−11.1 dB** and decayed over ~350 ms when the pad was hit — the spike's
   second half answered with audio rather than a number.
+- **An uploaded source sequences exactly as the curated one does.** With the
+  same two steps programmed on the uploaded pad and on the kick, every hit over
+  five bars arrived on **byte-identical timestamps** (237.327617, 238.155204,
+  238.982790, 239.810376, 240.637962), spaced a constant 0.8276 s apart — eight
+  sixteenths at the running tempo. The file was loaded, assigned and programmed
+  *while the transport ran*, and it stayed `started` throughout.
 - **The probe returns before any perceptible delay, and decodes nothing.** A
   real **35 MB, seven-minute** file was refused **27 ms** after the change
   event, with the JS heap unchanged at 54 MB either side. Size and duration
@@ -239,3 +245,10 @@ for an oversight.
   Pad 4 loaded and assigned it (`Play Pad 4 — Dropped Rim`), added exactly one
   source rather than two, and prevented the browser's default — with the
   transport still running.
+- **A reload keeps the metadata and loses the audio, gracefully.** This is the
+  scope decision above, not a bug: after a refresh the deck loaded normally,
+  every loaded source was still listed by name, and the pad kept its name and
+  its programming — and was **silent**, with no error and no crash. That is
+  exactly the modelled state SP-04 describes ("a source the registry does not
+  hold is metadata without audio and its pad simply stays silent"), and EB2-06
+  closes it by persisting the audio.

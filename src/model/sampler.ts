@@ -143,7 +143,19 @@ export function createSamplerSettings(saved?: unknown): SamplerSettings {
   ) as SamplerSettings
 }
 
-/** Assign the source's whole duration, the tracer action later replaced by trimming. */
+/**
+ * How much of a source a pad opens on before anyone has trimmed it.
+ *
+ * A region is rendered into a slice, so assignment has a cost the old
+ * reference-into-a-source model did not: an untrimmed six-minute track would
+ * render a six-minute slice and undo the memory budget the whole feature rests
+ * on. Four seconds is a bar at 60 BPM and takes most breaks and one-shots
+ * whole; anything longer is a starting point to trim from in the editor rather
+ * than a limit on what can be chopped.
+ */
+export const DEFAULT_PAD_REGION_SECONDS = 4
+
+/** Point a pad at a source, opening on the front of it for trimming. */
 export function assignSourceToPad(
   settings: SamplerSettings,
   padId: PadLaneId,
@@ -154,7 +166,11 @@ export function assignSourceToPad(
     [padId]: {
       ...settings[padId],
       name: source.name,
-      region: { sourceId: source.id, start: 0, duration: source.duration },
+      region: {
+        sourceId: source.id,
+        start: 0,
+        duration: Math.min(source.duration, DEFAULT_PAD_REGION_SECONDS),
+      },
     },
   }
 }

@@ -7,8 +7,16 @@ function file(name: string, size = 1_000) {
   return { name, size }
 }
 
+/** Buffer-shaped, because a decode is what a region is later rendered out of. */
 function decoded(duration: number, channels: number): DecodedSample {
-  return { duration, numberOfChannels: channels }
+  const sampleRate = 100
+  return {
+    duration,
+    sampleRate,
+    numberOfChannels: channels,
+    length: Math.round(duration * sampleRate),
+    getChannelData: () => new Float32Array(Math.round(duration * sampleRate)),
+  }
 }
 
 function intake(overrides: {

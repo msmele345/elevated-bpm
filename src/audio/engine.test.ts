@@ -13,16 +13,9 @@ const tone = vi.hoisted(() => {
   const loadedPromise = new Promise<void>((resolve) => {
     resolveLoaded = resolve
   })
-  // A second, independent lever: the curated asset reaching the sample
-  // registry is a step *after* its download, so first-click readiness cannot
-  // ride on the players' loaded promise alone.
-  let resolveCuratedLoad!: () => void
-  const curatedLoadPromise = new Promise<void>((resolve) => {
-    resolveCuratedLoad = resolve
-  })
   return {
-    curatedLoadPromise,
-    resolveCuratedLoad: () => resolveCuratedLoad(),
+    /** The fake context's rate; slices in these tests are rendered at it. */
+    sampleRate: 100,
     players: [] as Array<{
       playbackRate: number
       buffer: { duration: number }
@@ -117,9 +110,21 @@ vi.mock('tone', () => {
 
   class ToneAudioBuffer {
     duration = 0.25
+    constructor(source?: { duration: number }) {
+      if (source) this.duration = source.duration
+    }
     async load(_url: string) {
-      await tone.curatedLoadPromise
       return this
+    }
+    /**
+     * Real Tone builds the buffer at the global context's rate. The fake
+     * context runs at `tone.sampleRate`, and slices here are rendered from the
+     * same rate, so frames divide back out to the duration the region named.
+     */
+    static fromArray(channels: Float32Array[]) {
+      const buffer = new ToneAudioBuffer()
+      buffer.duration = channels[0].length / tone.sampleRate
+      return buffer
     }
   }
 
@@ -159,35 +164,51 @@ vi.mock('tone', () => {
 })
 
 async function flushPromises(): Promise<void> {
-  // Readiness is a chain now — the players' loads and the curated registry
-  // fill are awaited together — so drain generously rather than counting ticks.
   for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
 }
 
+/**
+ * Commit a region the way the app does at the synchronous seam — from an
+ * already-decoded source, which the caller then drops. Real decoding is never
+ * exercised here; the buffer is a fake of the shape one has.
+ */
+function commitSlice(
+  engine: typeof import('./engine'),
+  padId: 'pad1' | 'pad2' | 'pad3' | 'pad4',
+  duration: number,
+  level = 0.5,
+): void {
+  const length = Math.round(duration * tone.sampleRate)
+  engine.renderPadSlice(
+    padId,
+    {
+      sampleRate: tone.sampleRate,
+      length,
+      numberOfChannels: 1,
+      getChannelData: () => Float32Array.from({ length }, () => level),
+    },
+    { sourceId: 'source-1', start: 0, duration },
+  )
+}
+
 describe('live sampler audio', () => {
-  it('queues the first hit, applies the global mixer, and schedules pads with kit timestamps', async () => {
+  it('queues the first hit behind the audio graph, applies the mixer, and schedules pads with kit timestamps', async () => {
     const engine = await import('./engine')
-    const settings = assignSourceToPad(
-      createSamplerSettings(),
-      'pad1',
-      CURATED_SAMPLE_SOURCE,
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
     )
-    engine.setSamplerSettings(settings)
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
 
     engine.attackPad('computer:Digit1', 'pad1')
     await flushPromises()
 
     const pad1 = tone.players[5]
     expect(pad1).toBeDefined()
+    // The kit is still downloading, so the first gesture waits rather than
+    // being thrown away.
     expect(pad1.start).not.toHaveBeenCalled()
 
     tone.resolveLoaded()
-    await flushPromises()
-    // The players have loaded, but the curated source has not reached the
-    // registry — a pad with nothing to play must not claim to be ready.
-    expect(pad1.start).not.toHaveBeenCalled()
-
-    tone.resolveCuratedLoad()
     await flushPromises()
     expect(pad1.start).toHaveBeenCalledTimes(1)
 
@@ -196,6 +217,7 @@ describe('live sampler audio', () => {
     engine.attackPad('pointer:7', 'pad1')
     await flushPromises()
 
+    // Soloing the kick silences every other lane, pads included.
     expect(pad1.start).toHaveBeenCalledTimes(1)
 
     let pattern = cycleStep(createInitialPattern(), 'kick', 0)
@@ -208,24 +230,25 @@ describe('live sampler audio', () => {
 
     const kick = tone.players[0]
     expect(kick.start.mock.calls.slice(-2)).toEqual([[42], [43]])
-    expect(pad1.start.mock.calls.slice(-2)).toEqual([
-      [42, 0, CURATED_SAMPLE_SOURCE.duration],
-      [43, 0, CURATED_SAMPLE_SOURCE.duration],
-    ])
+    // A slice is already exactly the audio its region named, so the pad is
+    // started plainly — on the same timestamps the kit lane fires on.
+    expect(pad1.start.mock.calls.slice(-2)).toEqual([[42], [43]])
   })
 
   it('stop clears sequenced pad lights without darkening a live pad', async () => {
     const engine = await import('./engine')
-    const settings = assignSourceToPad(
-      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
-      'pad2',
-      CURATED_SAMPLE_SOURCE,
+    engine.setSamplerSettings(
+      assignSourceToPad(
+        assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+        'pad2',
+        CURATED_SAMPLE_SOURCE,
+      ),
     )
-    engine.setSamplerSettings(settings)
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
+    commitSlice(engine, 'pad2', CURATED_SAMPLE_SOURCE.duration)
     engine.setMixer({})
 
-    let pattern = cycleStep(createInitialPattern(), 'pad2', 0)
-    engine.setPattern(pattern)
+    engine.setPattern(cycleStep(createInitialPattern(), 'pad2', 0))
     await engine.play()
 
     // A lookahead-scheduled hit whose window is still open at the audio clock's
@@ -241,47 +264,52 @@ describe('live sampler audio', () => {
     expect(engine.getSoundingPadIds()).toEqual(['pad1'])
   })
 
-  it('leaves a pad silent while no audio is registered for its source', async () => {
+  it('leaves a pad silent until a region has been committed to it', async () => {
+    // A pad can hold a region and still have no sound — its slice is what
+    // makes it audible, and that is the state a share link arrives in.
     const engine = await import('./engine')
     engine.setSamplerSettings(
       assignSourceToPad(createSamplerSettings(), 'pad3', {
         ...CURATED_SAMPLE_SOURCE,
-        id: 'upload-nothing-decoded-yet',
-        name: 'Not loaded',
+        id: 'upload-not-rendered-yet',
+        name: 'Not rendered',
       }),
     )
     engine.setMixer({})
 
     engine.attackPad('pointer:33', 'pad3')
     await flushPromises()
-
     expect(tone.players[7].start).not.toHaveBeenCalled()
+
+    commitSlice(engine, 'pad3', 1.5)
+    engine.attackPad('pointer:34', 'pad3')
+    await flushPromises()
+
+    expect(tone.players[7].start).toHaveBeenCalledWith(10)
+    expect(tone.players[7].buffer.duration).toBeCloseTo(1.5)
   })
 
-  it('sounds a pad once intake registers audio under its source id', async () => {
+  it('plays the re-chopped slice on the next hit, without a restart', async () => {
     const engine = await import('./engine')
-    const uploaded = {
-      ...CURATED_SAMPLE_SOURCE,
-      id: 'upload-warehouse-break',
-      name: 'Warehouse Break',
-      origin: 'upload' as const,
-      duration: 1.5,
-    }
-    engine.setSamplerSettings(assignSourceToPad(createSamplerSettings(), 'pad4', uploaded))
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad4', CURATED_SAMPLE_SOURCE),
+    )
     engine.setMixer({})
     const pad4 = tone.players[8]
 
+    commitSlice(engine, 'pad4', 1.5)
     engine.attackPad('pointer:44', 'pad4')
     await flushPromises()
-    expect(pad4.start).not.toHaveBeenCalled()
+    expect(pad4.buffer.duration).toBeCloseTo(1.5)
 
-    // Intake's whole job in the audio layer: put a decoded buffer where the
-    // pad already knows to look for it.
-    engine.registerSampleSource(uploaded.id, { duration: 1.5 })
+    // Reopening a region and moving an edge is a correction, not a redo: the
+    // pad keeps playing, and simply plays the shorter chop from now on.
+    commitSlice(engine, 'pad4', 0.4)
+    engine.releasePad('pointer:44')
     engine.attackPad('pointer:45', 'pad4')
     await flushPromises()
 
-    expect(pad4.start).toHaveBeenCalledWith(10, 0, 1.5)
-    expect(pad4.buffer.duration).toBe(1.5)
+    expect(pad4.buffer.duration).toBeCloseTo(0.4)
+    expect(pad4.start).toHaveBeenCalledTimes(2)
   })
 })

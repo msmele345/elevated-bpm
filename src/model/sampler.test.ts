@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CURATED_SAMPLE_SOURCE,
+  DEFAULT_PAD_REGION_SECONDS,
   PAD_LANES,
   assignSourceToPad,
   commitRegionToPad,
@@ -86,6 +87,35 @@ describe('tunePlaybackRate', () => {
     expect(tunePlaybackRate(-12)).toBeCloseTo(0.5)
     expect(tunePlaybackRate(0)).toBe(1)
     expect(tunePlaybackRate(12)).toBeCloseTo(2)
+  })
+})
+
+describe('assignSourceToPad', () => {
+  it('opens a long source on its first seconds rather than all of it', () => {
+    // A pad's region is rendered into a slice, so assignment has a cost that
+    // the old reference-into-a-source model did not: an untrimmed six-minute
+    // track would render a six-minute slice. A pad is a one-shot in a
+    // sixteen-step loop, so a few seconds is a starting point to trim from
+    // rather than a limit on what can be chopped.
+    const track = { ...CURATED_SAMPLE_SOURCE, id: 'upload-track', duration: 360 }
+
+    const assigned = assignSourceToPad(createSamplerSettings(), 'pad1', track)
+
+    expect(assigned.pad1.region).toEqual({
+      sourceId: 'upload-track',
+      start: 0,
+      duration: DEFAULT_PAD_REGION_SECONDS,
+    })
+  })
+
+  it('takes a short source whole, so a one-shot arrives complete', () => {
+    const assigned = assignSourceToPad(
+      createSamplerSettings(),
+      'pad1',
+      CURATED_SAMPLE_SOURCE,
+    )
+
+    expect(assigned.pad1.region?.duration).toBe(CURATED_SAMPLE_SOURCE.duration)
   })
 })
 

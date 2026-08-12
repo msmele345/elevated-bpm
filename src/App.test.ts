@@ -39,7 +39,12 @@ const engineSpies = vi.hoisted(() => ({
   releaseStabNote: vi.fn(),
   attackPad: vi.fn(),
   releasePad: vi.fn(),
-  registerSampleSource: vi.fn(),
+  registerSourceBytes: vi.fn(),
+  renderPadSlice: vi.fn(),
+  commitPadRegion: vi.fn().mockResolvedValue(true),
+  openSourceAnalysis: vi.fn(),
+  closeSourceAnalysis: vi.fn(),
+  auditionRegion: vi.fn(),
   getSoundingPadIds: vi.fn((): string[] => []),
 }))
 
@@ -50,9 +55,25 @@ const engineSpies = vi.hoisted(() => ({
  */
 const decoder = vi.hoisted(() => ({
   probeDuration: vi.fn(() => Promise.resolve(2)),
-  decodeSample: vi.fn(() => Promise.resolve({ duration: 2, numberOfChannels: 2 })),
+  decodeSample: vi.fn(() => Promise.resolve(decodedFake(2))),
   newSourceId: vi.fn(() => 'upload-1'),
 }))
+
+/**
+ * Buffer-shaped, because a decode is now what a region is rendered out of.
+ * Real decoding is still never exercised — the decoder is injected and this is
+ * the fake it hands back, which is the trade SP-04 records.
+ */
+function decodedFake(duration: number, sampleRate = 100) {
+  const length = Math.round(duration * sampleRate)
+  return {
+    duration,
+    sampleRate,
+    length,
+    numberOfChannels: 2,
+    getChannelData: () => Float32Array.from({ length }, () => 0.5),
+  }
+}
 
 vi.mock('./audio/sampleDecoder', () => decoder)
 
@@ -117,7 +138,7 @@ function deleteProjectDatabase(): Promise<void> {
 beforeEach(async () => {
   for (const spy of Object.values(engineSpies)) spy.mockClear()
   decoder.probeDuration.mockClear().mockResolvedValue(2)
-  decoder.decodeSample.mockClear().mockResolvedValue({ duration: 2, numberOfChannels: 2 })
+  decoder.decodeSample.mockClear().mockResolvedValue(decodedFake(2))
   decoder.newSourceId.mockClear().mockReturnValue('upload-1')
   engineSpies.getSoundingPadIds.mockReturnValue([])
   vi.stubGlobal('indexedDB', indexedDB)
@@ -144,18 +165,24 @@ describe('App audio intake', () => {
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
     expect(await within(sourceList).findByText('Warehouse Break')).toBeTruthy()
     expect(within(sourceList).getByText('Warehouse Perc')).toBeTruthy()
-    // Its audio reaches the engine under the id the document will store, which
-    // is the whole audio-layer cost of a new source.
-    expect(engineSpies.registerSampleSource).toHaveBeenCalledWith('upload-1', {
-      duration: 2,
-      numberOfChannels: 2,
-    })
+    // Its bytes are kept under the id the document will store, so the source
+    // can be chopped later; nothing is decoded again until it is.
+    expect(engineSpies.registerSourceBytes).toHaveBeenCalledWith('upload-1', expect.anything())
 
     fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: 'upload-1' },
     })
 
-    expect(screen.getByRole('button', { name: 'Play Pad 1 — Warehouse Break' })).toBeTruthy()
+    // The slice is rendered before the document moves: a pad never claims a
+    // sound it cannot make.
+    expect(
+      await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' }),
+    ).toBeTruthy()
+    expect(engineSpies.commitPadRegion).toHaveBeenCalledWith('pad1', {
+      sourceId: 'upload-1',
+      start: 0,
+      duration: 2,
+    })
     const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
     expect(settings.pad1.region).toEqual({ sourceId: 'upload-1', start: 0, duration: 2 })
   })
@@ -171,7 +198,7 @@ describe('App audio intake', () => {
     expect(alert.textContent).toContain('50 MB')
     expect(alert.textContent).toContain('long-mix.wav')
     expect(decoder.decodeSample).not.toHaveBeenCalled()
-    expect(engineSpies.registerSampleSource).not.toHaveBeenCalled()
+    expect(engineSpies.registerSourceBytes).not.toHaveBeenCalled()
 
     // Experimenting with files is never risky: the document is byte-identical.
     await new Promise((resolve) => setTimeout(resolve, 450))
@@ -205,7 +232,7 @@ describe('App audio intake', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('holiday-photo.heic')
     expect(alert.textContent).toContain('cannot play that file')
-    expect(engineSpies.registerSampleSource).not.toHaveBeenCalled()
+    expect(engineSpies.registerSourceBytes).not.toHaveBeenCalled()
   })
 
   it('loads and assigns in one gesture when a file is dropped on a pad', async () => {
@@ -216,10 +243,17 @@ describe('App audio intake', () => {
     fireEvent.drop(pad, { dataTransfer: { files: [audioFile('Rim Hit.wav')] } })
 
     expect(await screen.findByRole('button', { name: 'Play Pad 3 — Rim Hit' })).toBeTruthy()
-    expect(engineSpies.registerSampleSource).toHaveBeenCalledWith('upload-dropped', {
-      duration: 2,
-      numberOfChannels: 2,
-    })
+    expect(engineSpies.registerSourceBytes).toHaveBeenCalledWith(
+      'upload-dropped',
+      expect.anything(),
+    )
+    // The decode it arrived with renders the pad's opening slice, and is then
+    // dropped rather than held: that decode is the peak memory moment.
+    expect(engineSpies.renderPadSlice).toHaveBeenCalledWith(
+      'pad3',
+      expect.objectContaining({ duration: 2 }),
+      { sourceId: 'upload-dropped', start: 0, duration: 2 },
+    )
     // One gesture, one source: the drop must not also reach the panel behind it.
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
     expect(within(sourceList).getAllByText('Rim Hit')).toHaveLength(1)
@@ -273,7 +307,11 @@ describe('App sampler workflow', () => {
     fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: CURATED_SAMPLE_SOURCE.id },
     })
-    expect(screen.getByRole('button', { name: 'Play Pad 1 — Warehouse Perc' })).toBeTruthy()
+    // Assignment renders the pad's slice before the document moves, so the pad
+    // takes the name only once it can actually make the sound.
+    expect(
+      await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Perc' }),
+    ).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Pad 1 step 1' }))
     expect(screen.getByRole('button', { name: 'Pad 1 step 1' }).getAttribute('aria-pressed')).toBe(

@@ -42,6 +42,42 @@ the second:
 Record what you measured in the PR. If Safari fails the first check, raise it
 before building on top of it — it changes EB2-05 and EB2-06, not just this slice.
 
+### Spike results (measured 2026-08-12)
+
+Run against the dev server in two engines: Chrome 151 and WebKit 26.5 (the
+Safari engine, via a Playwright build rather than Safari.app itself). A
+synthesized **48 kHz stereo** WAV was used, so the file's rate and channel
+count both differ from the context's and the questions can actually be
+answered — the shipped 44.1 kHz mono assets cannot distinguish "honoured"
+from "coincidence".
+
+| Question | Chrome 151 | WebKit 26.5 |
+|---|---|---|
+| Does `decodeAudioData` honour an `OfflineAudioContext`'s rate? | **Yes** — 22 050 Hz asked, 22 050 Hz returned (44 099 frames for 2 s); also honoured at 16 kHz | **Yes** — 22 050 Hz returned, 44 100 frames |
+| Does the full decode run at the file's rate or the context's? | **Context's** — a 48 kHz file decoded in a 44.1 kHz context returned 44 100 Hz / 88 199 frames | **Context's** — 44 100 Hz / 88 200 frames |
+| Is the channel count preserved? | **Yes** — a stereo file decoded into a *one-channel* offline context still came back with 2 channels | **Yes** — 2 channels |
+
+**G13 does not materialize on current WebKit.** The historical Safari behavior
+the risk was written against is not present in 26.5, so the reduced-rate
+analysis decode EB2-05's editor rests on is sound in both engines. Two caveats
+worth carrying forward: this is Playwright's WebKit build rather than
+Safari.app, and older Safari versions were not tested — if the editor's memory
+budget ever looks wrong on a user's machine, this is the first thing to
+re-measure.
+
+**Channel preservation is confirmed, which is the load-bearing one.** Asking
+for a mono context does *not* downmix on the way in, so duration really is the
+only lever the app has on peak memory, exactly as the spec argues.
+
+**The peak figure derived from the live rate, not from 44.1 arithmetic.** The
+context measured 44 100 Hz here, putting a six-minute stereo render decode at
+**121 MB**; the same source on a 48 kHz device is **132 MB**. The spec's ~127 MB
+sits between them, and the six-minute cap holds either way — so the cap stays a
+flat six minutes rather than becoming a computed number.
+
+The other half of the spike — registering a real decoded buffer under a source
+id and hearing it come out of a pad — is recorded under verification below.
+
 ## Scope
 
 ### In
@@ -180,3 +216,26 @@ for an oversight.
 - Load a file the browser cannot decode and confirm the message is the one a
   confused user needs.
 - Confirm a rejected load during playback does not interrupt the loop.
+
+### Results (Chrome 151, real decoding, 2026-08-12)
+
+- **A source becomes sound.** A real WAV chosen through the file input became a
+  source, was assigned to Pad 3 through its select, and the master meter peaked
+  at **−11.1 dB** and decayed over ~350 ms when the pad was hit — the spike's
+  second half answered with audio rather than a number.
+- **The probe returns before any perceptible delay, and decodes nothing.** A
+  real **35 MB, seven-minute** file was refused **27 ms** after the change
+  event, with the JS heap unchanged at 54 MB either side. Size and duration
+  refusals both left the source list untouched.
+- **The messages are the ones a confused user needs.** A text file named
+  `broken.wav` produced "could not be read as audio. This browser cannot play
+  that file — your project is unchanged"; a 51 MB file produced "is too large.
+  Sources must be 50 MB or smaller."
+- **Nothing interrupts the loop.** Across a real decode and two rejections while
+  playing: transport `started` throughout, **0 tick stalls**, **0 meter samples
+  below −60 dB**, and **0 frames over twice the median** (median 23.8 ms under
+  the test browser's own throttled vsync). Zero console errors.
+- **A drop onto a pad is one gesture.** A real `DragEvent` carrying a file onto
+  Pad 4 loaded and assigned it (`Play Pad 4 — Dropped Rim`), added exactly one
+  source rather than two, and prevented the browser's default — with the
+  transport still running.

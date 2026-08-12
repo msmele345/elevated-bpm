@@ -42,6 +42,8 @@ EB2-02  FX sends (delay + reverb)      ── ProjectState v8, param registry, s
    │
 EB2-03  SP-04 tracer: pads as lanes    ── ProjectState v9, lane-id widening
    │
+EB2-03a refactor: buffer owned by source ── sample registry; pads bound to no file
+   │
    ├── EB2-04  audio intake (file + drag)
    │      │
    │      └── EB2-05  region editor + slice render

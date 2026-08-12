@@ -17,6 +17,7 @@ import { midiToFrequency, noteEventsAtStep } from '../model/note'
 import { SCOPE_SPEC } from '../model/scope'
 import {
   CURATED_SAMPLE_SOURCE,
+  PAD_LANES,
   createPadSoundingLanes,
   createSamplerSettings,
   isPadLaneId,
@@ -25,10 +26,17 @@ import {
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
 import { clampBpm, DEFAULT_BPM } from '../model/transport'
-import { STEP_COUNT, type LaneId, type PadLaneId, type Pattern } from '../model/types'
+import {
+  STEP_COUNT,
+  type DrumLaneId,
+  type LaneId,
+  type PadLaneId,
+  type Pattern,
+} from '../model/types'
 import { voiceStep } from './hits'
-import { KIT_SAMPLES, PAD_SAMPLES } from './kit'
-import { triggerPadVoice } from './padVoice'
+import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
+import { createPadVoice, type PadVoice } from './padVoice'
+import { createSampleRegistry } from './sampleRegistry'
 import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -59,7 +67,21 @@ interface Voice {
   gain: Tone.Gain
 }
 let voices: Record<LaneId, Voice> | null = null
+/**
+ * The four pads' playing surface, layered over their entries in `voices`. A
+ * pad is not just a player: it owns the future hits the transport lookahead
+ * has already handed it, because a live hit arriving mid-lookahead has to
+ * rebuild them.
+ */
+let padVoices: Record<PadLaneId, PadVoice> | null = null
 let samplesLoaded: Promise<void> | null = null
+
+/**
+ * Decoded audio by source id — the one path from a source to sound. A pad
+ * resolves its region's source through here on every hit, so reassigning a pad
+ * is a document edit and nothing more.
+ */
+const sampleRegistry = createSampleRegistry()
 
 /**
  * The bass instrument: one sawtooth oscillator through a resonant lowpass.
@@ -340,6 +362,16 @@ function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.S
 }
 
 /**
+ * Decode the one shipped source into the registry. This is the ordinary
+ * producer path — the same one intake will use — not a special case for
+ * being shipped.
+ */
+async function loadCuratedSource(): Promise<void> {
+  const buffer = await new Tone.ToneAudioBuffer().load(CURATED_SAMPLE_URL)
+  sampleRegistry.register(CURATED_SAMPLE_SOURCE.id, buffer)
+}
+
+/**
  * Create every audio voice once. Sample loading continues asynchronously,
  * while the synthesized instruments are playable as soon as the AudioContext
  * starts — live keys never wait for drum assets to download.
@@ -350,17 +382,29 @@ function ensureVoices(): void {
   // Every instrument reaches the master through its own send tap, so each one
   // is already on the FX bus rather than being retrofitted onto it later.
   const taps = (fx = createFxBus(master.input)).taps
-  const sampleUrls: Record<LaneId, string> = { ...KIT_SAMPLES, ...PAD_SAMPLES }
-  voices = Object.fromEntries(
-    (Object.entries(sampleUrls) as [LaneId, string][]).map(([laneId, url]) => {
-      // One send for the whole kit and one for the sampler. Per-lane accent
-      // gains sit before those taps, so velocity rides through to the echo.
-      const destination = isPadLaneId(laneId) ? taps.sampler.input : taps.drums.input
-      const gain = new Tone.Gain(1).connect(destination)
+  // One send for the whole kit and one for the sampler. Per-lane accent gains
+  // sit before those taps, so velocity rides through to the echo.
+  const drumEntries = (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(
+    ([laneId, url]) => {
+      const gain = new Tone.Gain(1).connect(taps.drums.input)
       const player = new Tone.Player(url).connect(gain)
-      return [laneId, { player, gain }]
-    }),
-  ) as Record<LaneId, Voice>
+      return [laneId, { player, gain }] as const
+    },
+  )
+  // Pad players are built empty. A pad has no file of its own — its audio
+  // arrives from the registry at trigger time, whichever source it points at.
+  const padEntries = PAD_LANES.map((pad) => {
+    const gain = new Tone.Gain(1).connect(taps.sampler.input)
+    const player = new Tone.Player().connect(gain)
+    return [pad.id, { player, gain }] as const
+  })
+  voices = Object.fromEntries([...drumEntries, ...padEntries]) as Record<LaneId, Voice>
+  padVoices = Object.fromEntries(
+    padEntries.map(([padId, { player, gain }]) => [
+      padId,
+      createPadVoice(player, gain, sampleRegistry),
+    ]),
+  ) as Record<PadLaneId, PadVoice>
   bass = createBassVoice(taps.bass.input)
   // Live and sequenced stabs share the tap, so both are on the send.
   stab = createStabVoices(() => createStabSynth(taps.stab.input))
@@ -372,7 +416,11 @@ function ensureVoices(): void {
   setBassSettings(bassSettings)
   setMasterSettings(masterSettings)
   setFxSettings(fxSettings)
-  samplesLoaded = Tone.loaded()
+  // Tone.loaded() covers every player built from a URL — which the pads are
+  // not. Registering the curated audio is a step *after* its download, so the
+  // first gesture has to wait for both: a cold cache would otherwise reach a
+  // pad that looks ready and holds nothing.
+  samplesLoaded = Promise.all([Tone.loaded(), loadCuratedSource()]).then(() => undefined)
   Tone.getTransport().bpm.value = bpm
   if (import.meta.env.DEV) {
     // Debug handle for tooling/tests; never used by app code.
@@ -382,6 +430,7 @@ function ensureVoices(): void {
       transport: Tone.getTransport(),
       meter,
       voices,
+      padVoices,
       bass,
       stab,
       master,
@@ -455,13 +504,12 @@ function triggerPlayablePad(
   currentTime: number,
   origin: PadHitOrigin,
 ): void {
-  const voice = voices?.[padId]
+  const voice = padVoices?.[padId]
+  if (!voice) return
   const pad = currentSamplerSettings[padId]
-  // The tracer has one shipped source. Later intake replaces the Player's
-  // buffer before assigning other source ids; until then an unknown id is
-  // metadata without playable audio and must stay silent.
-  if (!voice || pad.region?.sourceId !== CURATED_SAMPLE_SOURCE.id) return
-  for (const window of triggerPadVoice(voice, pad, gain, time, currentTime)) {
+  // Which sources may sound is the voice's question now, answered by the
+  // registry rather than by naming the one shipped source here.
+  for (const window of voice.trigger(pad, gain, time, currentTime)) {
     padSoundingLanes.schedule(padId, window.startsAt, window.endsAt, origin)
   }
 }
@@ -505,10 +553,10 @@ export async function play(): Promise<void> {
       // All voices share the transport, so lanes stay independent and
       // sample-locked; each fires at its own accent velocity.
       for (const hit of starts) {
-        const voice = voices[hit.laneId]
         if (isPadLaneId(hit.laneId)) {
           triggerPlayablePad(hit.laneId, hit.gain, time, Tone.immediate(), 'sequenced')
         } else {
+          const voice = voices[hit.laneId]
           voice.gain.gain.setValueAtTime(hit.gain, time)
           voice.player.start(time)
         }

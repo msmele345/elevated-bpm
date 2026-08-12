@@ -112,6 +112,20 @@ constructed with its save function. Everything downstream — slice geometry, ra
 math, and later onset detection — stays pure functions over buffer-shaped data,
 which is what keeps the majority of this feature testable without a browser.
 
+**Where the decoded buffer goes: EB2-03a built the place.** The engine owns a
+sample registry keyed by source id, and it is the only path from a source to
+sound — the curated shipped source goes through it like anything else. A pad
+resolves its region's source through the registry on every hit, so intake's
+whole job here is *decode, register under a source id, add the source to the
+document*. Assigning it to a pad is the assignment the tracer already does, and
+no audio-layer change is needed. A source the registry does not hold is metadata
+without audio and its pad simply stays silent, which is also the honest state of
+a source restored from a reload before EB2-06 exists.
+
+This is also what the decode spike above should write into: register a real
+decoded buffer under a source id and hear it come out of a pad, rather than
+reporting a number.
+
 ### Drag-and-drop
 
 Dropping onto a specific pad assigns to that pad (story 2 — one gesture, not a

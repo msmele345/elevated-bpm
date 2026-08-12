@@ -12,6 +12,7 @@ import {
 import { DEFAULT_BPM } from './transport'
 import {
   activePattern,
+  addSource,
   assignSourceToSamplerPad,
   createInitialProjectState,
   openingProjectState,
@@ -177,6 +178,27 @@ describe('sampler editing', () => {
   it('ignores an assignment for a source the project does not have', () => {
     const state = createInitialProjectState()
     expect(assignSourceToSamplerPad(state, 'pad2', 'missing-source')).toBe(state)
+  })
+
+  it('takes in a loaded source beside the shipped one, disturbing nothing else', () => {
+    const state = createInitialProjectState()
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4.02,
+      channels: 2,
+    }
+
+    const withSource = addSource(state, uploaded)
+
+    expect(withSource.sources).toEqual([CURATED_SAMPLE_SOURCE, uploaded])
+    // Loading a sound is not an edit to the beat: a rejected or accepted load
+    // must leave the pattern, the patches and the mixer exactly as they were.
+    expect(activePattern(withSource)).toBe(activePattern(state))
+    expect(withSource.instrumentSettings).toBe(state.instrumentSettings)
+    expect(withSource.mixer).toBe(state.mixer)
+    expect(state.sources).toEqual([CURATED_SAMPLE_SOURCE])
   })
 
   it('stores a pad Tune knob value without changing its pattern or sibling pads', () => {

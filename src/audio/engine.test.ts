@@ -257,4 +257,31 @@ describe('live sampler audio', () => {
 
     expect(tone.players[7].start).not.toHaveBeenCalled()
   })
+
+  it('sounds a pad once intake registers audio under its source id', async () => {
+    const engine = await import('./engine')
+    const uploaded = {
+      ...CURATED_SAMPLE_SOURCE,
+      id: 'upload-warehouse-break',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 1.5,
+    }
+    engine.setSamplerSettings(assignSourceToPad(createSamplerSettings(), 'pad4', uploaded))
+    engine.setMixer({})
+    const pad4 = tone.players[8]
+
+    engine.attackPad('pointer:44', 'pad4')
+    await flushPromises()
+    expect(pad4.start).not.toHaveBeenCalled()
+
+    // Intake's whole job in the audio layer: put a decoded buffer where the
+    // pad already knows to look for it.
+    engine.registerSampleSource(uploaded.id, { duration: 1.5 })
+    engine.attackPad('pointer:45', 'pad4')
+    await flushPromises()
+
+    expect(pad4.start).toHaveBeenCalledWith(10, 0, 1.5)
+    expect(pad4.buffer.duration).toBe(1.5)
+  })
 })

@@ -36,7 +36,7 @@ import {
 import { voiceStep } from './hits'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
-import { createSampleRegistry } from './sampleRegistry'
+import { createSampleRegistry, type SampleBuffer } from './sampleRegistry'
 import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -164,6 +164,16 @@ const stabNoteHolds = createStabNoteHolds()
 const stabSoundingNotes = createStabSoundingNotes()
 const heldPadSources = new Set<string>()
 const padSoundingLanes = createPadSoundingLanes()
+
+/**
+ * Put decoded audio where pads look for it. This is the entire audio-layer
+ * cost of a new source: intake decodes, registers here, and the pad that
+ * points at the id starts sounding on its next hit — no rebuild, no restart,
+ * and nothing special about where the audio came from.
+ */
+export function registerSampleSource(sourceId: string, buffer: SampleBuffer): void {
+  sampleRegistry.register(sourceId, buffer)
+}
 
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
 export function setPattern(pattern: Pattern): void {

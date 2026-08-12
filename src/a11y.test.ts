@@ -29,6 +29,7 @@ vi.mock('./audio/engine', async () => {
     releaseStabNote: () => undefined,
     attackPad: () => undefined,
     releasePad: () => undefined,
+    registerSampleSource: () => undefined,
     getSoundingStabNotes: () => [],
     getSoundingPadIds: () => [],
     getSpectrum: () => null,

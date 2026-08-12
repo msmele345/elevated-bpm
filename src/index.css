@@ -1846,6 +1846,124 @@ body::before {
     linear-gradient(180deg, var(--panel-edge) 0%, var(--panel) 8%, #141619 100%);
 }
 
+/* Where audio comes in: the load control and the limits, stated before the
+   user waits on anything. */
+.sampler-intake {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+/* The label is the button; the input sits invisibly over it so it keeps its
+   own focus and keyboard activation rather than being replaced by a proxy. */
+.sampler-load {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 8px 14px;
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sampler-load:hover {
+  background: var(--key-face-hover);
+}
+
+.sampler-load:active {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+.sampler-load input[type='file'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.sampler-load:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sampler-intake-hint {
+  flex: 1;
+  min-width: 220px;
+  color: var(--ink-dim);
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+
+/* A refusal reads like the share errors it follows: explained, dismissible,
+   and never touching the project behind it. */
+.sampler-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 4px solid var(--quad-0);
+  border-radius: 7px;
+  background:
+    linear-gradient(110deg, rgba(255, 77, 51, 0.11), transparent 48%),
+    #15171a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.sampler-notice p {
+  color: var(--silkscreen);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.sampler-notice-dismiss {
+  flex: none;
+  padding: 7px 10px;
+  border: 1px solid #000;
+  border-radius: 4px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sampler-notice-dismiss:hover {
+  background: var(--key-face-hover);
+}
+
+.sampler-notice-dismiss:focus-visible,
+.sampler-assign:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A file dragged over a surface that will take it. */
+.sampler-panel[data-drop-active],
+.sampler-pad-strip[data-drop-active] {
+  outline: 2px dashed var(--quad-1);
+  outline-offset: -4px;
+}
+
 .sampler-source-bank {
   display: flex;
   align-items: center;
@@ -1871,6 +1989,7 @@ body::before {
 .sampler-source-bank ul {
   display: flex;
   flex: 1;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 0;
   list-style: none;
@@ -1881,7 +2000,7 @@ body::before {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  min-width: min(100%, 260px);
+  min-width: min(100%, 200px);
   padding: 5px 8px;
   border-left: 2px solid var(--quad-1);
   color: var(--quad-1);
@@ -1962,8 +2081,7 @@ body::before {
     0 0 18px rgba(255, 157, 46, 0.36);
 }
 
-.sampler-pad:focus-visible,
-.sampler-assign:focus-visible {
+.sampler-pad:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -2024,30 +2142,41 @@ body::before {
   font-size: 0.58rem;
 }
 
+/* Which sound sits on this pad. A select rather than a button because the
+   deck now holds however many sources the user has loaded. */
 .sampler-assign {
   align-self: stretch;
-  padding: 5px 4px;
+  appearance: none;
+  padding: 5px 16px 5px 6px;
   border: 1px solid #000;
   border-radius: 4px;
-  background: var(--key-face);
+  background:
+    /* The caret, drawn rather than left to the platform's own chrome. */
+    linear-gradient(45deg, transparent 50%, var(--ink-dim) 50%) calc(100% - 9px) 52% / 4px 4px
+      no-repeat,
+    linear-gradient(135deg, var(--ink-dim) 50%, transparent 50%) calc(100% - 5px) 52% / 4px 4px
+      no-repeat,
+    var(--key-face);
   box-shadow: var(--key-raised);
   color: var(--ink-dim);
   font-family: var(--font-display);
   font-size: 0.48rem;
   font-weight: 600;
   letter-spacing: 0.08em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
   cursor: pointer;
 }
 
 .sampler-assign:hover {
   color: var(--ink);
-  background: var(--key-face-hover);
 }
 
-.sampler-assign:active {
-  transform: translateY(1px);
-  box-shadow: var(--key-pressed);
+/* The dropdown itself is platform chrome, so its options need readable
+   colors of their own rather than the panel's. */
+.sampler-assign option {
+  background: #15171a;
+  color: var(--ink);
 }
 
 .sampler-sequencer {

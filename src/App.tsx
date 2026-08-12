@@ -37,6 +37,7 @@ import {
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activePattern,
+  addSource,
   assignSourceToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
@@ -63,6 +64,8 @@ import {
 import type { SamplerParamId } from './model/sampler'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
+import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
+import { createSampleIntake } from './audio/sampleIntake'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import { ARC } from './lessons'
@@ -73,6 +76,17 @@ const AUTOSAVE_DELAY_MS = 400
 
 /** Names the send group, so its five knobs are announced as one block. */
 const FX_GROUP_LABEL_ID = 'deck-fx-bus-label'
+
+/**
+ * Intake, constructed with its real I/O the way the autosaver is constructed
+ * with its save function. Built once at module scope because it holds nothing
+ * per-deck, and so the handler that uses it never changes identity.
+ */
+const sampleIntake = createSampleIntake<File>({
+  probeDuration,
+  decode: decodeSample,
+  newSourceId,
+})
 
 export default function App() {
   // ProjectState is the single source of truth: pattern edits, transport
@@ -91,6 +105,9 @@ export default function App() {
     recipientProject: ReturnType<typeof createInitialProjectState>
   } | null>(null)
   const [incomingShareError, setIncomingShareError] = useState<string | null>(null)
+  // A refused file is a message and nothing else: the document is never
+  // touched on the way to this state, so experimenting with files is free.
+  const [intakeError, setIntakeError] = useState<string | null>(null)
   const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
   const [isSharing, setIsSharing] = useState(false)
   const [sharedUrl, setSharedUrl] = useState<string | null>(null)
@@ -300,6 +317,19 @@ export default function App() {
     engine.setSamplerSettings(samplerSettings)
   }, [samplerSettings])
 
+  // A file dropped anywhere but a drop target would otherwise navigate the tab
+  // to it, taking an unsaved session with it. The deck's own targets stop the
+  // event before it reaches here, so this only ever swallows a stray drop.
+  useEffect(() => {
+    const swallow = (event: DragEvent) => event.preventDefault()
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [])
+
   // Unlock the audio context and preload the kick on the first gesture
   // anywhere, so the first Play is instant and never blocked by autoplay
   // policy. unlockAudio is idempotent; play() also awaits it as a fallback.
@@ -375,6 +405,30 @@ export default function App() {
   const handleAssignSamplerSource = useCallback((padId: PadLaneId, sourceId: string) => {
     setProject((p) => assignSourceToSamplerPad(p, padId, sourceId))
   }, [])
+
+  /**
+   * Bring a file in, from the picker or from a drop. Nothing reaches the
+   * document until the audio is decoded and registered, so a refusal at any
+   * stage leaves the project byte-identical — and the source and its pad
+   * arrive in one transition, never as two edits a save could land between.
+   */
+  const handleLoadFile = useCallback(async (file: File, padId: PadLaneId | null) => {
+    const outcome = await sampleIntake.load(file)
+    if (outcome.status === 'rejected') {
+      setIntakeError(outcome.rejection.message)
+      return
+    }
+    engine.registerSampleSource(outcome.source.id, outcome.buffer)
+    setIntakeError(null)
+    setProject((p) => {
+      const withSource = addSource(p, outcome.source)
+      return padId === null
+        ? withSource
+        : assignSourceToSamplerPad(withSource, padId, outcome.source.id)
+    })
+  }, [])
+
+  const handleDismissIntakeError = useCallback(() => setIntakeError(null), [])
 
   const handleBpmChange = useCallback((next: number) => {
     setProject((p) => setTransportBpm(p, next))
@@ -668,7 +722,10 @@ export default function App() {
         sources={project.sources}
         mixer={project.mixer}
         soloing={soloing}
+        intakeError={intakeError}
         onAssign={handleAssignSamplerSource}
+        onLoadFile={handleLoadFile}
+        onDismissIntakeError={handleDismissIntakeError}
         onTuneChange={handleSamplerParamChange}
         onAttack={handlePadAttack}
         onRelease={handlePadRelease}

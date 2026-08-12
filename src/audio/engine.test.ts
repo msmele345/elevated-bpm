@@ -19,6 +19,7 @@ const tone = vi.hoisted(() => {
     players: [] as Array<{
       playbackRate: number
       buffer: { duration: number }
+      volume: { value: number }
       start: ReturnType<typeof vi.fn>
       stop: ReturnType<typeof vi.fn>
     }>,
@@ -57,12 +58,14 @@ vi.mock('tone', () => {
 
   class Player extends Node {
     playbackRate = 1
+    volume = new AudioParam()
     // Stands in for the decoded audio a URL-constructed player holds; the
     // engine registers a pad's under its source id.
     buffer = { duration: 0.25 }
     start = vi.fn()
     stop = vi.fn()
-    constructor(_url: string) {
+    dispose = vi.fn()
+    constructor(_url?: string) {
       super()
       tone.players.push(this)
     }
@@ -162,6 +165,34 @@ vi.mock('tone', () => {
     loaded: vi.fn(() => tone.loadedPromise),
   }
 })
+
+/**
+ * The analysis decode is real I/O, so it is injected and faked here — the same
+ * trade the intake path makes. Quiet first half, loud second half, so an
+ * audition of either has a peak worth normalizing.
+ */
+const analysisFake = vi.hoisted(() => {
+  const sampleRate = 100
+  const data = new Float32Array(200)
+  for (let i = 0; i < 100; i += 1) data[i] = 0.1
+  for (let i = 100; i < 200; i += 1) data[i] = 0.95
+  return {
+    sampleRate,
+    duration: 2,
+    length: 200,
+    numberOfChannels: 1,
+    getChannelData: () => data,
+  }
+})
+
+vi.mock('./sampleDecoder', () => ({
+  decodeForAnalysis: vi.fn(() => Promise.resolve(analysisFake)),
+  decodeForRender: vi.fn(() => Promise.resolve(analysisFake)),
+  probeDuration: vi.fn(),
+  decodeSample: vi.fn(),
+  newSourceId: vi.fn(),
+  ANALYSIS_SAMPLE_RATE: 22050,
+}))
 
 async function flushPromises(): Promise<void> {
   for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
@@ -351,5 +382,48 @@ describe('committing a region', () => {
     )
 
     expect(rendered).toBe(true)
+  })
+})
+
+describe('auditioning a region', () => {
+  /** The audition player is the last one built; it is created on first use. */
+  const auditionPlayer = () => tone.players[tone.players.length - 1]
+
+  it('auditions at the level the commit will render at', async () => {
+    // A chop judged at one level and committed at another is not judged. The
+    // mock's gainToDb is identity, so the volume *is* the gain.
+    const engine = await import('./engine')
+    engine.registerSourceBytes('src-audition', new Blob())
+    await engine.openSourceAnalysis('src-audition')
+
+    engine.auditionRegion({ sourceId: 'src-audition', start: 0, duration: 1 })
+    await flushPromises()
+
+    // The quiet half peaks at 0.1 and has to be lifted to the 0.95 every slice
+    // is normalized to.
+    expect(auditionPlayer().volume.value).toBeCloseTo(0.95 / 0.1, 4)
+  })
+
+  it('leaves a chop that is already at level alone', async () => {
+    const engine = await import('./engine')
+    engine.registerSourceBytes('src-audition', new Blob())
+    await engine.openSourceAnalysis('src-audition')
+
+    engine.auditionRegion({ sourceId: 'src-audition', start: 1, duration: 1 })
+    await flushPromises()
+
+    expect(auditionPlayer().volume.value).toBeCloseTo(1, 4)
+  })
+
+  it('says nothing for a source whose editor is not the one open', async () => {
+    const engine = await import('./engine')
+    engine.registerSourceBytes('src-audition', new Blob())
+    await engine.openSourceAnalysis('src-audition')
+    const player = auditionPlayer()
+    const startsBefore = player.start.mock.calls.length
+
+    engine.auditionRegion({ sourceId: 'some-other-source', start: 0, duration: 1 })
+
+    expect(player.start.mock.calls.length).toBe(startsBefore)
   })
 })

@@ -195,6 +195,12 @@ rendered slices, and nothing persists them yet, so every pad comes back named
 and silent. This is the intermediate state the issue declares; EB2-06 closes
 it, and closes it for the curated source too.
 
+**An audition is normalized the same way a commit is.** It plays the analysis
+buffer — the render decode exists solely to make a slice — so it is mono and
+half-bandwidth against the real thing, but it applies the same gain the render
+will, over the same span of the same audio. A chop judged at one level and
+committed at another is not judged.
+
 One deliberate loose end: an audition is a monitor rather than a hit, so it
 sits outside the transport and a ringing audition is not cut by Stop.
 
@@ -261,13 +267,19 @@ sits outside the transport and a ringing audition is not cut by Stop.
 - [x] The slice storage format is stated in the PR and matches what EB2-06 and
       EB2-08 will read — stated above and in `src/model/slice.ts`
 - [x] Editing or committing during playback causes no audio dropout and no
-      dropped frames — measured while playing, committing the **largest region
-      the cap allows** out of the six-minute source (the worst case this slice
-      permits): commit took 307 ms, and across it the transport stayed
-      `started` with **0 stalls**, **0 meter samples below −60 dB**, and **0
-      frames over twice the baseline median** (baseline median 28.3 ms / p95
-      29.5; during 29.1 / 32.6 — the test browser's own throttled vsync sets
-      the cadence). Zero console errors throughout
+      dropped frames — measured on both halves, against the six-minute source.
+      **Committing** the largest region the cap allows (the worst case this
+      slice permits) took 307 ms, and across it the transport stayed `started`
+      with **0 stalls**, **0 meter samples below −60 dB**, and **0 frames over
+      twice the baseline median** (baseline 28.3 ms median / 29.5 p95; during
+      29.1 / 32.6 — the test browser's own throttled vsync sets the cadence).
+      **Editing**: a real pointer drag of **365 moves over 2 s** on the end
+      handle, mid-playback, gave **0 stalls** and again **0 frames over twice
+      the baseline median** (baseline 28.4 / 29.2; during 28.8 / 30.2). Its
+      meter dipped below −60 dB on 11 of 81 samples — but an *idle* window with
+      nothing touched at all dipped on 6 of 82, so those are the sparse demo
+      groove's own gaps at 100 BPM rather than dropout, which is why the
+      commit run at 130 BPM saw none. Zero console errors throughout
 
 ## Testing decisions
 

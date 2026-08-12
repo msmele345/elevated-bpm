@@ -66,6 +66,12 @@ What has to widen is the *lane id space* those structures are keyed on.
   shipped URL, pad voices get theirs assigned at load, but both are a player
   through a gain and both are started by the same scheduled 16th. Keeping one
   registry means `voiceStep` needs no dispatch and the choke map widens for free.
+
+  > **Superseded by EB2-03a.** "Pad voices get theirs assigned at load" was
+  > never built: the tracer shipped pad players constructed from a fixed URL and
+  > gated playback on the one shipped source id. EB2-03a moved buffer ownership
+  > onto the source — a pad resolves its region's source through a sample
+  > registry on every hit — so a pad is bound to no file at all.
 - Pads are numbered **1–4**, so the printed label is the key that plays them.
 
 ### Source and region

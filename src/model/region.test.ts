@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SampleRegion } from './sampler'
 import {
+  MAX_SLICE_SECONDS,
   MIN_REGION_SECONDS,
   REGION_JUMP_SECONDS,
   REGION_NUDGE_SECONDS,
@@ -44,6 +45,50 @@ describe('moveRegionEdge', () => {
     expect(start.start).toBe(0)
     expect(regionEnd(start)).toBeCloseTo(5)
     expect(regionEnd(end)).toBe(SOURCE_DURATION)
+  })
+})
+
+describe('the longest a chop may be', () => {
+  /** Six minutes: the longest source intake accepts. */
+  const LONG_SOURCE = 360
+
+  it('drags the far edge along rather than letting a chop outgrow the cap', () => {
+    // A slice is rendered audio that EB2-06 treats as precious and never
+    // evicts, so "slices are small" has to be enforced rather than assumed:
+    // an untrimmed six-minute region would render tens of megabytes and put
+    // back exactly the residency the slice architecture removes.
+    const wide = moveRegionEdge(region(100, 1), 'end', 200, LONG_SOURCE)
+
+    expect(regionEnd(wide) - wide.start).toBeCloseTo(MAX_SLICE_SECONDS)
+    expect(regionEnd(wide)).toBeCloseTo(200)
+    expect(wide.start).toBeCloseTo(200 - MAX_SLICE_SECONDS)
+  })
+
+  it('still parks an edge at the source’s own bounds', () => {
+    // Because the far edge follows, Home and End keep meaning what they say —
+    // the window slides to the top or the tail of the file instead of the
+    // user being stranded in the middle of a long recording.
+    const atTop = moveRegionEdge(region(300, 4), 'start', 0, LONG_SOURCE)
+    const atTail = moveRegionEdge(region(10, 4), 'end', LONG_SOURCE, LONG_SOURCE)
+
+    expect(atTop.start).toBe(0)
+    expect(regionEnd(atTop)).toBeCloseTo(MAX_SLICE_SECONDS)
+    expect(regionEnd(atTail)).toBe(LONG_SOURCE)
+    expect(atTail.start).toBeCloseTo(LONG_SOURCE - MAX_SLICE_SECONDS)
+  })
+
+  it('leaves a chop already inside the cap exactly where it is', () => {
+    const modest = moveRegionEdge(region(2, 1), 'end', 5, LONG_SOURCE)
+
+    expect(modest.start).toBeCloseTo(2)
+    expect(regionEnd(modest)).toBeCloseTo(5)
+  })
+
+  it('pulls an over-long region from a document back to the cap', () => {
+    const clamped = clampRegionToSource(region(10, 300), LONG_SOURCE)
+
+    expect(clamped.start).toBeCloseTo(10)
+    expect(clamped.duration).toBeCloseTo(MAX_SLICE_SECONDS)
   })
 })
 

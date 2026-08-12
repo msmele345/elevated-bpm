@@ -146,34 +146,128 @@ Canvas, on rAF, reading the analysis buffer — the same discipline as the spect
 scope: never React state on a draw loop, skip the repaint on frames where nothing
 changed, and give reduced-motion users a static render with no loop at all.
 
+## Decisions as built (2026-08-12)
+
+Everything EB2-06 and EB2-08 read from this slice, in one place. The
+authoritative copy lives in `src/model/slice.ts`; this is the summary.
+
+| Decision | Value | Where |
+|---|---|---|
+| Slice encoding | **16-bit PCM, interleaved** | `Slice.pcm`, `src/model/slice.ts` |
+| Slice channels | **the source's own count**, preserved | `renderSlice` |
+| Slice rate | **the render context's rate** (44.1 kHz measured) | `renderSlice` |
+| Slice peak | **0.95**, every slice, always | `SLICE_PEAK` |
+| Longest slice | **8 s** | `MAX_SLICE_SECONDS`, `src/model/region.ts` |
+| Shortest region | **10 ms** | `MIN_REGION_SECONDS` |
+| Region on assignment | **first 4 s** of the source | `DEFAULT_PAD_REGION_SECONDS` |
+| Analysis decode | **22.05 kHz mono**, open editor only | `ANALYSIS_SAMPLE_RATE` |
+
+Four of these were not in the spec and are load-bearing enough to say why:
+
+- **0.95 is not a taste call.** It is the peak `scripts/generate-kit.mjs`
+  normalizes the shipped 909 kit to. Measured in-browser, a chop rendered from
+  an arbitrary upload peaks at 0.950 against the kit kick's 0.837 — so a hit
+  lifted from a mastered track sits *with* the groove on the user's first press
+  rather than 12 dB above it, with no control for them to find first.
+- **A slice has a maximum length**, derived rather than picked: a bar at the
+  transport's slowest tempo is the longest a fit-to-steps target can ask for,
+  and twice that leaves room for a one-shot with a tail. EB2-06 keeps slices
+  and never evicts them, so "slices are small" has to be enforced rather than
+  assumed — an untrimmed six-minute commit would render tens of megabytes and
+  put back exactly the residency this design removes. The cap is not a clamp on
+  the edges: pushing one edge past it **drags the other along**, so the region
+  behaves as a sliding window and Home/End still park at the source's own
+  bounds, which is what the AC asks for.
+- **Assigning a source opens on its first four seconds**, not on all of it.
+  Under EB2-04 a whole-file region was free, because a pad read an offset into
+  an already-decoded source. A region is rendered now, so the same gesture on a
+  full track would render a full-track slice.
+- **The analysis decode is 22.05 kHz, not the ~11 kHz the spec's 16 MB implies.**
+  That buffer is also what an audition plays, and a chop judged by ear through
+  5 kHz of bandwidth is not judged. 22.05 kHz measured at **30.3 MB** for a
+  six-minute source — four times under the render decode's peak, which is the
+  number that actually constrains the feature.
+
+**A pad's audio no longer survives a reload — including a curated-source pad.**
+Under EB2-04 the shipped source was decoded into the registry at startup, so a
+pad pointed at it still sounded after a refresh. Playback now touches only
+rendered slices, and nothing persists them yet, so every pad comes back named
+and silent. This is the intermediate state the issue declares; EB2-06 closes
+it, and closes it for the curated source too.
+
+One deliberate loose end: an audition is a monitor rather than a hit, so it
+sits outside the transport and a ringing audition is not cut by Stop.
+
 ## Acceptance criteria
 
-- [ ] A source opens in an editor showing its waveform and its detected onsets
-- [ ] Both region edges drag directly, and each is fully operable from the
-      keyboard with fine and coarse nudges and Home/End parking at the bounds
-- [ ] Each edge announces its timecode **and** its position among the onsets
-- [ ] Bracket keys jump the focused edge between onsets; Enter auditions the
-      region; Space does nothing but activate a focused button
-- [ ] Committing a region assigns it to a chosen pad, where it sequences and
-      plays as the whole-file region did
-- [ ] Several regions cut from one source land on different pads, and the source
-      is loaded once
-- [ ] Reopening a pad's region shows its current edges and moving them is a
-      correction, not a redo
-- [ ] A Tune control pitches a pad; a fit-to-steps target locks a chop to N steps
+- [x] A source opens in an editor showing its waveform and its detected onsets —
+      verified in Chrome against the real curated asset (60,928 painted canvas
+      pixels over a real decayed percussion envelope) and against a synthesized
+      six-minute source, where **720 onsets were detected from 720 hits**
+- [x] Both region edges drag directly, and each is fully operable from the
+      keyboard with fine and coarse nudges and Home/End parking at the bounds —
+      measured on the six-minute source: ArrowRight 0.000 → 0.010, PageUp →
+      0.110, End → 3.990, Home → 0.000. Dragging is covered by a component test
+      for the one class Phase 9 found twice: a handle whose pointer cannot be
+      captured must still drag (`RegionHandle.test.ts`)
+- [x] Each edge announces its timecode **and** its position among the onsets —
+      `regionEdgeAnnouncement` (`src/model/region.ts`) places an edge whether it
+      is on a hit, between two, before them all or past them all. The
+      accessibility suite asserts the *content*, not just the presence:
+      `0.500 s, onset 1 of 4`, `0.510 s, between onsets 1 and 2 of 4`
+- [x] Bracket keys jump the focused edge between onsets; Enter auditions the
+      region; Space does nothing but activate a focused button — verified in
+      Chrome: `]` → onset 2 (0.499 s), `]` → onset 3 (0.998 s), `[` → back to
+      onset 2, all landing on real detected hits; Space on a focused handle
+      changed nothing. A jump only ever targets an onset the edge can legally
+      reach, so navigation can never quietly retrim the chop
+- [x] Committing a region assigns it to a chosen pad, where it sequences and
+      plays as the whole-file region did — mounted-deck test drives the real
+      controls; in-browser, a committed chop fired from the sequencer and from
+      the number keys on the same clock as the kit
+- [x] Several regions cut from one source land on different pads, and the source
+      is loaded once — `App.test.ts` cuts two regions onto two pads and asserts
+      one decode, one source entry, and two different `start` times into it
+- [x] Reopening a pad's region shows its current edges and moving them is a
+      correction, not a redo — the editor opens on the pad's own region
+      (clamped to the source), and a commit keeps the pad's Tune and fit
+- [x] A Tune control pitches a pad; a fit-to-steps target locks a chop to N steps
       and moves its pitch with its speed, with the resulting speed and pitch shown
-- [ ] Committed slices are peak-normalized: a chop from a loud source and a hit
-      from the 909 kit sit at comparable level on first play
-- [ ] The editor is an accessible modal dialog — labelled, deck `inert`, Escape
+      — measured live on the audio node: an 8.000 s slice fitted to 16 steps ran
+      at **4.3333× at 130 BPM** and **3.3333× at 100 BPM**, both exactly
+      `sliceDuration / (steps × 15/bpm)`, so a fitted chop follows the tempo
+      while it plays. The strip reads `433 % speed, +25.4 st` — pitch is not a
+      side effect to hide, it is the sound of the technique
+- [x] Committed slices are peak-normalized: a chop from a loud source and a hit
+      from the 909 kit sit at comparable level on first play — measured on the
+      real rendered buffers: **slice peak 0.950, kit kick peak 0.837**
+- [x] The editor is an accessible modal dialog — labelled, deck `inert`, Escape
       closes, focus contained, and no live stab or pad key leaks through while it
-      is open
-- [ ] Closing the editor releases the analysis buffer, and the render decode is
+      is open — verified in Chrome mid-playback: **0 stab attacks and 0 pad
+      starts** from a/s/1/2 while the editor was open; the deck carried `inert`
+      and left the accessibility tree entirely (the mounted test asserts
+      `getByRole('main')` finds nothing while it is open). Focus lands on the
+      close control, and the handles are the **2nd and 3rd tab stops** rather
+      than ninety deep
+- [x] Closing the editor releases the analysis buffer, and the render decode is
       released immediately after a slice is produced — both confirmed by measured
-      heap, not by inspection
-- [ ] The slice storage format is stated in the PR and matches what EB2-06 and
-      EB2-08 will read
-- [ ] Editing or committing during playback causes no audio dropout and no
-      dropped frames
+      heap, not by inspection — with a six-minute source: baseline **14.1 MB**,
+      editor open **45.9 MB** holding exactly **30.3 MB** of analysis buffer
+      (360 s × 22050 × 4 B), and **0 bytes held** on close. Across five
+      open/close cycles the heap stayed bounded at **74.9–77.1 MB**, where a
+      retained buffer would have put it past 160 MB. The render decode never
+      appears as a step: a full-quality decode of the same file at intake left
+      the heap at 14.2 MB
+- [x] The slice storage format is stated in the PR and matches what EB2-06 and
+      EB2-08 will read — stated above and in `src/model/slice.ts`
+- [x] Editing or committing during playback causes no audio dropout and no
+      dropped frames — measured while playing, committing the **largest region
+      the cap allows** out of the six-minute source (the worst case this slice
+      permits): commit took 307 ms, and across it the transport stayed
+      `started` with **0 stalls**, **0 meter samples below −60 dB**, and **0
+      frames over twice the baseline median** (baseline median 28.3 ms / p95
+      29.5; during 29.1 / 32.6 — the test browser's own throttled vsync sets
+      the cadence). Zero console errors throughout
 
 ## Testing decisions
 

@@ -568,6 +568,13 @@ function ensureVoices(): void {
       stab,
       master,
       fx,
+      /**
+       * Bytes the open editor is holding. Reading a `let` through a function,
+       * so it reports what the engine holds *now* — closing the editor has to
+       * bring this back to zero, which is the one claim about this feature
+       * that only a real browser can make.
+       */
+      analysisBytes: () => (analysis ? analysis.buffer.length * 4 : 0),
     }
   }
 }

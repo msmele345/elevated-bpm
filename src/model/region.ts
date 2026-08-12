@@ -1,4 +1,6 @@
 import type { SampleRegion } from './sampler'
+import { MIN_BPM } from './transport'
+import { STEP_COUNT } from './types'
 
 /**
  * The geometry of trimming: where a region's two edges may sit inside a source
@@ -29,6 +31,18 @@ export const MIN_REGION_SECONDS = 0.01
  */
 export const REGION_NUDGE_SECONDS = 0.01
 export const REGION_JUMP_SECONDS = 0.1
+
+/**
+ * The longest a chop may be, derived rather than picked: a full bar at the
+ * transport's slowest tempo is the longest a fit-to-steps target can ever ask
+ * for, and twice that leaves room for a one-shot with a long tail.
+ *
+ * It exists because a slice is *rendered* audio which EB2-06 keeps and never
+ * evicts, so "slices are small" has to be enforced rather than assumed —
+ * committing an untrimmed six-minute region would render tens of megabytes and
+ * put back exactly the residency the slice architecture removes.
+ */
+export const MAX_SLICE_SECONDS = ((STEP_COUNT * 15) / MIN_BPM) * 2
 
 /** Where the region ends — the value the second thumb carries. */
 export function regionEnd(region: SampleRegion): number {
@@ -119,7 +133,7 @@ export function clampRegionToSource(
   sourceDuration: number,
 ): SampleRegion {
   const start = Math.min(Math.max(0, region.start), Math.max(0, sourceDuration - MIN_REGION_SECONDS))
-  const duration = Math.min(region.duration, sourceDuration - start)
+  const duration = Math.min(region.duration, sourceDuration - start, MAX_SLICE_SECONDS)
   return start === region.start && duration === region.duration
     ? region
     : { ...region, start, duration }
@@ -151,7 +165,16 @@ export function jumpRegionEdgeToOnset(
   return target === undefined ? region : moveRegionEdge(region, edge, target, sourceDuration)
 }
 
-/** Move one edge to a time, holding the other edge still. */
+/**
+ * Move one edge to a time. The other edge holds still — unless that would make
+ * the chop longer than `MAX_SLICE_SECONDS`, in which case it follows, so the
+ * region behaves as a window of at most that width.
+ *
+ * Dragging the far edge along rather than clamping the near one is what keeps
+ * Home and End meaning what they say on a long source: the window slides to
+ * the top or the tail of the file instead of stranding the user in the middle
+ * of a six-minute recording with no way back to its beginning.
+ */
 export function moveRegionEdge(
   region: SampleRegion,
   edge: RegionEdge,
@@ -161,7 +184,9 @@ export function moveRegionEdge(
   const { min, max } = regionEdgeRange(region, edge, sourceDuration)
   const at = Math.min(max, Math.max(min, seconds))
   if (edge === 'start') {
-    return { ...region, start: at, duration: regionEnd(region) - at }
+    const end = Math.min(regionEnd(region), at + MAX_SLICE_SECONDS)
+    return { ...region, start: at, duration: end - at }
   }
-  return { ...region, duration: at - region.start }
+  const start = Math.max(region.start, at - MAX_SLICE_SECONDS)
+  return { ...region, start, duration: at - start }
 }

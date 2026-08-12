@@ -236,6 +236,18 @@ describe('App audio intake', () => {
     expect(screen.getByRole('button', { name: 'Play Pad 1 — empty' })).toBeTruthy()
   })
 
+  it('shows which pad a dragged file would land on, not just the panel', async () => {
+    await hydratedDeck()
+
+    const strip = screen.getByRole('button', { name: 'Play Pad 2 — empty' }).parentElement!
+    fireEvent.dragOver(strip, { dataTransfer: { files: [audioFile('Rim Hit.wav')] } })
+
+    expect(strip.hasAttribute('data-drop-active')).toBe(true)
+    // The panel is the pad's ancestor: if the drag reached it, its own
+    // highlight would replace the pad's and hide where the sound is going.
+    expect(strip.closest('section')!.hasAttribute('data-drop-active')).toBe(false)
+  })
+
   it('swallows a stray drop rather than letting the tab navigate to the file', async () => {
     await hydratedDeck()
 

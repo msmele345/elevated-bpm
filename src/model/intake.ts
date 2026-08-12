@@ -70,12 +70,12 @@ export function rejectionForSize(name: string, bytes: number): IntakeRejection |
 }
 
 /**
- * Refuse an over-long file once its duration is known — probed from metadata,
- * still before any decode.
+ * What the metadata probe's answer means: too long to accept, unreadable, or
+ * nothing wrong. Named for the probe rather than for duration because a probe
+ * that came back with no readable length has not measured a long file — it has
+ * found one the browser cannot read.
  */
-export function rejectionForDuration(name: string, seconds: number): IntakeRejection | null {
-  // A probe that came back with no readable duration says nothing about length
-  // — it says the browser could not read the file, which is the honest message.
+export function rejectionForProbe(name: string, seconds: number): IntakeRejection | null {
   if (Number.isNaN(seconds) || seconds <= 0) return undecodableRejection(name)
   if (seconds <= MAX_SOURCE_SECONDS) return null
   return {

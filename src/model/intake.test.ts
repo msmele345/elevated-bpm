@@ -3,7 +3,7 @@ import {
   INTAKE_LIMITS_HINT,
   MAX_SOURCE_BYTES,
   MAX_SOURCE_SECONDS,
-  rejectionForDuration,
+  rejectionForProbe,
   rejectionForSize,
   sourceNameFromFileName,
 } from './intake'
@@ -24,7 +24,7 @@ describe('the intake size gate', () => {
 
 describe('the intake duration gate', () => {
   it('refuses a file over the limit, naming the limit it broke', () => {
-    const rejection = rejectionForDuration('warehouse-set.mp3', MAX_SOURCE_SECONDS + 1)
+    const rejection = rejectionForProbe('warehouse-set.mp3', MAX_SOURCE_SECONDS + 1)
 
     expect(rejection?.code).toBe('too-long')
     expect(rejection?.message).toContain('warehouse-set.mp3')
@@ -32,18 +32,18 @@ describe('the intake duration gate', () => {
   })
 
   it('treats a probe that learned nothing as a file the browser cannot read', () => {
-    const rejection = rejectionForDuration('broken.aiff', Number.NaN)
+    const rejection = rejectionForProbe('broken.aiff', Number.NaN)
 
     expect(rejection?.code).toBe('undecodable')
     expect(rejection?.message).toContain('broken.aiff')
   })
 
   it('accepts a file sitting exactly on the limit', () => {
-    expect(rejectionForDuration('exactly-six.wav', MAX_SOURCE_SECONDS)).toBeNull()
+    expect(rejectionForProbe('exactly-six.wav', MAX_SOURCE_SECONDS)).toBeNull()
   })
 
   it('refuses an endless stream as over-long rather than unreadable', () => {
-    expect(rejectionForDuration('live-stream.mp3', Number.POSITIVE_INFINITY)?.code).toBe(
+    expect(rejectionForProbe('live-stream.mp3', Number.POSITIVE_INFINITY)?.code).toBe(
       'too-long',
     )
   })

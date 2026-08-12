@@ -1,5 +1,5 @@
 import {
-  rejectionForDuration,
+  rejectionForProbe,
   rejectionForSize,
   sourceNameFromFileName,
   undecodableRejection,
@@ -18,9 +18,8 @@ import type { SampleBuffer } from './sampleRegistry'
  * what keeps this whole path testable without a browser or a real decoder.
  */
 
-/** What a decoder hands back: an audio buffer that knows its own shape. */
+/** What a decoder hands back: playable audio that knows its own shape. */
 export interface DecodedSample extends SampleBuffer {
-  readonly duration: number
   readonly numberOfChannels: number
 }
 
@@ -53,23 +52,16 @@ export function createSampleIntake<F extends IntakeFile>(
       const oversized = rejectionForSize(file.name, file.size)
       if (oversized) return { status: 'rejected', rejection: oversized }
 
-      // A probe that cannot open the file at all has learned the same thing a
-      // refused decode does, one step earlier and far more cheaply.
-      let seconds: number
-      try {
-        seconds = await deps.probeDuration(file)
-      } catch {
-        return { status: 'rejected', rejection: undecodableRejection(file.name) }
-      }
-      const overLong = rejectionForDuration(file.name, seconds)
-      if (overLong) return { status: 'rejected', rejection: overLong }
-
-      // The browser is the authority on what it can play, so formats are never
-      // allowlisted: attempt the decode and report what happened.
       let buffer: DecodedSample
       try {
+        const overLong = rejectionForProbe(file.name, await deps.probeDuration(file))
+        if (overLong) return { status: 'rejected', rejection: overLong }
+        // The browser is the authority on what it can play, so formats are
+        // never allowlisted: attempt the decode and report what happened.
         buffer = await deps.decode(file)
       } catch {
+        // Either step throwing means the same thing — this browser cannot read
+        // the file — and a probe that throws never reaches the decode.
         return { status: 'rejected', rejection: undecodableRejection(file.name) }
       }
 

@@ -64,6 +64,10 @@ function SamplerInstrument({
   const handleDragOver = (target: PadLaneId | 'panel') => (event: DragEvent) => {
     // Without this the browser refuses the drop and navigates to the file.
     event.preventDefault()
+    // A pad is inside the panel, so this has to stop here too: left to bubble,
+    // the panel would overwrite the pad's highlight on every dragover and the
+    // user would never be shown which pad the sound is about to land on.
+    event.stopPropagation()
     setDropTarget((current) => (current === target ? current : target))
   }
 
@@ -161,9 +165,11 @@ function SamplerInstrument({
       <div className="sampler-intake">
         <label className="sampler-load">
           <span className="sampler-load-label">Load audio file</span>
+          {/* Deliberately unfiltered: the browser is the authority on what it
+              can play, and an `accept` list would grey out a file it could
+              have decoded, with no message and no way to override. */}
           <input
             type="file"
-            accept="audio/*"
             onChange={(event) => {
               const file = event.target.files?.[0]
               // Clear the control either way, so choosing the same file again

@@ -42,7 +42,7 @@ const engineSpies = vi.hoisted(() => ({
   registerSourceBytes: vi.fn(),
   renderPadSlice: vi.fn(),
   commitPadRegion: vi.fn().mockResolvedValue(true),
-  openSourceAnalysis: vi.fn(),
+  openSourceAnalysis: vi.fn(() => Promise.resolve(analysisFake())),
   closeSourceAnalysis: vi.fn(),
   auditionRegion: vi.fn(),
   getSoundingPadIds: vi.fn((): string[] => []),
@@ -73,6 +73,23 @@ function decodedFake(duration: number, sampleRate = 100) {
     numberOfChannels: 2,
     getChannelData: () => Float32Array.from({ length }, () => 0.5),
   }
+}
+
+/**
+ * What an open editor reads. Four hits in three seconds, so the region handles
+ * have real structure to announce a position within and the bracket keys have
+ * somewhere to jump.
+ */
+function analysisFake(sampleRate = 1000, duration = 3) {
+  const samples = new Float32Array(Math.round(sampleRate * duration))
+  for (const at of [0.5, 1, 1.5, 2]) {
+    const start = Math.round(at * sampleRate)
+    for (let i = 0; i < sampleRate * 0.1 && start + i < samples.length; i += 1) {
+      samples[start + i] =
+        0.9 * Math.exp(-24 * (i / sampleRate)) * Math.sin((2 * Math.PI * 180 * i) / sampleRate)
+    }
+  }
+  return { sampleRate, duration, samples }
 }
 
 vi.mock('./audio/sampleDecoder', () => decoder)
@@ -555,5 +572,156 @@ describe('App sharing workflow', () => {
     expect((tempo as HTMLInputElement).value).toBe('127')
     await new Promise((resolve) => setTimeout(resolve, 450))
     expect(await loadProjectState()).toEqual(recipient)
+  })
+})
+
+/** Open the shipped source in the editor and wait for the dialog. */
+async function openChopEditor(name = 'Chop Warehouse Perc'): Promise<HTMLElement> {
+  fireEvent.click(screen.getByRole('button', { name }))
+  return screen.findByRole('dialog')
+}
+
+function handle(edge: 'start' | 'end'): HTMLElement {
+  return screen.getByRole('slider', { name: `Region ${edge}` })
+}
+
+describe('App region editor', () => {
+  it('trims a region from the keyboard and commits it to a chosen pad', async () => {
+    await hydratedDeck()
+    const dialog = await openChopEditor()
+
+    // Bracket keys move by structure rather than by pixel — the whole reason
+    // the onsets are detected at all.
+    fireEvent.keyDown(handle('start'), { key: ']' })
+    fireEvent.keyDown(handle('end'), { key: '[' })
+
+    expect(Number(handle('start').getAttribute('aria-valuenow'))).toBeCloseTo(0.5, 1)
+    expect(Number(handle('end').getAttribute('aria-valuenow'))).toBeCloseTo(2, 1)
+
+    fireEvent.change(within(dialog).getByLabelText('Assign to'), { target: { value: 'pad3' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Commit to pad' }))
+
+    // The slice is rendered before the pad claims the sound, and the editor
+    // gets out of the way once it has.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(engineSpies.commitPadRegion).toHaveBeenCalledWith(
+      'pad3',
+      expect.objectContaining({ sourceId: CURATED_SAMPLE_SOURCE.id }),
+    )
+    expect(screen.getByRole('button', { name: 'Play Pad 3 — Warehouse Perc' })).toBeTruthy()
+  })
+
+  it('reopens a pad on the edges it already has, so a move is a correction', async () => {
+    await hydratedDeck()
+    await openChopEditor()
+    fireEvent.keyDown(handle('start'), { key: ']' })
+    fireEvent.click(screen.getByRole('button', { name: 'Commit to pad' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Pad 1' }))
+    await screen.findByRole('dialog')
+
+    // Not back at zero: the chop that was committed is what is on screen.
+    expect(Number(handle('start').getAttribute('aria-valuenow'))).toBeCloseTo(0.5, 1)
+  })
+
+  it('cuts two regions from one source onto two pads, loading the source once', async () => {
+    await hydratedDeck()
+    chooseFile(audioFile('Warehouse Break.wav'))
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    await within(sourceList).findByText('Warehouse Break')
+
+    for (const [pad, key] of [
+      ['pad1', ']'],
+      ['pad2', '['],
+    ] as const) {
+      await openChopEditor('Chop Warehouse Break')
+      fireEvent.keyDown(handle('start'), { key })
+      fireEvent.change(screen.getByLabelText('Assign to'), { target: { value: pad } })
+      fireEvent.click(screen.getByRole('button', { name: 'Commit to pad' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    }
+
+    // One upload, one decode, one source — and two pads pointing into it.
+    expect(decoder.decodeSample).toHaveBeenCalledOnce()
+    expect(within(sourceList).getAllByText('Warehouse Break')).toHaveLength(1)
+    const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+    expect(settings.pad1.region.sourceId).toBe('upload-1')
+    expect(settings.pad2.region.sourceId).toBe('upload-1')
+    expect(settings.pad1.region.start).not.toBe(settings.pad2.region.start)
+  })
+
+  it('is a modal over an inert deck that Escape releases, giving the audio back', async () => {
+    await hydratedDeck()
+    await openChopEditor()
+
+    // Queried as an element rather than by role: the deck is out of the
+    // accessibility tree entirely while the dialog owns the surface, which is
+    // exactly what `screen.getByRole('main')` failing here would prove.
+    const deck = document.querySelector('main')!
+    expect(deck.hasAttribute('inert')).toBe(true)
+    expect(deck.getAttribute('aria-hidden')).toBe('true')
+    expect(screen.queryByRole('main')).toBeNull()
+
+    fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // Closing is what releases the analysis decode — the residency the
+    // two-decode split exists to bound.
+    expect(engineSpies.closeSourceAnalysis).toHaveBeenCalled()
+    expect(screen.getByRole('main').hasAttribute('inert')).toBe(false)
+  })
+
+  it('never lets a chop fire a stab or a pad underneath it', async () => {
+    await hydratedDeck()
+    await openChopEditor()
+
+    fireEvent.keyDown(window, { key: 'a', code: 'KeyA' })
+    fireEvent.keyDown(window, { key: '1', code: 'Digit1' })
+
+    expect(engineSpies.attackStabNote).not.toHaveBeenCalled()
+    expect(engineSpies.attackPad).not.toHaveBeenCalled()
+  })
+
+  it('auditions the region on Enter without committing it', async () => {
+    await hydratedDeck()
+    await openChopEditor()
+
+    fireEvent.keyDown(handle('start'), { key: 'Enter' })
+
+    expect(engineSpies.auditionRegion).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: CURATED_SAMPLE_SOURCE.id }),
+    )
+    expect(engineSpies.commitPadRegion).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
+  it('leaves the pad untouched when a trim is abandoned', async () => {
+    await hydratedDeck()
+    await openChopEditor()
+    fireEvent.keyDown(handle('start'), { key: ']' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(engineSpies.commitPadRegion).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Play Pad 1 — empty' })).toBeTruthy()
+  })
+
+  it('locks a chop to steps and says what that did to its speed and pitch', async () => {
+    await hydratedDeck()
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
+      target: { value: CURATED_SAMPLE_SOURCE.id },
+    })
+    await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Perc' })
+
+    fireEvent.change(screen.getByLabelText('Pad 1 fit to steps'), { target: { value: '2' } })
+
+    // The curated one-shot is 0.25 s; two 16ths at 130 BPM is 0.2308 s, so it
+    // runs a little fast — and its pitch goes up with it, as pitching a record
+    // does. There is no time-stretching anywhere in this feature.
+    const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+    expect(settings.pad1.fit).toBe(2)
+    expect(screen.getByText('108 % speed, +1.4 st')).toBeTruthy()
   })
 })

@@ -1,12 +1,28 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { computeAccessibleName } from 'dom-accessibility-api'
 import { indexedDB } from 'fake-indexeddb'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { DECK_SECTIONS } from './model/deckSections'
+
+/**
+ * What an open editor reads: four hits in three seconds, so a region edge has
+ * real structure to announce its position within.
+ */
+function analysisFake(sampleRate = 1000, duration = 3) {
+  const samples = new Float32Array(Math.round(sampleRate * duration))
+  for (const at of [0.5, 1, 1.5, 2]) {
+    const start = Math.round(at * sampleRate)
+    for (let i = 0; i < sampleRate * 0.1 && start + i < samples.length; i += 1) {
+      samples[start + i] =
+        0.9 * Math.exp(-24 * (i / sampleRate)) * Math.sin((2 * Math.PI * 180 * i) / sampleRate)
+    }
+  }
+  return { sampleRate, duration, samples }
+}
 
 vi.mock('./audio/engine', async () => {
   const transport = await import('./model/transport')
@@ -29,7 +45,12 @@ vi.mock('./audio/engine', async () => {
     releaseStabNote: () => undefined,
     attackPad: () => undefined,
     releasePad: () => undefined,
-    registerSampleSource: () => undefined,
+    registerSourceBytes: () => undefined,
+    renderPadSlice: () => undefined,
+    commitPadRegion: () => Promise.resolve(true),
+    openSourceAnalysis: () => Promise.resolve(analysisFake()),
+    closeSourceAnalysis: () => undefined,
+    auditionRegion: () => undefined,
     getSoundingStabNotes: () => [],
     getSoundingPadIds: () => [],
     getSpectrum: () => null,
@@ -159,5 +180,79 @@ describe('deck accessibility', () => {
     await renderDeck()
 
     expect(screen.getByRole('group', { name: 'Live sampler pads' })).toBeTruthy()
+  })
+})
+
+describe('region editor accessibility', () => {
+  async function openEditor(): Promise<HTMLElement> {
+    await renderDeck()
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Warehouse Perc' }))
+    return screen.findByRole('dialog')
+  }
+
+  it('carries the editor’s whole meaning on two sliders, not on the waveform', async () => {
+    // The waveform is decorative — it describes audio the user can already
+    // hear. These two controls are the editor as far as assistive technology
+    // is concerned, exactly as the knob's SVG is decorative and its slider is
+    // not.
+    const dialog = await openEditor()
+
+    for (const edge of ['start', 'end']) {
+      const thumb = within(dialog).getByRole('slider', { name: `Region ${edge}` })
+      expect(thumb.getAttribute('aria-valuemin')).not.toBeNull()
+      expect(thumb.getAttribute('aria-valuemax')).not.toBeNull()
+      expect(thumb.getAttribute('aria-valuenow')).not.toBeNull()
+      expect(thumb.tabIndex).toBe(0)
+    }
+    expect(dialog.querySelector('canvas')?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('announces an edge by its timecode and its place among the onsets', async () => {
+    // The announcement *is* the feature: it is what makes the audio navigable
+    // by structure rather than by looking at it. Assert the content, not just
+    // that something is there.
+    const dialog = await openEditor()
+    const start = within(dialog).getByRole('slider', { name: 'Region start' })
+
+    expect(start.getAttribute('aria-valuetext')).toBe('0.000 s, before onset 1 of 4')
+
+    fireEvent.keyDown(start, { key: ']' })
+    expect(start.getAttribute('aria-valuetext')).toBe('0.500 s, onset 1 of 4')
+
+    fireEvent.keyDown(start, { key: 'ArrowRight' })
+    expect(start.getAttribute('aria-valuetext')).toBe('0.510 s, between onsets 1 and 2 of 4')
+  })
+
+  it('parks an edge at the source’s bound on Home and End', async () => {
+    const dialog = await openEditor()
+    const end = within(dialog).getByRole('slider', { name: 'Region end' })
+
+    fireEvent.keyDown(end, { key: 'End' })
+
+    expect(end.getAttribute('aria-valuetext')).toBe('3.000 s, after onset 4 of 4')
+  })
+
+  it('is reachable in a couple of keystrokes, not ninety', async () => {
+    // The sampler panel alone is roughly eighty controls. Inline, the handles
+    // would sit behind all of them — the exact barrier Phase 9 measured. In a
+    // dialog they are the second and third stops.
+    const dialog = await openEditor()
+
+    const stops = focusable(dialog)
+    expect(document.activeElement).toBe(stops[0])
+    expect(stops.slice(1, 3).map((stop) => computeAccessibleName(stop))).toEqual([
+      'Region start',
+      'Region end',
+    ])
+  })
+
+  it('gives every editor control an accessible name', async () => {
+    const dialog = await openEditor()
+
+    const unnamed = focusable(dialog).filter(
+      (element) => computeAccessibleName(element).trim() === '',
+    )
+
+    expect(unnamed.map(identify)).toEqual([])
   })
 })

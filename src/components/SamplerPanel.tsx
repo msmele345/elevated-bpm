@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef } from 'react'
+import { memo, useEffect, useRef, useState, type DragEvent } from 'react'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
+import { INTAKE_LIMITS_HINT } from '../model/intake'
 import type { Mixer } from '../model/mixer'
 import {
   PAD_LANES,
@@ -21,7 +22,10 @@ interface SamplerPanelProps {
   sources: readonly SampleSource[]
   mixer: Mixer
   soloing: boolean
+  intakeError: string | null
   onAssign: (padId: PadLaneId, sourceId: string) => void
+  onLoadFile: (file: File, padId: PadLaneId | null) => void
+  onDismissIntakeError: () => void
   onTuneChange: (id: SamplerParamId, value: number) => void
   onAttack: (inputSourceId: string, padId: PadLaneId) => void
   onRelease: (inputSourceId: string) => void
@@ -38,7 +42,10 @@ function SamplerInstrument({
   sources,
   mixer,
   soloing,
+  intakeError,
   onAssign,
+  onLoadFile,
+  onDismissIntakeError,
   onTuneChange,
   onAttack,
   onRelease,
@@ -49,6 +56,30 @@ function SamplerInstrument({
 }: SamplerPanelProps) {
   const panelRef = useRef<HTMLElement>(null)
   const heldComputerSources = useRef(new Set<string>())
+  // Which surface a dragged file is currently over, so the deck shows where
+  // the sound would land. A drag is not the audio clock, and this never
+  // leaves the panel.
+  const [dropTarget, setDropTarget] = useState<PadLaneId | 'panel' | null>(null)
+
+  const handleDragOver = (target: PadLaneId | 'panel') => (event: DragEvent) => {
+    // Without this the browser refuses the drop and navigates to the file.
+    event.preventDefault()
+    // A pad is inside the panel, so this has to stop here too: left to bubble,
+    // the panel would overwrite the pad's highlight on every dragover and the
+    // user would never be shown which pad the sound is about to land on.
+    event.stopPropagation()
+    setDropTarget((current) => (current === target ? current : target))
+  }
+
+  const handleDrop = (padId: PadLaneId | null) => (event: DragEvent) => {
+    event.preventDefault()
+    // A pad is inside the panel: without this the same file would arrive
+    // twice and become two sources.
+    event.stopPropagation()
+    setDropTarget(null)
+    const file = event.dataTransfer?.files?.[0]
+    if (file) onLoadFile(file, padId)
+  }
 
   // Pad lights are an audio-clock view, never React state. Live and scheduled
   // attacks share the engine registry this animation-frame reader observes.
@@ -124,8 +155,42 @@ function SamplerInstrument({
       id={DECK_SECTION_IDS.sampler}
       tabIndex={-1}
       aria-labelledby={sectionTitleId(DECK_SECTION_IDS.sampler)}
+      data-drop-active={dropTarget === 'panel' || undefined}
+      onDragOver={handleDragOver('panel')}
+      onDragLeave={() => setDropTarget(null)}
+      onDrop={handleDrop(null)}
     >
       <PanelTitle sectionId={DECK_SECTION_IDS.sampler} name="Sampler" model="4-PAD SAMPLER · SP-04" />
+
+      <div className="sampler-intake">
+        <label className="sampler-load">
+          <span className="sampler-load-label">Load audio file</span>
+          {/* Deliberately unfiltered: the browser is the authority on what it
+              can play, and an `accept` list would grey out a file it could
+              have decoded, with no message and no way to override. */}
+          <input
+            type="file"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              // Clear the control either way, so choosing the same file again
+              // is still a change the browser will report.
+              event.target.value = ''
+              if (file) onLoadFile(file, null)
+            }}
+          />
+        </label>
+        {/* The limits are stated before the user waits on anything. */}
+        <p className="sampler-intake-hint">{INTAKE_LIMITS_HINT} Drop one on a pad to load it there.</p>
+      </div>
+
+      {intakeError && (
+        <div className="sampler-notice is-error" role="alert">
+          <p>{intakeError}</p>
+          <button type="button" className="sampler-notice-dismiss" onClick={onDismissIntakeError}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div className="sampler-source-bank" role="group" aria-label="Sample sources">
         <span className="sampler-source-label">Sources</span>
@@ -140,34 +205,45 @@ function SamplerInstrument({
       </div>
 
       <div className="sampler-pad-bank" role="group" aria-label="Live sampler pads">
-        {PAD_LANES.map((pad) => {
-          const sampleSource = sources[0]
-          return (
-            <div className="sampler-pad-strip" key={pad.id}>
-              <SamplerPad
-                pad={pad}
-                settings={settings[pad.id]}
-                onAttack={onAttack}
-                onRelease={onRelease}
-              />
-              <Knob
-                spec={samplerParamForPad(pad.id)}
-                value={settings[pad.id].tune}
-                onChange={onTuneChange}
-              />
-              {sampleSource && (
-                <button
-                  type="button"
-                  className="sampler-assign"
-                  aria-label={`Assign ${sampleSource.name} to ${pad.label}`}
-                  onClick={() => onAssign(pad.id, sampleSource.id)}
-                >
-                  Assign source
-                </button>
-              )}
-            </div>
-          )
-        })}
+        {PAD_LANES.map((pad) => (
+          <div
+            className="sampler-pad-strip"
+            key={pad.id}
+            data-drop-active={dropTarget === pad.id || undefined}
+            onDragOver={handleDragOver(pad.id)}
+            onDragLeave={() => setDropTarget(null)}
+            onDrop={handleDrop(pad.id)}
+          >
+            <SamplerPad
+              pad={pad}
+              settings={settings[pad.id]}
+              onAttack={onAttack}
+              onRelease={onRelease}
+            />
+            <Knob
+              spec={samplerParamForPad(pad.id)}
+              value={settings[pad.id].tune}
+              onChange={onTuneChange}
+            />
+            <select
+              className="sampler-assign"
+              aria-label={`${pad.label} sound source`}
+              value={settings[pad.id].region?.sourceId ?? ''}
+              onChange={(event) => onAssign(pad.id, event.target.value)}
+            >
+              {/* Present so an empty pad has something to show; clearing a pad
+                  is storage lifecycle work, not an assignment. */}
+              <option value="" disabled>
+                No sound
+              </option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
       </div>
 
       <div className="sampler-sequencer">
@@ -189,7 +265,7 @@ function SamplerInstrument({
         })}
       </div>
       <p className="panel-hint">
-        Assign the shipped source · play pads with 1–4 · tap a step twice to accent
+        Pick a sound per pad · play pads with 1–4 · tap a step twice to accent
       </p>
     </section>
   )

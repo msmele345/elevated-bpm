@@ -236,6 +236,16 @@ export function setFxParamValue(
   }
 }
 
+/**
+ * Take a loaded source into the document. Metadata only — the audio itself is
+ * registered with the engine — and deliberately not an edit to the beat: the
+ * pattern, the patches and the mixer come through by reference, so bringing a
+ * sound in can never disturb what the user has built.
+ */
+export function addSource(state: ProjectState, source: SampleSource): ProjectState {
+  return { ...state, sources: [...state.sources, source] }
+}
+
 /** Assign a source already owned by the document to one sampler pad. */
 export function assignSourceToSamplerPad(
   state: ProjectState,

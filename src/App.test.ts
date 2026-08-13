@@ -547,6 +547,52 @@ describe('App microphone recording', () => {
     expect(alert.textContent).toContain('too short to keep')
     expect(decoder.decodeSample).not.toHaveBeenCalled()
   })
+
+  it('chops, tunes and sequences a take exactly as it does an upload', async () => {
+    decoder.newSourceId.mockReturnValue('recording-1')
+    await hydratedDeck()
+
+    await startRecording()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    await within(sourceList).findByText('Recording 1')
+
+    // Chopping: the same editor, opened the same way, cutting a region out of
+    // a take the way it cuts one out of a break.
+    const dialog = await openChopEditor('Chop Recording 1')
+    fireEvent.keyDown(handle('start'), { key: ']' })
+    fireEvent.change(within(dialog).getByLabelText('Assign to'), { target: { value: 'pad2' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Commit to pad' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(engineSpies.commitPadRegion).toHaveBeenCalledWith(
+      'pad2',
+      expect.objectContaining({ sourceId: 'recording-1' }),
+    )
+    expect(screen.getByRole('button', { name: 'Play Pad 2 — Recording 1' })).toBeTruthy()
+
+    // Tuning: the pad's own knob, on the pad the take landed on.
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Pad 2 Tune' }), { key: 'ArrowUp' })
+
+    // Sequencing: a drum-shaped lane on the same sixteen steps as everything
+    // else, reaching the engine as part of the same pattern.
+    fireEvent.click(screen.getByRole('button', { name: 'Pad 2 step 5' }))
+
+    await waitFor(() => {
+      const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+      expect(settings.pad2.region.sourceId).toBe('recording-1')
+      expect(settings.pad2.tune).toBeGreaterThan(0)
+    })
+    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    expect(pattern.padLanes.find((lane: { id: string }) => lane.id === 'pad2').steps[4].on).toBe(
+      true,
+    )
+    // And storage keeps it under the same key any other chop is kept under.
+    await waitFor(async () =>
+      expect(await loadSlice(sliceKey({ sourceId: 'recording-1', start: 0.5, duration: 2.5 }))).
+        toBeTruthy(),
+    )
+  })
 })
 
 describe('App sampler workflow', () => {

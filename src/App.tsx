@@ -70,7 +70,6 @@ import {
   openingRegionForSource,
   padsUsingSource,
   type AvailableAudio,
-  type SampleOrigin,
   type SampleRegion,
   type SampleSource,
   type SamplerParamId,
@@ -82,14 +81,15 @@ import { RegionEditor } from './components/RegionEditor'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
-import { createSampleIntake } from './audio/sampleIntake'
-import { openMicrophone, type MicrophoneSession } from './audio/microphone'
+import { createSampleIntake, type IntakeOptions } from './audio/sampleIntake'
+import { isRecorderUnavailable, openMicrophone, type MicrophoneSession } from './audio/microphone'
 import {
   EMPTY_RECORDING_MESSAGE,
   IDLE_RECORDING,
   MICROPHONE_DENIED_MESSAGE,
   RECORDING_FAILED_MESSAGE,
   elapsedSeconds,
+  isMicrophoneLive,
   microphoneOpened,
   microphoneReleased,
   recordingFileName,
@@ -681,17 +681,12 @@ export default function App() {
     async (
       file: File,
       padId: PadLaneId | null,
-      options: {
+      options: IntakeOptions & {
         /** A repair rather than a choice, so the pad keeps the name it wears. */
         relinking?: boolean
-        origin?: SampleOrigin
-        knownDuration?: number
       } = {},
     ) => {
-      const outcome = await sampleIntake.load(file, {
-        origin: options.origin,
-        knownDuration: options.knownDuration,
-      })
+      const outcome = await sampleIntake.load(file, options)
       if (outcome.status === 'rejected') {
         setIntakeError(outcome.rejection.message)
         return
@@ -740,13 +735,19 @@ export default function App() {
     setIsPlaying(false)
   }, [])
 
-  /** Move the machine and read back what it became, in one step. */
+  /**
+   * Move the machine and read back what it became, in one step. A refused
+   * transition returns the state it was given *by identity*, which is how a
+   * caller tells "this moved" from "this was already there" — the status alone
+   * cannot, since a second stop while stopping is refused into `'stopping'`.
+   */
   const advanceRecording = useCallback(
     (transition: (state: RecordingState) => RecordingState) => {
-      const advanced = transition(recordingRef.current)
+      const before = recordingRef.current
+      const advanced = transition(before)
       recordingRef.current = advanced
       setRecordingState(advanced)
-      return advanced
+      return { state: advanced, moved: advanced !== before }
     },
     [],
   )
@@ -758,14 +759,21 @@ export default function App() {
    * thing the microphone could be pointed at.
    */
   const handleStartRecording = useCallback(async () => {
-    if (advanceRecording(requestMicrophone).status !== 'requesting') return
+    // A second press must not ask the browser for a microphone it is already
+    // opening, or already has.
+    if (!advanceRecording(requestMicrophone).moved) return
     stopTransport()
     try {
       micSessionRef.current = await openMicrophone()
-    } catch {
-      // A refusal is a normal, dismissible failure, worded like a refused file.
+    } catch (error) {
+      // A refusal is a normal, dismissible failure, worded like a refused file
+      // — but a microphone that opened and then could not be recorded from is
+      // not the user's doing, and must not send them to a permission setting
+      // that is already granted.
       advanceRecording(microphoneReleased)
-      setIntakeError(MICROPHONE_DENIED_MESSAGE)
+      setIntakeError(
+        isRecorderUnavailable(error) ? RECORDING_FAILED_MESSAGE : MICROPHONE_DENIED_MESSAGE,
+      )
       return
     }
     advanceRecording((state) => microphoneOpened(state, performance.now()))
@@ -782,8 +790,10 @@ export default function App() {
     // microphone that nothing would ever release.
     const session = micSessionRef.current
     if (!session) return
-    const stopping = advanceRecording(stopRequested)
-    if (stopping.status !== 'stopping') return
+    // A second stop must not flush and import the same take twice, which would
+    // land it as two sources.
+    const { state: stopping, moved } = advanceRecording(stopRequested)
+    if (!moved) return
 
     let captured: Blob
     try {
@@ -844,6 +854,11 @@ export default function App() {
   const handleTogglePlay = useCallback(async () => {
     if (isPlayingRef.current) {
       stopTransport()
+    } else if (isMicrophoneLive(recordingRef.current)) {
+      // Stopping the transport to record would be pointless if the next click
+      // put it straight back: the loop would be in the sample, and mic plus
+      // speakers plus the master drive is the howl the rule exists to prevent.
+      // The two never run together — that is the whole of the feedback rule.
     } else {
       await engine.play()
       setIsPlaying(true)
@@ -1053,6 +1068,7 @@ export default function App() {
           isPlaying={isPlaying}
           bpm={bpm}
           spotlitTempo={spotlitTarget('transport:tempo')}
+          heldForRecording={isMicrophoneLive(recordingState)}
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
         />

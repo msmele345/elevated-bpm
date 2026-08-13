@@ -30,43 +30,69 @@ export interface MicrophoneSession {
 }
 
 /**
+ * The microphone opened but capture could not be set up on it. Distinct from a
+ * refusal because the user did nothing wrong and there is nothing for them to
+ * allow — telling them to grant permission they already granted would send them
+ * to a browser setting that is not the problem.
+ */
+export const RECORDER_UNAVAILABLE = 'RecorderUnavailableError'
+
+export function isRecorderUnavailable(error: unknown): boolean {
+  return error instanceof Error && error.name === RECORDER_UNAVAILABLE
+}
+
+/**
  * Ask for the microphone. Called only when the user chooses to record — never
  * at startup and never speculatively — and rejects when they say no.
  */
 export async function openMicrophone(): Promise<MicrophoneSession> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
-  // No `mimeType` is requested: containers differ across browsers and the
-  // decode path must accept whatever this produces, so the browser picks what
-  // it is best at rather than being pushed toward something it will refuse.
-  const recorder = new MediaRecorder(stream)
-  const chunks: Blob[] = []
-  recorder.addEventListener('dataavailable', (event) => {
-    if (event.data.size > 0) chunks.push(event.data)
-  })
-
-  // Subscribed before `start`, so a recorder that fails immediately is still
-  // caught by something rather than rejecting into nowhere.
-  const captured = new Promise<Blob>((resolve, reject) => {
-    recorder.addEventListener(
-      'stop',
-      () => resolve(new Blob(chunks, { type: recorder.mimeType })),
-      { once: true },
-    )
-    recorder.addEventListener('error', () => reject(new Error('The recording failed.')), {
-      once: true,
+  try {
+    // No `mimeType` is requested: containers differ across browsers and the
+    // decode path must accept whatever this produces, so the browser picks what
+    // it is best at rather than being pushed toward something it will refuse.
+    const recorder = new MediaRecorder(stream)
+    const chunks: Blob[] = []
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size > 0) chunks.push(event.data)
     })
-  })
 
-  recorder.start()
+    // Subscribed before `start`, so a recorder that fails immediately is still
+    // caught by something rather than rejecting into nowhere.
+    const captured = new Promise<Blob>((resolve, reject) => {
+      recorder.addEventListener(
+        'stop',
+        () => resolve(new Blob(chunks, { type: recorder.mimeType })),
+        { once: true },
+      )
+      recorder.addEventListener('error', () => reject(new Error('The recording failed.')), {
+        once: true,
+      })
+    })
 
-  return {
-    tracks: stream.getTracks(),
-    finish() {
-      // Stopping is what flushes the last chunk, so the blob is only whole
-      // once `stop` has fired — which is what the caller awaits.
-      if (recorder.state !== 'inactive') recorder.stop()
-      return captured
-    },
+    recorder.start()
+
+    return {
+      tracks: stream.getTracks(),
+      finish() {
+        // Stopping is what flushes the last chunk, so the blob is only whole
+        // once `stop` has fired — which is what the caller awaits.
+        if (recorder.state !== 'inactive') recorder.stop()
+        return captured
+      },
+    }
+  } catch (cause) {
+    // Everything above runs *after* the browser granted the microphone, and
+    // both `new MediaRecorder` and `start()` can throw. Rejecting from here
+    // without stopping the tracks would leave the microphone open with the
+    // deck showing idle — a live mic nothing would ever release, which is the
+    // exact failure the privacy commitment exists to prevent. This is the one
+    // place the tracks cannot be released by the caller, because the caller is
+    // never handed them.
+    for (const track of stream.getTracks()) track.stop()
+    const failure = new Error('The microphone opened but recording could not start.', { cause })
+    failure.name = RECORDER_UNAVAILABLE
+    throw failure
   }
 }

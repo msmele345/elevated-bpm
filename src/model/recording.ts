@@ -60,9 +60,13 @@ export const IDLE_RECORDING: RecordingState = {
 
 /**
  * Every transition below refuses to fire from a state it does not belong to,
- * and returns what it was given instead. That is what makes a stray second
- * click, or a browser event arriving late, unable to move the machine — and so
- * unable to make the indicator disagree with the microphone.
+ * returning the state it was given — by identity, so a caller can tell a
+ * refusal from a move. That is what makes a stray second click, or a browser
+ * event arriving late, unable to shift the machine, and so unable to make the
+ * indicator disagree with the microphone.
+ *
+ * `microphoneReleased` is the exception and deliberately so: it is the way out
+ * from anywhere, because a take that failed halfway must still be able to end.
  */
 
 /** The user chose to record. Nothing is asked of the browser before this. */

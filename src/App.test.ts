@@ -27,7 +27,9 @@ import {
   MICROPHONE_DENIED_MESSAGE,
   MIC_LIVE_ANNOUNCEMENT,
   MIC_OFF_ANNOUNCEMENT,
+  RECORDING_FAILED_MESSAGE,
 } from './model/recording'
+import { RECORDER_UNAVAILABLE } from './audio/microphone'
 import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
 import { sliceKey } from './model/slice'
 import { createShareUrl, readSharedBeat } from './model/share'
@@ -154,7 +156,12 @@ const microphone = vi.hoisted(() => {
   return { openMicrophone, control }
 })
 
-vi.mock('./audio/microphone', () => ({ openMicrophone: microphone.openMicrophone }))
+// Only the browser call is replaced. Telling a refusal apart from a recorder
+// that would not start is a pure decision, so the real one is kept.
+vi.mock('./audio/microphone', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./audio/microphone')>()),
+  openMicrophone: microphone.openMicrophone,
+}))
 
 /** Start a take and wait for the deck to show that the microphone is live. */
 async function startRecording(): Promise<void> {
@@ -454,6 +461,29 @@ describe('App microphone recording', () => {
     expect(screen.queryByText('Recording')).toBeNull()
   })
 
+  it('will not start the loop while the microphone is live', async () => {
+    await hydratedDeck()
+    await startRecording()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+
+    // Stopping the transport to record is pointless if the next click can put
+    // it back: mic + speakers + master drive is the howl the rule exists for,
+    // and the loop would be in the sample either way.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(engineSpies.play).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Play' }).getAttribute('aria-disabled')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    // And it is offered back the moment the microphone is off.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Play' }).getAttribute('aria-disabled')).toBeNull(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+  })
+
   it('asks for the microphone only on record, and ends every input on stop', async () => {
     await hydratedDeck()
 
@@ -510,6 +540,21 @@ describe('App microphone recording', () => {
     fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByRole('button', { name: 'Record from microphone' })).toBeTruthy()
+  })
+
+  it('does not blame the user when the microphone opened but would not record', async () => {
+    const unavailable = new Error('MediaRecorder would not start')
+    unavailable.name = RECORDER_UNAVAILABLE
+    microphone.control.denial = unavailable
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record from microphone' }))
+
+    // Sending someone to grant permission they already granted points them at
+    // a setting that is not the problem.
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(RECORDING_FAILED_MESSAGE)
+    expect(alert.textContent).not.toContain('Allow microphone access')
   })
 
   it('refuses an over-long take at the same gate an over-long file hits', async () => {

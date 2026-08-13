@@ -1944,16 +1944,17 @@ body::before {
   cursor: pointer;
 }
 
-.sampler-record-start:hover:not(:disabled) {
+.sampler-record-start:not([aria-disabled='true']):hover {
   background: var(--key-face-hover);
 }
 
-.sampler-record-start:active:not(:disabled) {
+.sampler-record-start:not([aria-disabled='true']):active {
   transform: translateY(1px);
   box-shadow: var(--key-pressed);
 }
 
-.sampler-record-start:disabled {
+.sampler-record-start[aria-disabled='true'],
+.sampler-record-stop[aria-disabled='true'] {
   color: var(--ink-dim);
   cursor: progress;
 }
@@ -1964,9 +1965,12 @@ body::before {
   outline-offset: 2px;
 }
 
-/* Lit red and impossible to mistake for anything else on the deck. */
+/* Lit red and impossible to mistake for anything else on the deck. It sits
+   beside the stop control rather than around it, so that control can be one
+   button that never unmounts — see the comment in SamplerPanel. */
 .sampler-recording {
-  flex: 1 0 100%;
+  flex: 1;
+  min-width: 200px;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -2022,7 +2026,6 @@ body::before {
 /* Deliberately the largest control on the panel: a user who wants this to
    stop should not have to look for the way to stop it. */
 .sampler-record-stop {
-  margin-left: auto;
   padding: 12px 26px;
   border: 1px solid #000;
   border-radius: 6px;
@@ -2037,18 +2040,13 @@ body::before {
   cursor: pointer;
 }
 
-.sampler-record-stop:hover:not(:disabled) {
+.sampler-record-stop:not([aria-disabled='true']):hover {
   background: var(--key-face-hover);
 }
 
-.sampler-record-stop:active:not(:disabled) {
+.sampler-record-stop:not([aria-disabled='true']):active {
   transform: translateY(1px);
   box-shadow: var(--key-pressed);
-}
-
-.sampler-record-stop:disabled {
-  color: var(--ink-dim);
-  cursor: progress;
 }
 
 /* The indicator is already unmistakable on screen; this is the same news for

@@ -268,34 +268,38 @@ function SamplerInstrument({
         <p className="sampler-intake-hint">{INTAKE_LIMITS_HINT} Drop one on a pad to load it there.</p>
 
         <div className="sampler-record">
-          {recording.status === 'idle' && (
-            <button type="button" className="sampler-record-start" onClick={onStartRecording}>
-              Record from microphone
-            </button>
-          )}
-          {recording.status === 'requesting' && (
-            // Distinct copy, so a browser prompt the user has not answered yet
-            // reads as waiting on them rather than as a frozen deck. There is
-            // no cancel here because the prompt itself is the cancel.
-            <button type="button" className="sampler-record-start" disabled>
-              Waiting for permission…
-            </button>
-          )}
+          {/*
+            One button through every state rather than three that swap. Pressing
+            Record would otherwise unmount the control the user just activated
+            and drop focus to the document — 163 tab stops from where they were.
+            It also puts the stop control exactly where the record control was.
+
+            `aria-disabled` rather than `disabled` for the same reason: making a
+            focused control disabled drops focus too. The handlers refuse the
+            press themselves, so the button cannot be talked into anything.
+          */}
+          <button
+            type="button"
+            className={isMicrophoneLive(recording) ? 'sampler-record-stop' : 'sampler-record-start'}
+            aria-disabled={
+              recording.status === 'requesting' || recording.status === 'stopping' || undefined
+            }
+            onClick={isMicrophoneLive(recording) ? onStopRecording : onStartRecording}
+          >
+            {isMicrophoneLive(recording)
+              ? 'Stop recording'
+              : recording.status === 'requesting'
+                ? // A browser prompt the user has not answered yet reads as
+                  // waiting on them rather than as a frozen deck. There is no
+                  // cancel because the prompt itself is the cancel.
+                  'Waiting for permission…'
+                : 'Record from microphone'}
+          </button>
           {isMicrophoneLive(recording) && (
             <div className="sampler-recording">
               <span className="sampler-recording-dot" aria-hidden="true" />
               <span className="sampler-recording-label">Recording</span>
               <RecordingElapsed state={recording} />
-              <button
-                type="button"
-                className="sampler-record-stop"
-                // Still live while the recorder flushes, so the indicator is
-                // honest — but there is nothing left to ask for.
-                disabled={recording.status === 'stopping'}
-                onClick={onStopRecording}
-              >
-                Stop recording
-              </button>
             </div>
           )}
           {/* Said before it happens, once, quietly. */}

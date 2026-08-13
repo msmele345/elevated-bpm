@@ -6,6 +6,8 @@ interface TransportBarProps {
   bpm: number
   /** The active lesson is pointing at the tempo fader. */
   spotlitTempo?: boolean
+  /** The loop is not offered while the microphone is open. */
+  heldForRecording?: boolean
   onTogglePlay: () => void
   onBpmChange: (bpm: number) => void
 }
@@ -14,6 +16,7 @@ function Transport({
   isPlaying,
   bpm,
   spotlitTempo = false,
+  heldForRecording = false,
   onTogglePlay,
   onBpmChange,
 }: TransportBarProps) {
@@ -23,6 +26,10 @@ function Transport({
         type="button"
         className="transport-play"
         aria-pressed={isPlaying}
+        // `aria-disabled` rather than `disabled`: disabling a focused control
+        // drops focus to the document, and this deck is 163 tab stops deep.
+        // The handler refuses too, so the control cannot be talked into it.
+        aria-disabled={heldForRecording || undefined}
         onClick={onTogglePlay}
       >
         <span className="transport-play-led" aria-hidden="true" />

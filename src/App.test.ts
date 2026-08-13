@@ -9,7 +9,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { indexedDB } from 'fake-indexeddb'
+import { IDBObjectStore, indexedDB } from 'fake-indexeddb'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -978,5 +978,38 @@ describe('App storage durability', () => {
     expect(await loadSlice(sliceKey(mine))).toBeDefined()
     expect(await loadSource('upload-mine')).toBeDefined()
     expect(screen.getByRole('button', { name: 'Play Pad 2 — My Break' })).toBeTruthy()
+  })
+
+  it('says there is not enough room, naming the pad, once giving up sources has failed', async () => {
+    await hydratedDeck()
+    // A browser with nothing left to give up: every audio write is refused, and
+    // a deck with no stored sources has nothing to evict to make space. Project
+    // document writes are left alone — the quota policy is about audio, and the
+    // autosaver's own behaviour under pressure is not what this claims.
+    const put = IDBObjectStore.prototype.put
+    IDBObjectStore.prototype.put = function (this: IDBObjectStore, ...args: never[]) {
+      if (this.name === 'slices' || this.name === 'sources') {
+        throw new DOMException('no room', 'QuotaExceededError')
+      }
+      return put.apply(this, args as never)
+    }
+
+    try {
+      const strip = screen.getByRole('button', { name: 'Play Pad 3 — empty' }).parentElement!
+      fireEvent.drop(strip, { dataTransfer: { files: [audioFile('Too Big.wav')] } })
+
+      const alert = await screen.findByRole('alert')
+      // Naming the pad is the point: it is the thing the user can act on.
+      expect(alert.textContent).toContain('Too Big')
+      expect(alert.textContent).toContain('not enough room')
+      // The chop sounds now and is honest about not surviving a reload.
+      expect(screen.getByRole('button', { name: 'Play Pad 3 — Too Big' })).toBeTruthy()
+      expect(await loadSlice(sliceKey({ sourceId: 'upload-1', start: 0, duration: 2 }))).toBeUndefined()
+
+      fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally {
+      IDBObjectStore.prototype.put = put
+    }
   })
 })

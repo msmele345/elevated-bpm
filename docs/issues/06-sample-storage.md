@@ -181,16 +181,20 @@ with four pads loaded, exactly as it is with none.
       are gone from storage and the slice is still there
 - [x] A write that exceeds quota evicts **sources**, retries, and only then
       reports failure — naming the affected pads. No slice is ever evicted —
-      exercised through the real UI and real IndexedDB with the browser refusing
-      writes for want of room: **2 refusals → 2 sources given up (largest first) →
-      the write succeeded**, with 5 slices before and 5 slices after and every key
-      still present. The notice named the pad rather than an id ("Made room by
-      discarding the original audio behind Open Hat 909. That pad keeps sounding,
-      but can no longer be re-chopped."), the affected pad picked up its
+      exercised through the real UI and real IndexedDB, with the refusal
+      **injected at the browser's own `IDBObjectStore.put`** rather than by
+      filling 10.7 GB (see the note below on why a real fill was not practical,
+      and what trying it taught): **2 refusals → 2 sources given up (largest
+      first) → the write succeeded**, with 5 slices before and 5 slices after and
+      every key still present. The notice named the pad rather than an id ("Made
+      room by discarding the original audio behind Open Hat 909. That pad keeps
+      sounding, but can no longer be re-chopped."), the affected pad picked up its
       "Original cleared" line, all four pads still sounded, and the transport
-      stayed `started` throughout. The exhausted case — evicting everything and
-      still failing — is covered at the store, where it reports `full` with no
-      slice touched
+      stayed `started` throughout. The failure half is covered at the mounted deck
+      with every audio write refused and nothing left to give up: a dismissible
+      `role="alert"` naming the pad ("There is not enough room to keep Too Big. It
+      sounds until you reload…"), the pad sounding meanwhile, and no slice in
+      storage. At the store, that case reports `full` with no slice touched
 - [x] Slices and sources not referenced by the loaded document are collected at
       load, including audio written during an abandoned share preview — verified
       in-browser for the everyday case: re-chopping a pad took the store from 4

@@ -6,7 +6,7 @@ import {
   type IntakeRejection,
 } from '../model/intake'
 import type { SampleSource } from '../model/sampler'
-import type { SampleBuffer } from './sampleRegistry'
+import type { RenderableAudio } from '../model/slice'
 
 /**
  * Bringing the learner's own audio in. The gate is pure and lives in the model;
@@ -18,9 +18,14 @@ import type { SampleBuffer } from './sampleRegistry'
  * what keeps this whole path testable without a browser or a real decoder.
  */
 
-/** What a decoder hands back: playable audio that knows its own shape. */
-export interface DecodedSample extends SampleBuffer {
-  readonly numberOfChannels: number
+/**
+ * What a decoder hands back: audio that knows its own shape and can be read
+ * sample by sample. This is the *render* decode — the feature's peak memory
+ * moment — and it exists only long enough to render a slice out of, which is
+ * why the duration cap above it is where it is.
+ */
+export interface DecodedSample extends RenderableAudio {
+  readonly duration: number
 }
 
 /** All the intake path itself needs of a file; a real `File` is one of these. */

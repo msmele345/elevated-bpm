@@ -22,10 +22,11 @@ import {
   createSamplerSettings,
   isPadLaneId,
   type PadHitOrigin,
+  type SampleRegion,
   type SamplerSettings,
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
-import { clampBpm, DEFAULT_BPM } from '../model/transport'
+import { clampBpm, DEFAULT_BPM, secondsPerStep } from '../model/transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -33,10 +34,18 @@ import {
   type PadLaneId,
   type Pattern,
 } from '../model/types'
+import {
+  normalizingGain,
+  peakBetween,
+  renderSlice,
+  sliceChannelData,
+  type RenderableAudio,
+} from '../model/slice'
 import { voiceStep } from './hits'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
-import { createSampleRegistry, type SampleBuffer } from './sampleRegistry'
+import { decodeForAnalysis, decodeForRender } from './sampleDecoder'
+import { createSliceRegistry } from './sliceRegistry'
 import { createStabVoices, type StabVoices } from './stabVoice'
 import { stepIndexAtTicks } from './stepIndex'
 
@@ -77,11 +86,30 @@ let padVoices: Record<PadLaneId, PadVoice> | null = null
 let samplesLoaded: Promise<void> | null = null
 
 /**
- * Decoded audio by source id — the one path from a source to sound. A pad
- * resolves its region's source through here on every hit, so reassigning a pad
- * is a document edit and nothing more.
+ * Rendered slices by pad — the one path from a region to sound. Playback and
+ * startup touch only these: a source is decoded at commit and released, never
+ * held resident, which is what keeps memory and startup flat however long the
+ * user's sources are.
  */
-const sampleRegistry = createSampleRegistry()
+const sliceRegistry = createSliceRegistry()
+
+/**
+ * The bytes each source arrived as, held so the editor can decode them again —
+ * cheaply for analysis, at full quality for a render. Compressed audio, so a
+ * six-minute track is a few megabytes here rather than the hundred-plus its
+ * decoded form would be. EB2-06 moves this to IndexedDB; until then a reload
+ * loses it, along with the slices.
+ */
+const sourceBytes = new Map<string, Blob>()
+
+/**
+ * The reduced-rate mono decode the open editor reads — its waveform, its onset
+ * detection, and its auditions. Held only while an editor is open, and dropped
+ * the moment it closes: this is the residency the two-decode split exists to
+ * bound.
+ */
+let analysis: { sourceId: string; buffer: AudioBuffer } | null = null
+let auditionPlayer: Tone.Player | null = null
 
 /**
  * The bass instrument: one sawtooth oscillator through a resonant lowpass.
@@ -166,13 +194,137 @@ const heldPadSources = new Set<string>()
 const padSoundingLanes = createPadSoundingLanes()
 
 /**
- * Put decoded audio where pads look for it. This is the entire audio-layer
- * cost of a new source: intake decodes, registers here, and the pad that
- * points at the id starts sounding on its next hit — no rebuild, no restart,
- * and nothing special about where the audio came from.
+ * Keep a source's bytes so it can be chopped later. Called once, when the
+ * source arrives; nothing here is decoded until an editor opens it or a region
+ * is committed from it.
  */
-export function registerSampleSource(sourceId: string, buffer: SampleBuffer): void {
-  sampleRegistry.register(sourceId, buffer)
+export function registerSourceBytes(sourceId: string, bytes: Blob): void {
+  sourceBytes.set(sourceId, bytes)
+}
+
+/**
+ * A source's bytes, fetching the shipped one on first use. The curated source
+ * is deliberately not downloaded at startup: no pad points at it until the
+ * user assigns it, and the first-click promise is worth more than a head start
+ * on a file that may never be opened.
+ */
+async function sourceBlob(sourceId: string): Promise<Blob | undefined> {
+  const held = sourceBytes.get(sourceId)
+  if (held) return held
+  if (sourceId !== CURATED_SAMPLE_SOURCE.id) return undefined
+  const response = await fetch(CURATED_SAMPLE_URL)
+  const blob = await response.blob()
+  sourceBytes.set(sourceId, blob)
+  return blob
+}
+
+/**
+ * Render a region out of an already-decoded source and give the pad its audio.
+ *
+ * The rendered PCM is wrapped straight back into a playable buffer rather than
+ * the float data being kept: what the user hears is therefore exactly what the
+ * stored slice will give back on reload, and the slice is peak-normalized on
+ * the way through so an arbitrary upload sits with the 909 kit.
+ *
+ * The decoded source is the caller's, and the caller drops it on return.
+ */
+export function renderPadSlice(
+  padId: PadLaneId,
+  source: RenderableAudio,
+  region: SampleRegion,
+): boolean {
+  const slice = renderSlice(source, region)
+  // A region that lands outside the decoded audio renders nothing, and a pad
+  // must never be given a document entry for a sound it cannot make. Saying so
+  // is what lets the caller leave the project alone.
+  if (slice.frames === 0) return false
+  sliceRegistry.set(padId, Tone.ToneAudioBuffer.fromArray(sliceChannelData(slice)))
+  return true
+}
+
+/**
+ * Commit a region to a pad: acquire the full-quality decode, render the slice,
+ * and let the decode go. It is transient by construction — the buffer is a
+ * local that nothing outlives this function holds — which is what keeps the
+ * peak to one source at a time.
+ */
+export async function commitPadRegion(
+  padId: PadLaneId,
+  region: SampleRegion,
+): Promise<boolean> {
+  const blob = await sourceBlob(region.sourceId)
+  if (!blob) return false
+  try {
+    return renderPadSlice(padId, await decodeForRender(blob), region)
+  } catch {
+    // A source the browser will no longer decode leaves the pad exactly as it
+    // was, sounding whatever it sounded before.
+    return false
+  }
+}
+
+/** What an open editor reads: mono samples, their rate, and how long they run. */
+export interface AnalysisAudio {
+  sampleRate: number
+  duration: number
+  samples: Float32Array
+}
+
+/**
+ * Open a source for editing at analysis quality. Reduced rate and mono, so a
+ * full-length track is affordable to hold for as long as someone is chopping.
+ */
+export async function openSourceAnalysis(sourceId: string): Promise<AnalysisAudio | null> {
+  const blob = await sourceBlob(sourceId)
+  if (!blob) return null
+  let buffer: AudioBuffer
+  try {
+    buffer = await decodeForAnalysis(blob)
+  } catch {
+    return null
+  }
+  closeSourceAnalysis()
+  analysis = { sourceId, buffer }
+  return {
+    sampleRate: buffer.sampleRate,
+    duration: buffer.duration,
+    samples: buffer.getChannelData(0),
+  }
+}
+
+/**
+ * Release the analysis decode. Called when the editor closes — this is the
+ * whole reason the editor got a decode of its own, so it has to actually let
+ * go of it.
+ */
+export function closeSourceAnalysis(): void {
+  auditionPlayer?.dispose()
+  auditionPlayer = null
+  analysis = null
+}
+
+/**
+ * Play the region as it currently stands, without committing it. Auditioning
+ * reads the analysis buffer — the render decode exists solely to make a slice
+ * — so this is a judgement by ear at reduced bandwidth, which is what it is
+ * for. It is deliberately outside the transport: this is a monitor, not a hit.
+ */
+export function auditionRegion(region: SampleRegion): void {
+  if (!analysis || analysis.sourceId !== region.sourceId) return
+  ensureVoices()
+  auditionPlayer ??= new Tone.Player().connect(fx?.taps.sampler.input ?? Tone.getDestination())
+  auditionPlayer.buffer = new Tone.ToneAudioBuffer(analysis.buffer)
+  // Auditioned at the level it will commit at. A chop judged at one level and
+  // committed at another is not judged — so the same normalization the render
+  // applies is applied here, over the same span of the same audio.
+  const samples = analysis.buffer.getChannelData(0)
+  const rate = analysis.buffer.sampleRate
+  const gain = normalizingGain(
+    peakBetween(samples, Math.round(region.start * rate), Math.round(region.duration * rate)),
+  )
+  auditionPlayer.volume.value = Tone.gainToDb(gain)
+  auditionPlayer.stop()
+  auditionPlayer.start(Tone.immediate(), region.start, region.duration)
 }
 
 /** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
@@ -250,9 +402,9 @@ export function setBpm(next: number): void {
   fx?.delay.delayTime.rampTo(delaySeconds(bpm), 0.1)
 }
 
-/** One 16th in seconds at the current tempo — a note length in steps × this. */
+/** One 16th at the current tempo — a note length in steps × this. */
 function secondsPer16th(): number {
-  return 15 / Tone.getTransport().bpm.value
+  return secondsPerStep(Tone.getTransport().bpm.value)
 }
 
 /** Step the transport is currently on (for the rAF playhead in AC4). */
@@ -372,16 +524,6 @@ function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.S
 }
 
 /**
- * Decode the one shipped source into the registry. This is the ordinary
- * producer path — the same one intake will use — not a special case for
- * being shipped.
- */
-async function loadCuratedSource(): Promise<void> {
-  const buffer = await new Tone.ToneAudioBuffer().load(CURATED_SAMPLE_URL)
-  sampleRegistry.register(CURATED_SAMPLE_SOURCE.id, buffer)
-}
-
-/**
  * Create every audio voice once. Sample loading continues asynchronously,
  * while the synthesized instruments are playable as soon as the AudioContext
  * starts — live keys never wait for drum assets to download.
@@ -412,7 +554,7 @@ function ensureVoices(): void {
   padVoices = Object.fromEntries(
     padEntries.map(([padId, { player, gain }]) => [
       padId,
-      createPadVoice(player, gain, sampleRegistry),
+      createPadVoice(player, gain, sliceRegistry, padId),
     ]),
   ) as Record<PadLaneId, PadVoice>
   bass = createBassVoice(taps.bass.input)
@@ -426,11 +568,10 @@ function ensureVoices(): void {
   setBassSettings(bassSettings)
   setMasterSettings(masterSettings)
   setFxSettings(fxSettings)
-  // Tone.loaded() covers every player built from a URL — which the pads are
-  // not. Registering the curated audio is a step *after* its download, so the
-  // first gesture has to wait for both: a cold cache would otherwise reach a
-  // pad that looks ready and holds nothing.
-  samplesLoaded = Promise.all([Tone.loaded(), loadCuratedSource()]).then(() => undefined)
+  // Only the kit's own players are downloads. Pads hold rendered slices, which
+  // are produced at commit rather than fetched, so nothing about the sampler
+  // sits on the first-gesture path.
+  samplesLoaded = Tone.loaded()
   Tone.getTransport().bpm.value = bpm
   if (import.meta.env.DEV) {
     // Debug handle for tooling/tests; never used by app code.
@@ -445,6 +586,13 @@ function ensureVoices(): void {
       stab,
       master,
       fx,
+      /**
+       * Bytes the open editor is holding. Reading a `let` through a function,
+       * so it reports what the engine holds *now* — closing the editor has to
+       * bring this back to zero, which is the one claim about this feature
+       * that only a real browser can make.
+       */
+      analysisBytes: () => (analysis ? analysis.buffer.length * 4 : 0),
     }
   }
 }
@@ -491,9 +639,9 @@ export function releaseStabNote(source: string): void {
 export function attackPad(inputSourceId: string, padId: PadLaneId): void {
   if (heldPadSources.has(inputSourceId)) return
   heldPadSources.add(inputSourceId)
-  // Unlike the synthesized stabs, a pad cannot start until its buffer exists.
+  // Unlike the synthesized stabs, a pad cannot start until its slice exists.
   // Queue the first gesture behind the shared preload instead of throwing it
-  // away while Tone.Player is still loading.
+  // away while the audio graph is still being built.
   void unlockAudio().then(() => {
     if (!laneIsAudible(padId, currentMixer)) return
     const now = Tone.immediate()
@@ -517,9 +665,10 @@ function triggerPlayablePad(
   const voice = padVoices?.[padId]
   if (!voice) return
   const pad = currentSamplerSettings[padId]
-  // Which sources may sound is the voice's question now, answered by the
-  // registry rather than by naming the one shipped source here.
-  for (const window of voice.trigger(pad, gain, time, currentTime)) {
+  // Whether a pad may sound is the voice's question, answered by whether a
+  // slice has been rendered for it. The transport's current 16th goes with the
+  // hit so a fit-to-steps target follows the tempo.
+  for (const window of voice.trigger(pad, gain, time, currentTime, secondsPer16th())) {
     padSoundingLanes.schedule(padId, window.startsAt, window.endsAt, origin)
   }
 }

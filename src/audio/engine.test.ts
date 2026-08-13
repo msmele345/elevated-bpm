@@ -13,19 +13,13 @@ const tone = vi.hoisted(() => {
   const loadedPromise = new Promise<void>((resolve) => {
     resolveLoaded = resolve
   })
-  // A second, independent lever: the curated asset reaching the sample
-  // registry is a step *after* its download, so first-click readiness cannot
-  // ride on the players' loaded promise alone.
-  let resolveCuratedLoad!: () => void
-  const curatedLoadPromise = new Promise<void>((resolve) => {
-    resolveCuratedLoad = resolve
-  })
   return {
-    curatedLoadPromise,
-    resolveCuratedLoad: () => resolveCuratedLoad(),
+    /** The fake context's rate; slices in these tests are rendered at it. */
+    sampleRate: 100,
     players: [] as Array<{
       playbackRate: number
       buffer: { duration: number }
+      volume: { value: number }
       start: ReturnType<typeof vi.fn>
       stop: ReturnType<typeof vi.fn>
     }>,
@@ -64,12 +58,14 @@ vi.mock('tone', () => {
 
   class Player extends Node {
     playbackRate = 1
+    volume = new AudioParam()
     // Stands in for the decoded audio a URL-constructed player holds; the
     // engine registers a pad's under its source id.
     buffer = { duration: 0.25 }
     start = vi.fn()
     stop = vi.fn()
-    constructor(_url: string) {
+    dispose = vi.fn()
+    constructor(_url?: string) {
       super()
       tone.players.push(this)
     }
@@ -117,9 +113,21 @@ vi.mock('tone', () => {
 
   class ToneAudioBuffer {
     duration = 0.25
+    constructor(source?: { duration: number }) {
+      if (source) this.duration = source.duration
+    }
     async load(_url: string) {
-      await tone.curatedLoadPromise
       return this
+    }
+    /**
+     * Real Tone builds the buffer at the global context's rate. The fake
+     * context runs at `tone.sampleRate`, and slices here are rendered from the
+     * same rate, so frames divide back out to the duration the region named.
+     */
+    static fromArray(channels: Float32Array[]) {
+      const buffer = new ToneAudioBuffer()
+      buffer.duration = channels[0].length / tone.sampleRate
+      return buffer
     }
   }
 
@@ -158,36 +166,80 @@ vi.mock('tone', () => {
   }
 })
 
+/**
+ * The analysis decode is real I/O, so it is injected and faked here — the same
+ * trade the intake path makes. Quiet first half, loud second half, so an
+ * audition of either has a peak worth normalizing.
+ */
+const analysisFake = vi.hoisted(() => {
+  const sampleRate = 100
+  const data = new Float32Array(200)
+  for (let i = 0; i < 100; i += 1) data[i] = 0.1
+  for (let i = 100; i < 200; i += 1) data[i] = 0.95
+  return {
+    sampleRate,
+    duration: 2,
+    length: 200,
+    numberOfChannels: 1,
+    getChannelData: () => data,
+  }
+})
+
+vi.mock('./sampleDecoder', () => ({
+  decodeForAnalysis: vi.fn(() => Promise.resolve(analysisFake)),
+  decodeForRender: vi.fn(() => Promise.resolve(analysisFake)),
+  probeDuration: vi.fn(),
+  decodeSample: vi.fn(),
+  newSourceId: vi.fn(),
+  ANALYSIS_SAMPLE_RATE: 22050,
+}))
+
 async function flushPromises(): Promise<void> {
-  // Readiness is a chain now — the players' loads and the curated registry
-  // fill are awaited together — so drain generously rather than counting ticks.
   for (let tick = 0; tick < 12; tick += 1) await Promise.resolve()
 }
 
+/**
+ * Commit a region the way the app does at the synchronous seam — from an
+ * already-decoded source, which the caller then drops. Real decoding is never
+ * exercised here; the buffer is a fake of the shape one has.
+ */
+function commitSlice(
+  engine: typeof import('./engine'),
+  padId: 'pad1' | 'pad2' | 'pad3' | 'pad4',
+  duration: number,
+  level = 0.5,
+): void {
+  const length = Math.round(duration * tone.sampleRate)
+  engine.renderPadSlice(
+    padId,
+    {
+      sampleRate: tone.sampleRate,
+      length,
+      numberOfChannels: 1,
+      getChannelData: () => Float32Array.from({ length }, () => level),
+    },
+    { sourceId: 'source-1', start: 0, duration },
+  )
+}
+
 describe('live sampler audio', () => {
-  it('queues the first hit, applies the global mixer, and schedules pads with kit timestamps', async () => {
+  it('queues the first hit behind the audio graph, applies the mixer, and schedules pads with kit timestamps', async () => {
     const engine = await import('./engine')
-    const settings = assignSourceToPad(
-      createSamplerSettings(),
-      'pad1',
-      CURATED_SAMPLE_SOURCE,
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
     )
-    engine.setSamplerSettings(settings)
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
 
     engine.attackPad('computer:Digit1', 'pad1')
     await flushPromises()
 
     const pad1 = tone.players[5]
     expect(pad1).toBeDefined()
+    // The kit is still downloading, so the first gesture waits rather than
+    // being thrown away.
     expect(pad1.start).not.toHaveBeenCalled()
 
     tone.resolveLoaded()
-    await flushPromises()
-    // The players have loaded, but the curated source has not reached the
-    // registry — a pad with nothing to play must not claim to be ready.
-    expect(pad1.start).not.toHaveBeenCalled()
-
-    tone.resolveCuratedLoad()
     await flushPromises()
     expect(pad1.start).toHaveBeenCalledTimes(1)
 
@@ -196,6 +248,7 @@ describe('live sampler audio', () => {
     engine.attackPad('pointer:7', 'pad1')
     await flushPromises()
 
+    // Soloing the kick silences every other lane, pads included.
     expect(pad1.start).toHaveBeenCalledTimes(1)
 
     let pattern = cycleStep(createInitialPattern(), 'kick', 0)
@@ -208,24 +261,25 @@ describe('live sampler audio', () => {
 
     const kick = tone.players[0]
     expect(kick.start.mock.calls.slice(-2)).toEqual([[42], [43]])
-    expect(pad1.start.mock.calls.slice(-2)).toEqual([
-      [42, 0, CURATED_SAMPLE_SOURCE.duration],
-      [43, 0, CURATED_SAMPLE_SOURCE.duration],
-    ])
+    // A slice is already exactly the audio its region named, so the pad is
+    // started plainly — on the same timestamps the kit lane fires on.
+    expect(pad1.start.mock.calls.slice(-2)).toEqual([[42], [43]])
   })
 
   it('stop clears sequenced pad lights without darkening a live pad', async () => {
     const engine = await import('./engine')
-    const settings = assignSourceToPad(
-      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
-      'pad2',
-      CURATED_SAMPLE_SOURCE,
+    engine.setSamplerSettings(
+      assignSourceToPad(
+        assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+        'pad2',
+        CURATED_SAMPLE_SOURCE,
+      ),
     )
-    engine.setSamplerSettings(settings)
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
+    commitSlice(engine, 'pad2', CURATED_SAMPLE_SOURCE.duration)
     engine.setMixer({})
 
-    let pattern = cycleStep(createInitialPattern(), 'pad2', 0)
-    engine.setPattern(pattern)
+    engine.setPattern(cycleStep(createInitialPattern(), 'pad2', 0))
     await engine.play()
 
     // A lookahead-scheduled hit whose window is still open at the audio clock's
@@ -241,47 +295,135 @@ describe('live sampler audio', () => {
     expect(engine.getSoundingPadIds()).toEqual(['pad1'])
   })
 
-  it('leaves a pad silent while no audio is registered for its source', async () => {
+  it('leaves a pad silent until a region has been committed to it', async () => {
+    // A pad can hold a region and still have no sound — its slice is what
+    // makes it audible, and that is the state a share link arrives in.
     const engine = await import('./engine')
     engine.setSamplerSettings(
       assignSourceToPad(createSamplerSettings(), 'pad3', {
         ...CURATED_SAMPLE_SOURCE,
-        id: 'upload-nothing-decoded-yet',
-        name: 'Not loaded',
+        id: 'upload-not-rendered-yet',
+        name: 'Not rendered',
       }),
     )
     engine.setMixer({})
 
     engine.attackPad('pointer:33', 'pad3')
     await flushPromises()
-
     expect(tone.players[7].start).not.toHaveBeenCalled()
+
+    commitSlice(engine, 'pad3', 1.5)
+    engine.attackPad('pointer:34', 'pad3')
+    await flushPromises()
+
+    expect(tone.players[7].start).toHaveBeenCalledWith(10)
+    expect(tone.players[7].buffer.duration).toBeCloseTo(1.5)
   })
 
-  it('sounds a pad once intake registers audio under its source id', async () => {
+  it('plays the re-chopped slice on the next hit, without a restart', async () => {
     const engine = await import('./engine')
-    const uploaded = {
-      ...CURATED_SAMPLE_SOURCE,
-      id: 'upload-warehouse-break',
-      name: 'Warehouse Break',
-      origin: 'upload' as const,
-      duration: 1.5,
-    }
-    engine.setSamplerSettings(assignSourceToPad(createSamplerSettings(), 'pad4', uploaded))
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad4', CURATED_SAMPLE_SOURCE),
+    )
     engine.setMixer({})
     const pad4 = tone.players[8]
 
+    commitSlice(engine, 'pad4', 1.5)
     engine.attackPad('pointer:44', 'pad4')
     await flushPromises()
-    expect(pad4.start).not.toHaveBeenCalled()
+    expect(pad4.buffer.duration).toBeCloseTo(1.5)
 
-    // Intake's whole job in the audio layer: put a decoded buffer where the
-    // pad already knows to look for it.
-    engine.registerSampleSource(uploaded.id, { duration: 1.5 })
+    // Reopening a region and moving an edge is a correction, not a redo: the
+    // pad keeps playing, and simply plays the shorter chop from now on.
+    commitSlice(engine, 'pad4', 0.4)
+    engine.releasePad('pointer:44')
     engine.attackPad('pointer:45', 'pad4')
     await flushPromises()
 
-    expect(pad4.start).toHaveBeenCalledWith(10, 0, 1.5)
-    expect(pad4.buffer.duration).toBe(1.5)
+    expect(pad4.buffer.duration).toBeCloseTo(0.4)
+    expect(pad4.start).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('committing a region', () => {
+  it('reports a region that renders nothing, so no pad claims a sound it cannot make', async () => {
+    // A region can land outside the decoded audio — a source that turned out
+    // shorter than the editor's analysis suggested. Saying so is what lets the
+    // caller leave the document alone.
+    const engine = await import('./engine')
+    const empty = {
+      sampleRate: tone.sampleRate,
+      length: 0,
+      numberOfChannels: 1,
+      getChannelData: () => new Float32Array(0),
+    }
+
+    const rendered = engine.renderPadSlice('pad3', empty, {
+      sourceId: 'source-1',
+      start: 0,
+      duration: 1,
+    })
+
+    expect(rendered).toBe(false)
+  })
+
+  it('reports a real render, which is what lets the document move', async () => {
+    const engine = await import('./engine')
+    const length = 100
+    const rendered = engine.renderPadSlice(
+      'pad3',
+      {
+        sampleRate: tone.sampleRate,
+        length,
+        numberOfChannels: 1,
+        getChannelData: () => Float32Array.from({ length }, () => 0.5),
+      },
+      { sourceId: 'source-1', start: 0, duration: 1 },
+    )
+
+    expect(rendered).toBe(true)
+  })
+})
+
+describe('auditioning a region', () => {
+  /** The audition player is the last one built; it is created on first use. */
+  const auditionPlayer = () => tone.players[tone.players.length - 1]
+
+  it('auditions at the level the commit will render at', async () => {
+    // A chop judged at one level and committed at another is not judged. The
+    // mock's gainToDb is identity, so the volume *is* the gain.
+    const engine = await import('./engine')
+    engine.registerSourceBytes('src-audition', new Blob())
+    await engine.openSourceAnalysis('src-audition')
+
+    engine.auditionRegion({ sourceId: 'src-audition', start: 0, duration: 1 })
+    await flushPromises()
+
+    // The quiet half peaks at 0.1 and has to be lifted to the 0.95 every slice
+    // is normalized to.
+    expect(auditionPlayer().volume.value).toBeCloseTo(0.95 / 0.1, 4)
+  })
+
+  it('leaves a chop that is already at level alone', async () => {
+    const engine = await import('./engine')
+    engine.registerSourceBytes('src-audition', new Blob())
+    await engine.openSourceAnalysis('src-audition')
+
+    engine.auditionRegion({ sourceId: 'src-audition', start: 1, duration: 1 })
+    await flushPromises()
+
+    expect(auditionPlayer().volume.value).toBeCloseTo(1, 4)
+  })
+
+  it('says nothing for a source whose editor is not the one open', async () => {
+    const engine = await import('./engine')
+    engine.registerSourceBytes('src-audition', new Blob())
+    await engine.openSourceAnalysis('src-audition')
+    const player = auditionPlayer()
+    const startsBefore = player.start.mock.calls.length
+
+    engine.auditionRegion({ sourceId: 'some-other-source', start: 0, duration: 1 })
+
+    expect(player.start.mock.calls.length).toBe(startsBefore)
   })
 })

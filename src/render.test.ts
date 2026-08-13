@@ -239,6 +239,40 @@ describe('deck render cost', () => {
     expect(changedPropsPerPanel(panelMark).size).toBe(3)
   })
 
+  it('rebuilds no lane when the tempo fader moves, though the sampler now reads the tempo', async () => {
+    // Fit-to-steps is a fraction of the bar, so its readout has to follow the
+    // tempo — which puts BPM into the sampler panel's props for the first
+    // time. The tempo fader is dragged, so that new coupling must stop at the
+    // panel shell and never reach a lane, a pad or a knob.
+    render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const drumMark = recorded.stepRow.length
+    const noteMark = recorded.noteRow.length
+    const panelMark = recorded.panel.length
+    const tempo = screen.getByRole('slider', { name: /Tempo/ })
+    fireEvent.change(tempo, { target: { value: '128' } })
+    fireEvent.change(tempo, { target: { value: '126' } })
+
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, drumMark)) {
+      expect(changed, `drum lane ${id}`).toEqual([])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, noteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
+    const panels = changedPropsPerPanel(panelMark)
+    expect(panels.get('BassPanel')).toEqual([])
+    expect(panels.get('StabKeyboard')).toEqual([])
+    // The one prop that legitimately moved, and nothing else with it.
+    expect(panels.get('SamplerPanel')).toEqual(['bpm'])
+  })
+
   it('leaves the other lanes on identical props when one lane is edited', async () => {
     render(createElement(App))
     await waitFor(() =>

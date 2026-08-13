@@ -39,6 +39,7 @@ import {
   activePattern,
   addSource,
   assignSourceToSamplerPad,
+  commitRegionToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
   enterLesson,
@@ -47,6 +48,7 @@ import {
   setBassParamValue,
   setFxParamValue,
   setMasterParamValue,
+  setSamplerPadFit,
   setSamplerParamValue,
   setTransportBpm,
   toggleActivePatternNoteStep,
@@ -61,7 +63,15 @@ import {
   readSharedBeat,
   SHARE_QUERY_PARAM,
 } from './model/share'
-import type { SamplerParamId } from './model/sampler'
+import {
+  DEFAULT_PAD_REGION_SECONDS,
+  type SampleRegion,
+  type SampleSource,
+  type SamplerParamId,
+} from './model/sampler'
+import type { AnalysisAudio } from './audio/engine'
+import { clampRegionToSource } from './model/region'
+import { RegionEditor } from './components/RegionEditor'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
@@ -115,6 +125,18 @@ export default function App() {
   // A session-only graduation overlay: it appears on the transition into an
   // earned capstone, never just because an already-complete project reloaded.
   const [finaleVisible, setFinaleVisible] = useState(false)
+  /**
+   * The open chopping surface, or nothing. It holds the analysis decode, which
+   * is why closing the editor is the moment that memory is given back — and
+   * why the region being edited lives here rather than in the document: an
+   * abandoned trim must leave the pad exactly as it was.
+   */
+  const [editor, setEditor] = useState<{
+    source: SampleSource
+    analysis: AnalysisAudio
+    padId: PadLaneId | null
+    region: SampleRegion
+  } | null>(null)
   // Knob motion is a claim about this session, not about the saved document:
   // it is what the user just did to a running loop, so it lives in memory and
   // never dirties the autosave. Completion itself is still latched in the
@@ -145,6 +167,13 @@ export default function App() {
   const samplerSettings = project.instrumentSettings.sampler
   const bpm = project.transport.bpm
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
+  // Mirrored so the sampler's handlers can read the current sources and pads
+  // without closing over them — a fresh closure is a changed prop, and these
+  // are handed to a memoized panel.
+  const sourcesRef = useRef(project.sources)
+  sourcesRef.current = project.sources
+  const samplerRef = useRef(samplerSettings)
+  samplerRef.current = samplerSettings
 
   // Where the user is on the arc: their own selection if they stepped off the
   // path, otherwise the first lesson still unearned.
@@ -402,8 +431,83 @@ export default function App() {
     setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
-  const handleAssignSamplerSource = useCallback((padId: PadLaneId, sourceId: string) => {
-    setProject((p) => assignSourceToSamplerPad(p, padId, sourceId))
+  /**
+   * Point a pad at a source. The audio has to be rendered before the document
+   * moves: a pad that claimed a sound it could not make would be the silent
+   * state EB2-06 models, arrived at by accident rather than by loss.
+   */
+  const handleAssignSamplerSource = useCallback(
+    async (padId: PadLaneId, sourceId: string) => {
+      const source = sourcesRef.current.find((candidate) => candidate.id === sourceId)
+      if (!source) return
+      const rendered = await engine.commitPadRegion(padId, {
+        sourceId,
+        start: 0,
+        duration: Math.min(source.duration, DEFAULT_PAD_REGION_SECONDS),
+      })
+      if (!rendered) return
+      setProject((p) => assignSourceToSamplerPad(p, padId, sourceId))
+    },
+    [],
+  )
+
+  const handleFitChange = useCallback((padId: PadLaneId, fit: number | null) => {
+    setProject((p) => setSamplerPadFit(p, padId, fit))
+  }, [])
+
+  /**
+   * Open a source in the editor. The analysis decode is reduced-rate mono and
+   * is held only while this is open — the residency the two-decode split
+   * exists to bound — so it is acquired here and released on close.
+   */
+  const handleOpenEditor = useCallback(async (sourceId: string, padId: PadLaneId | null) => {
+    const source = sourcesRef.current.find((candidate) => candidate.id === sourceId)
+    if (!source) return
+    const analysis = await engine.openSourceAnalysis(sourceId)
+    if (!analysis) {
+      setIntakeError(
+        `“${source.name}” could not be opened for editing. Your project is unchanged.`,
+      )
+      return
+    }
+    // Reopening a pad shows the edges it currently has, so moving one is a
+    // correction rather than a redo.
+    const existing = padId ? samplerRef.current[padId].region : null
+    const region =
+      existing && existing.sourceId === sourceId
+        ? clampRegionToSource(existing, analysis.duration)
+        : {
+            sourceId,
+            start: 0,
+            duration: Math.min(analysis.duration, DEFAULT_PAD_REGION_SECONDS),
+          }
+    setEditor({ source, analysis, padId, region })
+  }, [])
+
+  const handleCloseEditor = useCallback(() => {
+    engine.closeSourceAnalysis()
+    setEditor(null)
+  }, [])
+
+  const handleEditorRegionChange = useCallback((region: SampleRegion) => {
+    setEditor((open) => (open ? { ...open, region } : open))
+  }, [])
+
+  const handleAudition = useCallback((region: SampleRegion) => {
+    engine.auditionRegion(region)
+  }, [])
+
+  /**
+   * Commit the region to a pad: render the slice first, then move the
+   * document. A render that fails leaves the pad sounding exactly what it
+   * sounded before.
+   */
+  const handleCommitRegion = useCallback(async (padId: PadLaneId, region: SampleRegion) => {
+    const rendered = await engine.commitPadRegion(padId, region)
+    if (!rendered) return
+    setProject((p) => commitRegionToSamplerPad(p, padId, region))
+    engine.closeSourceAnalysis()
+    setEditor(null)
   }, [])
 
   /**
@@ -418,7 +522,17 @@ export default function App() {
       setIntakeError(outcome.rejection.message)
       return
     }
-    engine.registerSampleSource(outcome.source.id, outcome.buffer)
+    // The bytes are kept so the source can be chopped later; the decode is
+    // not. It is the render decode — the feature's peak memory moment — and it
+    // is used here to render the pad's opening slice and then dropped.
+    engine.registerSourceBytes(outcome.source.id, file)
+    if (padId !== null) {
+      engine.renderPadSlice(padId, outcome.buffer, {
+        sourceId: outcome.source.id,
+        start: 0,
+        duration: Math.min(outcome.source.duration, DEFAULT_PAD_REGION_SECONDS),
+      })
+    }
     setIntakeError(null)
     setProject((p) => {
       const withSource = addSource(p, outcome.source)
@@ -576,8 +690,10 @@ export default function App() {
       <main
         className="deck"
         ref={deckRef}
-        inert={finaleVisible}
-        aria-hidden={finaleVisible || undefined}
+        // Both overlays are real modals: while one is open the deck behind is
+        // unreachable, which is what scopes their keys and their focus.
+        inert={finaleVisible || editor !== null}
+        aria-hidden={finaleVisible || editor !== null || undefined}
       >
       <SkipLinks />
 
@@ -723,7 +839,10 @@ export default function App() {
         mixer={project.mixer}
         soloing={soloing}
         intakeError={intakeError}
+        bpm={bpm}
         onAssign={handleAssignSamplerSource}
+        onOpenEditor={handleOpenEditor}
+        onFitChange={handleFitChange}
         onLoadFile={handleLoadFile}
         onDismissIntakeError={handleDismissIntakeError}
         onTuneChange={handleSamplerParamChange}
@@ -758,6 +877,18 @@ export default function App() {
         onResize={handleResizeNote}
       />
     </main>
+      {editor && (
+        <RegionEditor
+          source={editor.source}
+          analysis={editor.analysis}
+          region={editor.region}
+          padId={editor.padId}
+          onRegionChange={handleEditorRegionChange}
+          onAudition={handleAudition}
+          onCommit={handleCommitRegion}
+          onClose={handleCloseEditor}
+        />
+      )}
       {finaleVisible && <FinaleMoment onClose={handleCloseFinale} />}
     </>
   )

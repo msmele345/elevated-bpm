@@ -32,8 +32,11 @@ import {
   CURATED_SAMPLE_SOURCE,
   SAMPLER_PARAMS,
   assignSourceToPad,
+  commitRegionToPad,
   createSamplerSettings,
+  setPadFit,
   setPadTune,
+  type SampleRegion,
   type SampleSource,
   type SamplerParamId,
   type SamplerSettings,
@@ -259,6 +262,42 @@ export function assignSourceToSamplerPad(
     instrumentSettings: {
       ...state.instrumentSettings,
       sampler: assignSourceToPad(state.instrumentSettings.sampler, padId, source),
+    },
+  }
+}
+
+/**
+ * Land a trimmed region on a pad. The region keeps referencing its source
+ * rather than copying it, which is what makes a chop re-editable and lets one
+ * break supply four pads without being loaded four times.
+ */
+export function commitRegionToSamplerPad(
+  state: ProjectState,
+  padId: PadLaneId,
+  region: SampleRegion,
+): ProjectState {
+  const source = state.sources.find((candidate) => candidate.id === region.sourceId)
+  if (!source) return state
+  return {
+    ...state,
+    instrumentSettings: {
+      ...state.instrumentSettings,
+      sampler: commitRegionToPad(state.instrumentSettings.sampler, padId, region, source.name),
+    },
+  }
+}
+
+/** Immutably set (or clear) one pad's fit-to-steps target in the document. */
+export function setSamplerPadFit(
+  state: ProjectState,
+  padId: PadLaneId,
+  fit: number | null,
+): ProjectState {
+  return {
+    ...state,
+    instrumentSettings: {
+      ...state.instrumentSettings,
+      sampler: setPadFit(state.instrumentSettings.sampler, padId, fit),
     },
   }
 }

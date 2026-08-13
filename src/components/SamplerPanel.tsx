@@ -4,17 +4,27 @@ import { INTAKE_LIMITS_HINT } from '../model/intake'
 import type { Mixer } from '../model/mixer'
 import {
   PAD_LANES,
+  formatPadRate,
+  padPlaybackRate,
   samplerParamForPad,
   padForKeyboardInput,
   type SampleSource,
   type SamplerParamId,
   type SamplerSettings,
 } from '../model/sampler'
+import { secondsPerStep } from '../model/transport'
 import type { LaneId, PadLane, PadLaneId } from '../model/types'
 import { Knob } from './Knob'
 import { PanelTitle } from './PanelTitle'
 import { SamplerPad } from './SamplerPad'
 import { StepRow } from './StepRow'
+
+/**
+ * Fit targets offered on the pad strip. Every step count from 1 to 16 is legal
+ * in the document, but a chop is locked to a musical length in practice, and a
+ * sixteen-item menu per pad would be four times the noise for no more reach.
+ */
+const FIT_TARGETS = [1, 2, 4, 8, 16] as const
 
 interface SamplerPanelProps {
   lanes: PadLane[]
@@ -23,7 +33,11 @@ interface SamplerPanelProps {
   mixer: Mixer
   soloing: boolean
   intakeError: string | null
+  /** Fit is a fraction of the bar, so its readout moves with the tempo. */
+  bpm: number
   onAssign: (padId: PadLaneId, sourceId: string) => void
+  onOpenEditor: (sourceId: string, padId: PadLaneId | null) => void
+  onFitChange: (padId: PadLaneId, fit: number | null) => void
   onLoadFile: (file: File, padId: PadLaneId | null) => void
   onDismissIntakeError: () => void
   onTuneChange: (id: SamplerParamId, value: number) => void
@@ -43,7 +57,10 @@ function SamplerInstrument({
   mixer,
   soloing,
   intakeError,
+  bpm,
   onAssign,
+  onOpenEditor,
+  onFitChange,
   onLoadFile,
   onDismissIntakeError,
   onTuneChange,
@@ -199,51 +216,93 @@ function SamplerInstrument({
             <li key={source.id}>
               <span>{source.name}</span>
               <span className="sampler-source-origin">{source.origin}</span>
+              <button
+                type="button"
+                className="sampler-chop"
+                onClick={() => onOpenEditor(source.id, null)}
+              >
+                Chop {source.name}
+              </button>
             </li>
           ))}
         </ul>
       </div>
 
       <div className="sampler-pad-bank" role="group" aria-label="Live sampler pads">
-        {PAD_LANES.map((pad) => (
-          <div
-            className="sampler-pad-strip"
-            key={pad.id}
-            data-drop-active={dropTarget === pad.id || undefined}
-            onDragOver={handleDragOver(pad.id)}
-            onDragLeave={() => setDropTarget(null)}
-            onDrop={handleDrop(pad.id)}
-          >
-            <SamplerPad
-              pad={pad}
-              settings={settings[pad.id]}
-              onAttack={onAttack}
-              onRelease={onRelease}
-            />
-            <Knob
-              spec={samplerParamForPad(pad.id)}
-              value={settings[pad.id].tune}
-              onChange={onTuneChange}
-            />
-            <select
-              className="sampler-assign"
-              aria-label={`${pad.label} sound source`}
-              value={settings[pad.id].region?.sourceId ?? ''}
-              onChange={(event) => onAssign(pad.id, event.target.value)}
+        {PAD_LANES.map((pad) => {
+          const settingsForPad = settings[pad.id]
+          const region = settingsForPad.region
+          // A slice is exactly its region's audio, so the region's own
+          // duration is what the rate arithmetic measures against.
+          const rate = region
+            ? padPlaybackRate(settingsForPad, region.duration, secondsPerStep(bpm))
+            : 1
+          return (
+            <div
+              className="sampler-pad-strip"
+              key={pad.id}
+              data-drop-active={dropTarget === pad.id || undefined}
+              onDragOver={handleDragOver(pad.id)}
+              onDragLeave={() => setDropTarget(null)}
+              onDrop={handleDrop(pad.id)}
             >
-              {/* Present so an empty pad has something to show; clearing a pad
-                  is storage lifecycle work, not an assignment. */}
-              <option value="" disabled>
-                No sound
-              </option>
-              {sources.map((source) => (
-                <option key={source.id} value={source.id}>
-                  {source.name}
+              <SamplerPad
+                pad={pad}
+                settings={settingsForPad}
+                onAttack={onAttack}
+                onRelease={onRelease}
+              />
+              <Knob
+                spec={samplerParamForPad(pad.id)}
+                value={settingsForPad.tune}
+                onChange={onTuneChange}
+              />
+              <select
+                className="sampler-assign"
+                aria-label={`${pad.label} sound source`}
+                value={region?.sourceId ?? ''}
+                onChange={(event) => onAssign(pad.id, event.target.value)}
+              >
+                {/* Present so an empty pad has something to show; clearing a
+                    pad is storage lifecycle work, not an assignment. */}
+                <option value="" disabled>
+                  No sound
                 </option>
-              ))}
-            </select>
-          </div>
-        ))}
+                {sources.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="sampler-fit"
+                aria-label={`${pad.label} fit to steps`}
+                value={settingsForPad.fit ?? ''}
+                onChange={(event) =>
+                  onFitChange(pad.id, event.target.value === '' ? null : Number(event.target.value))
+                }
+              >
+                <option value="">One-shot</option>
+                {FIT_TARGETS.map((steps) => (
+                  <option key={steps} value={steps}>
+                    {steps} {steps === 1 ? 'step' : 'steps'}
+                  </option>
+                ))}
+              </select>
+              {/* What fitting did, in the two terms it is heard in. Speed and
+                  pitch are one number: there is no time-stretching here. */}
+              <span className="sampler-pad-rate">{formatPadRate(rate)}</span>
+              <button
+                type="button"
+                className="sampler-chop"
+                disabled={!region}
+                onClick={() => region && onOpenEditor(region.sourceId, pad.id)}
+              >
+                Chop {pad.label}
+              </button>
+            </div>
+          )
+        })}
       </div>
 
       <div className="sampler-sequencer">

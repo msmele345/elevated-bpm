@@ -143,7 +143,19 @@ export function createSamplerSettings(saved?: unknown): SamplerSettings {
   ) as SamplerSettings
 }
 
-/** Assign the source's whole duration, the tracer action later replaced by trimming. */
+/**
+ * How much of a source a pad opens on before anyone has trimmed it.
+ *
+ * A region is rendered into a slice, so assignment has a cost the old
+ * reference-into-a-source model did not: an untrimmed six-minute track would
+ * render a six-minute slice and undo the memory budget the whole feature rests
+ * on. Four seconds is a bar at 60 BPM and takes most breaks and one-shots
+ * whole; anything longer is a starting point to trim from in the editor rather
+ * than a limit on what can be chopped.
+ */
+export const DEFAULT_PAD_REGION_SECONDS = 4
+
+/** Point a pad at a source, opening on the front of it for trimming. */
 export function assignSourceToPad(
   settings: SamplerSettings,
   padId: PadLaneId,
@@ -154,9 +166,39 @@ export function assignSourceToPad(
     [padId]: {
       ...settings[padId],
       name: source.name,
-      region: { sourceId: source.id, start: 0, duration: source.duration },
+      region: {
+        sourceId: source.id,
+        start: 0,
+        duration: Math.min(source.duration, DEFAULT_PAD_REGION_SECONDS),
+      },
     },
   }
+}
+
+/**
+ * Land a trimmed region on a pad. A commit is a chop, not a reset: how the pad
+ * plays — its Tune, its fit target — belongs to the user and survives it, which
+ * is what makes reopening a region a correction rather than a redo.
+ *
+ * Only the named pad changes, so several regions cut from one source land on
+ * different pads without disturbing each other.
+ */
+export function commitRegionToPad(
+  settings: SamplerSettings,
+  padId: PadLaneId,
+  region: SampleRegion,
+  name: string,
+): SamplerSettings {
+  return { ...settings, [padId]: { ...settings[padId], region, name } }
+}
+
+/** Immutably set (or clear) a pad's fit-to-steps target. */
+export function setPadFit(
+  settings: SamplerSettings,
+  padId: PadLaneId,
+  fit: number | null,
+): SamplerSettings {
+  return { ...settings, [padId]: { ...settings[padId], fit: repairFit(fit) } }
 }
 
 /** Immutably tune one pad, clamped to the knob's playable range. */
@@ -174,6 +216,40 @@ export function setPadTune(
 /** Record-style pitch: twelve semitones doubles or halves playback speed. */
 export function tunePlaybackRate(tune: number): number {
   return 2 ** (clampParam(SAMPLER_PARAMS[0], tune) / 12)
+}
+
+/**
+ * The rate a pad actually plays at: its Tune and its fit-to-steps target
+ * composed into one number.
+ *
+ * Fitting is the same arithmetic as tuning — region duration over target
+ * duration — so **pitch moves with speed, the way pitching a record does**.
+ * There is no time-stretching and no pitch-independent processing anywhere in
+ * this feature, which is what makes the result predictable and musical rather
+ * than processed-sounding.
+ *
+ * `secondsPerStep` is passed in rather than stored, so a fitted chop follows
+ * the transport: change the tempo and the chop stays locked to its steps.
+ */
+export function padPlaybackRate(
+  pad: PadSettings,
+  sliceDuration: number,
+  secondsPerStep: number,
+): number {
+  const tuned = tunePlaybackRate(pad.tune)
+  if (pad.fit === null || sliceDuration <= 0 || secondsPerStep <= 0) return tuned
+  return tuned * (sliceDuration / (pad.fit * secondsPerStep))
+}
+
+/**
+ * What a rate did to the chop, in the two terms the user hears it in. Speed
+ * and pitch are one number here, and saying both is the point: fitting is a
+ * tradeoff, and it should be visible rather than mysterious.
+ */
+export function formatPadRate(rate: number): string {
+  const semitones = 12 * Math.log2(rate)
+  const sign = semitones < 0 ? '' : '+'
+  return `${Math.round(rate * 100)} % speed, ${sign}${semitones.toFixed(1)} st`
 }
 
 interface PadKeyboardInput {

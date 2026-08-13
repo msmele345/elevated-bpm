@@ -1,11 +1,12 @@
-import { tunePlaybackRate, type PadSettings } from '../model/sampler'
-import type { SampleBuffer, SampleRegistry } from './sampleRegistry'
+import { padPlaybackRate, type PadSettings } from '../model/sampler'
+import type { PadLaneId } from '../model/types'
+import type { SampleBuffer, SliceRegistry } from './sliceRegistry'
 
 /** The small part of Tone.Player the sampler's one-shot contract needs. */
 export interface PadPlayer {
   playbackRate: number
   buffer: SampleBuffer
-  start(time: number, offset?: number, duration?: number): unknown
+  start(time: number): unknown
   stop(time: number): unknown
 }
 
@@ -23,25 +24,7 @@ export interface PadSoundWindow {
 }
 
 interface PendingPadHit extends PadSoundWindow {
-  pad: PadSettings
   gain: number
-}
-
-function plannedHit(pad: PadSettings, gain: number, time: number): PendingPadHit {
-  const rate = tunePlaybackRate(pad.tune)
-  return {
-    pad,
-    gain,
-    startsAt: time,
-    endsAt: time + (pad.region?.duration ?? 0) / rate,
-  }
-}
-
-function startHit(player: PadPlayer, gain: PadGain, hit: PendingPadHit): void {
-  const region = hit.pad.region!
-  gain.gain.setValueAtTime(hit.gain, hit.startsAt)
-  player.playbackRate = tunePlaybackRate(hit.pad.tune)
-  player.start(hit.startsAt, region.start, region.duration)
 }
 
 /**
@@ -57,48 +40,68 @@ export interface PadVoice {
    * Fire one pad, returning the light windows it opened. `time` is when the
    * hit should sound; `currentTime` is where the audio clock is now, which is
    * what separates a hit still in the lookahead from one already gone.
+   * `secondsPerStep` is the transport's current 16th, so a fit-to-steps target
+   * stays locked when the tempo moves.
    */
   trigger(
     pad: PadSettings,
     gain: number,
     time: number,
     currentTime: number,
+    secondsPerStep: number,
   ): PadSoundWindow[]
 }
 
 export function createPadVoice(
   player: PadPlayer,
   gain: PadGain,
-  registry: SampleRegistry,
+  slices: SliceRegistry,
+  padId: PadLaneId,
 ): PadVoice {
   let pending: PendingPadHit[] = []
-  /** The source whose audio the player is currently holding. */
-  let heldSourceId: string | null = null
+  /** The slice the player is currently holding. */
+  let heldSlice: SampleBuffer | null = null
 
   return {
-    trigger(pad, hitGain, time, currentTime) {
-      if (!pad.region) return []
-      // A source the registry cannot make audio for is metadata without sound.
-      // This is the whole membership rule: not "is it the shipped one", just
-      // "do we hold its audio" — which stays true however many sources arrive.
-      const buffer = registry.get(pad.region.sourceId)
-      if (!buffer) return []
+    trigger(pad, hitGain, time, currentTime, secondsPerStep) {
+      // The slice is the authority on whether a pad makes sound — not its
+      // region, which is only what a re-chop reopens. A pad whose audio is
+      // gone keeps its name, Tune, fit and programming and stays quiet.
+      const slice = slices.get(padId)
+      if (!slice) return []
 
       // Resolve at trigger time, and swap only on a real change. A pad can be
-      // reassigned mid-playback, so the hit asks what it should sound rather
+      // re-chopped mid-playback, so the hit asks what it should sound rather
       // than trusting something to have pushed it here first.
       //
       // This runs before every start below — including the rebuild's replayed
       // ones. A player's buffer is pad-global and live, exactly like its
       // playbackRate, so a swap has to be part of the rebuild rather than a
       // separate mutation racing it.
-      if (pad.region.sourceId !== heldSourceId) {
-        player.buffer = buffer
-        heldSourceId = pad.region.sourceId
+      if (slice !== heldSlice) {
+        player.buffer = slice
+        heldSlice = slice
+      }
+
+      // Rate and length are read from the *current* pad and the *current*
+      // slice on every start, which is what keeps a live hit and the grid
+      // behind it speaking about the same sound.
+      const rate = padPlaybackRate(pad, slice.duration, secondsPerStep)
+      const plan = (at: number, atGain: number): PendingPadHit => ({
+        gain: atGain,
+        startsAt: at,
+        endsAt: at + slice.duration / rate,
+      })
+      const startHit = (hit: PendingPadHit) => {
+        gain.gain.setValueAtTime(hit.gain, hit.startsAt)
+        player.playbackRate = rate
+        // A slice is already exactly the audio its region named, so this is a
+        // plain start rather than an offset into a source no longer held.
+        player.start(hit.startsAt)
       }
 
       const future = pending.filter((hit) => hit.startsAt > currentTime)
-      const next = plannedHit(pad, hitGain, time)
+      const next = plan(time, hitGain)
       const insertedBeforeFuture = future.some((hit) => hit.startsAt >= time)
 
       if (insertedBeforeFuture) {
@@ -109,23 +112,21 @@ export function createPadVoice(
         // choke and the upcoming grid.
         player.stop(time)
         gain.gain.cancelScheduledValues(time)
-        // Settings are pad-global and live. Rebuild future starts from the
-        // current pad rather than their lookahead snapshot: Tone.Player's
-        // playbackRate setter affects every active source immediately, so
-        // replaying a stale Tune here would retune the live hit we just
-        // inserted.
+        // Settings and slices are pad-global and live. Rebuild future starts
+        // from the current pad rather than their lookahead snapshot: a stale
+        // Tune replayed here would retune the live hit we just inserted.
         const replayedFuture = future
           .filter((hit) => hit.startsAt > time)
-          .map((hit) => plannedHit(pad, hit.gain, hit.startsAt))
+          .map((hit) => plan(hit.startsAt, hit.gain))
         const rebuilt = [next, ...replayedFuture].sort(
           (left, right) => left.startsAt - right.startsAt,
         )
-        rebuilt.forEach((hit) => startHit(player, gain, hit))
+        rebuilt.forEach(startHit)
         pending = rebuilt.filter((hit) => hit.startsAt > currentTime)
         return rebuilt.map(({ startsAt, endsAt }) => ({ startsAt, endsAt }))
       }
 
-      startHit(player, gain, next)
+      startHit(next)
       pending = [...future, next]
         .filter((hit) => hit.startsAt > currentTime)
         .sort((left, right) => left.startsAt - right.startsAt)

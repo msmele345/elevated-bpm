@@ -15,14 +15,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import {
   activePattern,
+  addSource,
+  commitRegionToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
+  setSamplerPadFit,
   setTransportBpm,
 } from './model/projectState'
 import { MAX_SOURCE_BYTES, MAX_SOURCE_SECONDS } from './model/intake'
-import { CURATED_SAMPLE_SOURCE } from './model/sampler'
+import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
+import { sliceKey } from './model/slice'
 import { createShareUrl, readSharedBeat } from './model/share'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
+import { loadSlice, loadSource, saveSlice, saveSource } from './storage/sampleStore'
 
 const engineSpies = vi.hoisted(() => ({
   setPattern: vi.fn(),
@@ -40,8 +45,10 @@ const engineSpies = vi.hoisted(() => ({
   attackPad: vi.fn(),
   releasePad: vi.fn(),
   registerSourceBytes: vi.fn(),
-  renderPadSlice: vi.fn(),
-  commitPadRegion: vi.fn().mockResolvedValue(true),
+  setStoredSourceLoader: vi.fn(),
+  registerSlice: vi.fn(),
+  renderPadSlice: vi.fn(() => sliceFake()),
+  commitPadRegion: vi.fn(() => Promise.resolve(sliceFake())),
   openSourceAnalysis: vi.fn(() => Promise.resolve(analysisFake())),
   closeSourceAnalysis: vi.fn(),
   auditionRegion: vi.fn(),
@@ -93,6 +100,17 @@ function analysisFake(sampleRate = 1000, duration = 3) {
 }
 
 vi.mock('./audio/sampleDecoder', () => decoder)
+
+/**
+ * What a render hands back and storage keeps. Small on purpose — these tests
+ * are about the audio surviving, not about what it sounds like.
+ */
+function sliceFake() {
+  return { sampleRate: 100, channels: 1, frames: 20, pcm: new Int16Array(20) }
+}
+
+/** The chop these fixtures share: a second out of an uploaded break. */
+const REGION: SampleRegion = { sourceId: 'upload-1', start: 0.5, duration: 1 }
 
 /** A file is a name and a size; its size is stated rather than allocated. */
 function audioFile(name: string, size = 2_048): File {
@@ -200,8 +218,10 @@ describe('App audio intake', () => {
       start: 0,
       duration: 2,
     })
-    const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
-    expect(settings.pad1.region).toEqual({ sourceId: 'upload-1', start: 0, duration: 2 })
+    await waitFor(() => {
+      const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+      expect(settings.pad1.region).toEqual({ sourceId: 'upload-1', start: 0, duration: 2 })
+    })
   })
 
   it('refuses an oversized file without decoding it, and leaves the project alone', async () => {
@@ -723,5 +743,240 @@ describe('App region editor', () => {
     const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
     expect(settings.pad1.fit).toBe(2)
     expect(screen.getByText('108 % speed, +1.4 st')).toBeTruthy()
+  })
+})
+
+describe('App sample storage', () => {
+  /** Let the debounced autosave land before the deck is torn down. */
+  async function settleAutosave(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 450))
+  }
+
+  it('brings a chop back exactly as it was left, with nothing decoded on the way in', async () => {
+    await hydratedDeck()
+    chooseFile(audioFile('Warehouse Break.wav'))
+    fireEvent.change(await screen.findByLabelText('Pad 1 sound source'), {
+      target: { value: 'upload-1' },
+    })
+    await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' })
+    await settleAutosave()
+
+    cleanup()
+    for (const spy of Object.values(engineSpies)) spy.mockClear()
+    decoder.decodeSample.mockClear()
+    await hydratedDeck()
+
+    expect(
+      await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' }),
+    ).toBeTruthy()
+    // The pad has its audio again, wrapped straight from stored PCM.
+    await waitFor(() =>
+      expect(engineSpies.registerSlice).toHaveBeenCalledWith(
+        'pad1',
+        expect.objectContaining({ frames: 20 }),
+      ),
+    )
+    // Startup touches slices only. Rebuilding a slice from its source would put
+    // a full-length decode on the load path and cost the first-click promise.
+    expect(engineSpies.commitPadRegion).not.toHaveBeenCalled()
+    expect(decoder.decodeSample).not.toHaveBeenCalled()
+  })
+
+  it('keeps no audio in the saved document, however much is loaded', async () => {
+    await hydratedDeck()
+    chooseFile(audioFile('Warehouse Break.wav'))
+    fireEvent.change(await screen.findByLabelText('Pad 1 sound source'), {
+      target: { value: 'upload-1' },
+    })
+    await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' })
+    await settleAutosave()
+
+    const saved = await loadProjectState()
+    // Identifiers only: this is what keeps the document JSON, diffable,
+    // migratable and cheap enough to autosave on a trailing debounce.
+    expect(JSON.stringify(saved)).not.toContain('pcm')
+    expect(saved!.instrumentSettings.sampler.pad1.region).toEqual({
+      sourceId: 'upload-1',
+      start: 0,
+      duration: 2,
+    })
+    expect(saved!.sources.map((source) => source.id)).toEqual([
+      CURATED_SAMPLE_SOURCE.id,
+      'upload-1',
+    ])
+  })
+})
+
+describe('App missing audio', () => {
+  /** A saved project whose pad 1 is chopped from an uploaded source. */
+  function projectWithChop() {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    return commitRegionToSamplerPad(
+      setSamplerPadFit(
+        cycleActivePatternStep(addSource(createInitialProjectState(), uploaded), 'pad1', 4),
+        'pad1',
+        2,
+      ),
+      'pad1',
+      REGION,
+    )
+  }
+
+  it('keeps a pad sounding when only its original was cleared, and says re-chop is off', async () => {
+    // Its slice is there; its source is not — the state the browser reclaiming
+    // space leaves behind, and the one that must never be audible.
+    await saveProjectState(projectWithChop())
+    await saveSlice(sliceKey(REGION), sliceFake())
+
+    await hydratedDeck()
+
+    await waitFor(() =>
+      expect(engineSpies.registerSlice).toHaveBeenCalledWith('pad1', expect.anything()),
+    )
+    expect(screen.getByRole('button', { name: 'Play Pad 1 — Warehouse Break' })).toBeTruthy()
+    expect(screen.getByText(/cannot be re-chopped/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Chop Pad 1' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+  })
+
+  it('offers a relink when the slice is gone, and restores the pad from a file', async () => {
+    // Nothing to play, so the pad is silent — but its name, its tune, its fit
+    // target and its programming are all still the user's.
+    await saveProjectState(projectWithChop())
+    await saveSource('upload-1', new Blob([Uint8Array.of(1)]))
+
+    await hydratedDeck()
+
+    expect(engineSpies.registerSlice).not.toHaveBeenCalled()
+    const relink = screen.getByLabelText('Relink Pad 1')
+    decoder.newSourceId.mockReturnValue('upload-relinked')
+
+    fireEvent.change(relink, { target: { files: [audioFile('Warehouse Break again.wav')] } })
+
+    await waitFor(() => {
+      const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+      expect(settings.pad1.region).toEqual({
+        sourceId: 'upload-relinked',
+        start: 0,
+        duration: 2,
+      })
+    })
+    const restored = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+    // Losing a file costs one click, not the beat: relinking is a repair, so
+    // the pad keeps the name it had rather than taking the new file's.
+    expect(restored.pad1.name).toBe('Warehouse Break')
+    expect(restored.pad1.fit).toBe(2)
+    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    expect(pattern.padLanes.find((lane: { id: string }) => lane.id === 'pad1').steps[4].on).toBe(
+      true,
+    )
+  })
+
+  it('warns which pads a source is under before deleting it, and leaves them sounding', async () => {
+    await saveProjectState(projectWithChop())
+    await saveSlice(sliceKey(REGION), sliceFake())
+    await saveSource('upload-1', new Blob([Uint8Array.of(1)]))
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Warehouse Break' }))
+
+    const warning = await screen.findByRole('alert')
+    expect(warning.textContent).toContain('Warehouse Break')
+    expect(warning.textContent).toContain('keeps')
+
+    fireEvent.click(within(warning).getByRole('button', { name: 'Delete anyway' }))
+
+    // The pad keeps its region, so it keeps its slice and keeps sounding; only
+    // re-chopping is gone.
+    expect(screen.getByRole('button', { name: 'Play Pad 1 — Warehouse Break' })).toBeTruthy()
+    expect(await screen.findByText(/cannot be re-chopped/)).toBeTruthy()
+    await waitFor(async () => expect(await loadSource('upload-1')).toBeUndefined())
+    expect(await loadSlice(sliceKey(REGION))).toBeDefined()
+  })
+
+  it('loads the deck normally when a reference dangles, rather than failing', async () => {
+    // Neither half was ever stored. Every pad resolves to a modelled state and
+    // the deck opens exactly as usual.
+    await saveProjectState(projectWithChop())
+
+    await hydratedDeck()
+
+    expect(screen.getByRole('button', { name: 'Play Pad 1 — Warehouse Break' })).toBeTruthy()
+    expect(screen.getByLabelText('Relink Pad 1')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy()
+  })
+})
+
+describe('App storage durability', () => {
+  it('asks the browser to protect the audio at the first upload, and not before', async () => {
+    const persist = vi.fn().mockResolvedValue(true)
+    vi.stubGlobal('navigator', Object.create(navigator, { storage: { value: { persist } } }))
+
+    await hydratedDeck()
+
+    // At startup there would be nothing to protect — it would be a permission
+    // prompt about nothing.
+    expect(persist).not.toHaveBeenCalled()
+
+    chooseFile(audioFile('Warehouse Break.wav'))
+
+    await waitFor(() => expect(persist).toHaveBeenCalledTimes(1))
+  })
+
+  it('collects audio stranded by an abandoned share preview, keeping the recipient’s own', async () => {
+    // The sharp orphan case: autosave is suspended during a preview, but audio
+    // writes sit outside it, so a load made while previewing is referenced only
+    // by a document that is never persisted.
+    const uploaded = {
+      id: 'upload-mine',
+      name: 'My Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    const mine: SampleRegion = { sourceId: 'upload-mine', start: 0, duration: 1 }
+    const recipient = commitRegionToSamplerPad(
+      addSource(createInitialProjectState(), uploaded),
+      'pad2',
+      mine,
+    )
+    await saveProjectState(recipient)
+    await saveSlice(sliceKey(mine), sliceFake())
+    await saveSource('upload-mine', new Blob([Uint8Array.of(1)]))
+    const shareUrl = await createShareUrl(
+      setTransportBpm(createInitialProjectState(), 142),
+      window.location.href,
+    )
+    window.history.replaceState(null, '', new URL(shareUrl).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+
+    // Loading a sound while previewing writes audio the previewed document is
+    // the only thing referencing.
+    decoder.newSourceId.mockReturnValue('upload-stranded')
+    chooseFile(audioFile('Borrowed.wav'))
+    await waitFor(async () => expect(await loadSource('upload-stranded')).toBeDefined())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to my project' }))
+    await waitFor(() => expect(screen.queryByText('Shared beat preview')).toBeNull())
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    cleanup()
+
+    await hydratedDeck()
+
+    // The stranded source is gone; the recipient's own audio was never at risk,
+    // because the sweep reads their document and not the preview.
+    await waitFor(async () => expect(await loadSource('upload-stranded')).toBeUndefined())
+    expect(await loadSlice(sliceKey(mine))).toBeDefined()
+    expect(await loadSource('upload-mine')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Play Pad 2 — My Break' })).toBeTruthy()
   })
 })

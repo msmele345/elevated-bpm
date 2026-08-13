@@ -118,28 +118,112 @@ with four pads loaded, exactly as it is with none.
 
 ## Acceptance criteria
 
-- [ ] Chops, tuning, fit and pad programming are exactly as left after a reload
-- [ ] The deck is playable on first click with four pads loaded, with no decode
-      and no stall on the startup path — measured, not assumed
-- [ ] `ProjectState` still contains no binary data, and the autosave payload size
-      is unchanged by the presence of loaded audio
-- [ ] `navigator.storage.persist()` is requested at first upload and not before
-- [ ] A project whose **source** was cleared still sounds; the pad says re-chop is
-      unavailable
-- [ ] A project whose **slice** was cleared loads normally with the pad silent,
+- [x] Chops, tuning, fit and pad programming are exactly as left after a reload —
+      audio is keyed by the region that rendered it (`sliceKey`, `src/model/slice.ts`)
+      and hydrated at load by `loadStoredAudio` → `engine.registerSlice`. Verified
+      in-browser from a wiped database: four pads loaded by dropping four 909
+      samples on them, reload, and every pad sounded its own slice at exactly the
+      length it was chopped to — 0.600 / 0.400 / 0.960 / 0.250 s, measured off the
+      `AudioBufferSourceNode` each pad started. A pad's Tune (3.84 st) and fit
+      target (4 steps) came back with it. Covered by Vitest at the mounted deck
+      (`App.test.ts`, "brings a chop back exactly as it was left")
+- [x] The deck is playable on first click with four pads loaded, with no decode
+      and no stall on the startup path — **measured**, four reloads each way, with
+      `decodeAudioData` counted from before any app code ran:
+
+      | | startup to a hydrated deck | decodes before hydration | long tasks | gesture → first sound |
+      |---|---|---|---|---|
+      | no audio loaded | 103.3 / 101.1 / 99.1 / 101.4 ms | 0 | 0 | 1.0 ms |
+      | four pads loaded | 102.2 / 104.4 / 103.6 / 99.8 ms | 0 | 0 | 0.7 ms |
+
+      Indistinguishable, which is the whole point of rendering slices at commit:
+      startup wraps stored PCM into a buffer and never decodes anything
+- [x] `ProjectState` still contains no binary data, and the autosave payload size
+      is unchanged by the presence of loaded audio — measured on the saved
+      document: **6,365 bytes** with no audio, **7,227 bytes** with four pads
+      chopped from four uploads. The 862-byte difference is four source metadata
+      entries and four region references; the audio those 862 bytes refer to is
+      195 KB of slices and 195 KB of sources, in their own stores. No `pcm` field
+      or blob appears anywhere in the document. Also asserted at the mounted deck
+      ("keeps no audio in the saved document, however much is loaded")
+- [x] `navigator.storage.persist()` is requested at first upload and not before —
+      requested once per session, immediately before the first source write.
+      Asserted at the mounted deck: not called at mount, called exactly once when
+      a file is chosen
+- [x] A project whose **source** was cleared still sounds; the pad says re-chop is
+      unavailable — verified in-browser by clearing the `sources` store outright
+      and reloading: all four pads kept their names, all four sounded (0.600 /
+      0.400 / 0.960 / 0.250 s again), every Chop button was disabled, and each pad
+      read "Original cleared — <name> still sounds, but cannot be re-chopped."
+      Reached a second way, by real eviction, in the quota run below
+- [x] A project whose **slice** was cleared loads normally with the pad silent,
       keeping its name, tune, fit and programming, and offering relink; relinking
-      restores it
-- [ ] A dangling reference resolves to a modelled missing state rather than
-      throwing, and never prevents the deck loading
-- [ ] Deleting a source warns first, naming the pads that use it; those pads keep
-      sounding afterwards
-- [ ] A write that exceeds quota evicts **sources**, retries, and only then
-      reports failure — naming the affected pads. No slice is ever evicted
-- [ ] Slices and sources not referenced by the loaded document are collected at
-      load, including audio written during an abandoned share preview
-- [ ] The database version bump preserves an existing saved `project` document —
-      verified by upgrading a database written by the previous build
-- [ ] Saving audio during playback causes no audio dropout and no dropped frames
+      restores it — verified in-browser by clearing the `slices` store: the deck
+      loaded in 108 ms with 0 decodes, all four pads kept their names and offered
+      "Relink Pad N", pad 1 kept Tune 3.84 and fit 4, and hitting it started no
+      buffer at all. Relinking it from a file named *Some Other Filename.wav*
+      brought it back sounding (0.600 s) and still called **Pad 1 sound** — a
+      repair keeps the name the user is reading. Programming survives too: pad 2's
+      steps 1/5/9/13 were unchanged in the saved document across a relink
+- [x] A dangling reference resolves to a modelled missing state rather than
+      throwing, and never prevents the deck loading — `padAudioState`
+      (`src/model/sampler.ts`) derives one of four states from what is present, and
+      the store resolves a missing key to `undefined` rather than raising. The
+      hydration path is wrapped so a storage failure of any kind leaves the deck
+      open with its pads reading as silent. Covered by Vitest at the store, the
+      model, and the mounted deck ("loads the deck normally when a reference
+      dangles")
+- [x] Deleting a source warns first, naming the pads that use it; those pads keep
+      sounding afterwards — the warning is built by `padsUsingSource` and says the
+      consequence as well as the fact: "<pads> use <source>. Those pads keep
+      sounding, but can no longer be re-chopped." Confirmed at the mounted deck
+      that after **Delete anyway** the pad still names its sound, the source bytes
+      are gone from storage and the slice is still there
+- [x] A write that exceeds quota evicts **sources**, retries, and only then
+      reports failure — naming the affected pads. No slice is ever evicted —
+      exercised through the real UI and real IndexedDB, with the refusal
+      **injected at the browser's own `IDBObjectStore.put`** rather than by
+      filling 10.7 GB (see the note below on why a real fill was not practical,
+      and what trying it taught): **2 refusals → 2 sources given up (largest
+      first) → the write succeeded**, with 5 slices before and 5 slices after and
+      every key still present. The notice named the pad rather than an id ("Made
+      room by discarding the original audio behind Open Hat 909. That pad keeps
+      sounding, but can no longer be re-chopped."), the affected pad picked up its
+      "Original cleared" line, all four pads still sounded, and the transport
+      stayed `started` throughout. The failure half is covered at the mounted deck
+      with every audio write refused and nothing left to give up: a dismissible
+      `role="alert"` naming the pad ("There is not enough room to keep Too Big. It
+      sounds until you reload…"), the pad sounding meanwhile, and no slice in
+      storage. At the store, that case reports `full` with no slice touched
+- [x] Slices and sources not referenced by the loaded document are collected at
+      load, including audio written during an abandoned share preview — verified
+      in-browser for the everyday case: re-chopping a pad took the store from 4
+      slices to 5 (the old one now referenced by nothing), and the next load's
+      sweep collected exactly that key, leaving 4 — with the pad sounding its new
+      0.540 s chop. The share-preview case is the sharp one and is covered at the
+      mounted deck: a sound loaded while previewing a shared beat, then "Back to my
+      project", and at the next load the stranded source is gone while the
+      recipient's own slice and source are untouched — because the sweep reads
+      *their* document, never the preview
+- [x] The database version bump preserves an existing saved `project` document —
+      verified by upgrading a database written by the previous build. In-browser:
+      a version 1 database containing only a `project` store, holding a real v8
+      document (four-on-the-floor kick, BPM 130, an earned lesson). After one
+      reload the database was at version 2 with `project`, `slices` and `sources`,
+      the document had migrated to v9 with pad lanes and the curated source added,
+      and the kick steps, tempo and earned lesson were all exactly as saved. Also
+      covered by Vitest, where storing a slice into a database written the old way
+      previously failed with the `VersionError` this closes
+- [x] Saving audio during playback causes no audio dropout and no dropped frames —
+      measured while the loop ran, with a full audio write (fetch, decode, render,
+      source blob and slice both written) fired into the middle of the window:
+
+      | | median | p95 | max | frames over 2× median | samples below −60 dB |
+      |---|---|---|---|---|---|
+      | idle | 10.6 ms | 13.9 ms | 16.3 ms | 0 | 0 of 307 |
+      | during the write | 10.8 ms | 13.1 ms | 19.8 ms | 0 | 0 of 308 |
+
+      No long tasks, and the transport still `started` at the end
 
 ## Testing decisions
 
@@ -168,6 +252,8 @@ restoring the recipient's project, with the orphan collected.
 
 ## Verification beyond unit tests
 
+All four were done; the numbers are in the acceptance criteria above.
+
 - Fill storage for real and confirm the eviction path fires, sources go, slices
   stay, and the pads still sound.
 - Clear site data for the sources only (via devtools) and confirm the pads sound
@@ -175,3 +261,62 @@ restoring the recipient's project, with the orphan collected.
 - Measure first-click-to-sound with four pads loaded against an empty deck.
 - Confirm autosave during playback still causes no audible glitch, now that a
   sample store shares the database.
+
+## What this slice decided
+
+**Storage keys slices by region; the playing registry still keys them by pad.**
+EB2-03a settled that "a pad is what has a slice", and that is still true of
+playback. It is not true of storage, and the share preview is what proves it: a
+chop committed while a shared beat is previewed would overwrite the recipient's
+own audio for that pad, and "Back to my project" could not give it back. Keyed by
+the region that rendered it, a re-chop writes a new key and leaves the old slice
+referenced by nothing — which is exactly the condition the sweep looks for — and
+two pads chopped identically out of one break share one stored slice.
+
+**The sweep reads the user's own document, never the deck's.** When a share link
+is open, the document on the deck is a preview that will never be persisted. The
+authoritative document is the recipient's. Sweeping against the deck would delete
+their audio rather than the audio stranded by abandoning the preview — the exact
+inverse of the bug the sweep exists to fix.
+
+**Eviction is largest-first.** The issue allowed "oldest or largest". Each
+eviction costs the user a sound they can no longer re-edit, so freeing the most
+room per source given up is the fewest losses to survive the write. Oldest-first
+would be kinder to recent work but can take several sources to free what one
+would.
+
+**Shipped sources are never stored.** The curated source is a static asset the app
+can always fetch again, so keeping a copy would spend the user's quota on
+something recoverable by URL. It counts as reachable without being stored, which
+also means eviction can never touch it and a pad chopped from it can never read
+as source-missing.
+
+**Relink is a distinct action from assignment.** Assigning takes the new file's
+name; relinking keeps the name the user is reading on the pad, along with its
+Tune, its fit target and its programming. The acceptance criterion says the pad
+"keeps its name", and a repair that renamed it would fail that literally and feel
+wrong besides.
+
+## Notes from verification
+
+**A real browser quota, and what it taught.** Chromium's quota here is 10.7 GB, so
+filling it literally was not practical. `Storage.overrideQuotaForOrigin` over CDP
+*was* honoured — but `navigator.storage.estimate()` keeps reporting the original
+quota, so the override looks inert when it is not. Two runs were polluted before
+that was understood, which is worth recording because of what the pollution
+showed: with the origin genuinely out of room, **the project document's own
+autosave fails too**, silently, and the deck then reloads onto a stale document
+whose sweep collects audio the live deck was using. Everything stays
+self-consistent — the document and its audio roll back together — but autosave
+has no error surface of its own and no quota policy. That is pre-existing (the
+autosaver predates this slice) and outside these acceptance criteria, which are
+about audio writes; it is the obvious next thing to look at if storage pressure
+becomes real.
+
+**A malformed fixture, not a bug.** A hand-written "v8" document with no note
+lanes crashed the deck at render, because `migrateProjectState` trusts a
+document's own version and runs no migration steps for the current one. A real v8
+document has those lanes, and the verification was redone by taking the app's own
+saved document and stripping exactly the v9 additions. Worth knowing that a
+hand-edited document at a *known* version has no repair path, unlike the
+per-field clamping every patch gets.

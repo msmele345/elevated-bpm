@@ -364,7 +364,53 @@ describe('committing a region', () => {
       duration: 1,
     })
 
-    expect(rendered).toBe(false)
+    expect(rendered).toBeNull()
+  })
+
+  it('hands back the audio it rendered, so the deck can keep it', async () => {
+    // A slice the engine kept to itself could be played and never stored, so
+    // the render has to leave with a value: this is what reaches IndexedDB.
+    const engine = await import('./engine')
+    const length = 200
+
+    const rendered = engine.renderPadSlice(
+      'pad2',
+      {
+        sampleRate: tone.sampleRate,
+        length,
+        numberOfChannels: 2,
+        getChannelData: () => Float32Array.from({ length }, () => 0.5),
+      },
+      { sourceId: 'source-1', start: 0, duration: length / tone.sampleRate },
+    )
+
+    expect(rendered?.channels).toBe(2)
+    expect(rendered?.frames).toBe(length)
+    expect(rendered?.pcm).toHaveLength(length * 2)
+  })
+
+  it('plays a slice given straight back from storage, with nothing decoded', async () => {
+    // The startup path: stored PCM wraps into a playable buffer, so a deck with
+    // four pads loaded is as quick to first sound as an empty one.
+    const engine = await import('./engine')
+    const { decodeForRender } = await import('./sampleDecoder')
+    const decodesBefore = vi.mocked(decodeForRender).mock.calls.length
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad2', CURATED_SAMPLE_SOURCE),
+    )
+    engine.setMixer({})
+
+    engine.registerSlice('pad2', {
+      sampleRate: tone.sampleRate,
+      channels: 1,
+      frames: tone.sampleRate,
+      pcm: new Int16Array(tone.sampleRate),
+    })
+    engine.attackPad('pointer:22', 'pad2')
+    await flushPromises()
+
+    expect(tone.players[6].buffer.duration).toBeCloseTo(1)
+    expect(vi.mocked(decodeForRender).mock.calls).toHaveLength(decodesBefore)
   })
 
   it('reports a real render, which is what lets the document move', async () => {
@@ -381,7 +427,23 @@ describe('committing a region', () => {
       { sourceId: 'source-1', start: 0, duration: 1 },
     )
 
-    expect(rendered).toBe(true)
+    expect(rendered).not.toBeNull()
+  })
+})
+
+describe('reaching a stored source', () => {
+  it('opens a source whose bytes only survived in storage', async () => {
+    // After a reload nothing is in memory. A chop stays re-editable because the
+    // original can still be reached — the deck says how, the engine asks.
+    const engine = await import('./engine')
+    const stored = new Blob([Uint8Array.of(1, 2, 3)])
+    engine.setStoredSourceLoader(async (id) => (id === 'upload-stored' ? stored : undefined))
+
+    await expect(engine.openSourceAnalysis('upload-stored')).resolves.toMatchObject({
+      duration: 2,
+    })
+    // Nothing kept it, so there is nothing to open.
+    await expect(engine.openSourceAnalysis('upload-reclaimed')).resolves.toBeNull()
   })
 })
 

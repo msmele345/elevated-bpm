@@ -30,10 +30,12 @@ import {
 } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
+  PAD_LANES,
   SAMPLER_PARAMS,
   assignSourceToPad,
   commitRegionToPad,
   createSamplerSettings,
+  relinkPadToSource,
   setPadFit,
   setPadTune,
   type SampleRegion,
@@ -41,6 +43,7 @@ import {
   type SamplerParamId,
   type SamplerSettings,
 } from './sampler'
+import { sliceKey } from './slice'
 import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
 import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 
@@ -249,6 +252,38 @@ export function addSource(state: ProjectState, source: SampleSource): ProjectSta
   return { ...state, sources: [...state.sources, source] }
 }
 
+/**
+ * Take a source out of the bank. The pads that used it deliberately keep their
+ * regions: a region is what references a slice, and a slice is what makes
+ * sound, so reclaiming space costs those pads their re-editability and nothing
+ * the user can hear.
+ */
+export function removeSource(state: ProjectState, sourceId: string): ProjectState {
+  return { ...state, sources: state.sources.filter((source) => source.id !== sourceId) }
+}
+
+/**
+ * Point a pad that lost its audio at a file that has it again. Distinct from
+ * assignment because it is a repair rather than a choice: the name the user is
+ * reading on that pad — along with its tune, its fit target and its programming
+ * — is theirs and survives, so losing a file costs one click and not the beat.
+ */
+export function relinkSamplerPad(
+  state: ProjectState,
+  padId: PadLaneId,
+  sourceId: string,
+): ProjectState {
+  const source = state.sources.find((candidate) => candidate.id === sourceId)
+  if (!source) return state
+  return {
+    ...state,
+    instrumentSettings: {
+      ...state.instrumentSettings,
+      sampler: relinkPadToSource(state.instrumentSettings.sampler, padId, source),
+    },
+  }
+}
+
 /** Assign a source already owned by the document to one sampler pad. */
 export function assignSourceToSamplerPad(
   state: ProjectState,
@@ -284,6 +319,31 @@ export function commitRegionToSamplerPad(
       ...state.instrumentSettings,
       sampler: commitRegionToPad(state.instrumentSettings.sampler, padId, region, source.name),
     },
+  }
+}
+
+/**
+ * The audio this document lays claim to: a key per pad chop, and every source
+ * in the bank.
+ *
+ * This is the reference set an orphan sweep works from, and it is deliberately
+ * computed from the whole document at once — one source legitimately backs
+ * several pads, and a source loaded but not yet chopped is still the user's, so
+ * neither may be collected by looking at a pad in isolation.
+ */
+export function referencedAudio(state: ProjectState): {
+  sliceKeys: Set<string>
+  sourceIds: Set<string>
+} {
+  const sampler = state.instrumentSettings.sampler
+  return {
+    sliceKeys: new Set(
+      PAD_LANES.flatMap((pad) => {
+        const region = sampler[pad.id].region
+        return region ? [sliceKey(region)] : []
+      }),
+    ),
+    sourceIds: new Set(state.sources.map((source) => source.id)),
   }
 }
 

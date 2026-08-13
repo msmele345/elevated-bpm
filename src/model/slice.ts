@@ -65,6 +65,24 @@ export interface Slice {
   pcm: Int16Array
 }
 
+/**
+ * What identifies a stored slice: the region it was rendered from.
+ *
+ * Storage keys by region rather than by pad, where the playing registry keys by
+ * pad. Both are right about different things — a pad is what *has* a slice, but
+ * a region is what a slice *is*. Keying storage by pad would mean a chop
+ * committed while a shared beat is being previewed overwrites the recipient's
+ * own audio for that pad, and "Back to my project" could not give it back.
+ *
+ * It also makes the orphan sweep honest: re-chopping a pad writes a new key and
+ * leaves the old slice referenced by nothing, which is exactly the condition
+ * the sweep looks for. And two pads chopped identically out of one break share
+ * one stored slice rather than two copies.
+ */
+export function sliceKey(region: SampleRegion): string {
+  return `${region.sourceId}|${region.start}|${region.duration}`
+}
+
 /** Where a region lands in a source's frames. */
 export function sliceFrames(
   region: SampleRegion,

@@ -12,6 +12,7 @@ import {
   type ProjectState,
 } from '../model/projectState'
 import { loadProjectState, saveProjectState } from './projectStore'
+import { saveSlice } from './sampleStore'
 
 beforeEach(() => {
   // Fresh database per test.
@@ -73,4 +74,35 @@ describe('projectStore', () => {
     await saveProjectState('garbage' as unknown as ProjectState)
     await expect(loadProjectState()).resolves.toBeNull()
   })
+
+  it('keeps a beat saved by the previous build when the audio stores arrive', async () => {
+    // The database the shipped build wrote: one `project` store, at version 1.
+    // Adding the sampler's stores means bumping the version, and an upgrade
+    // that recreated `project` — or a module still opening at the old version —
+    // would cost a returning user everything they had made.
+    const saved = setTransportBpm(createInitialProjectState(), 131)
+    await writePreviousBuildDatabase(saved)
+
+    await saveSlice('upload-1|0|0.5', { sampleRate: 100, channels: 1, frames: 2, pcm: Int16Array.of(1, 2) })
+
+    await expect(loadProjectState()).resolves.toEqual(saved)
+  })
 })
+
+/** The v1 database, opened the way the previous build opened it. */
+function writePreviousBuildDatabase(state: ProjectState): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('elevated-bpm', 1)
+    request.onupgradeneeded = () => request.result.createObjectStore('project')
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const db = request.result
+      const put = db.transaction('project', 'readwrite').objectStore('project').put(state, 'current')
+      put.onerror = () => reject(put.error)
+      put.onsuccess = () => {
+        db.close()
+        resolve()
+      }
+    }
+  })
+}

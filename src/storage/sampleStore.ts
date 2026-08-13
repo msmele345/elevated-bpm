@@ -34,3 +34,77 @@ export async function saveSlice(key: string, slice: Slice): Promise<void> {
 export function loadSlice(key: string): Promise<Slice | undefined> {
   return withStore<Slice | undefined>(STORES.slices, 'readonly', (store) => store.get(key))
 }
+
+/**
+ * A stored source: the bytes exactly as they arrived, plus when they arrived.
+ * Compressed audio, so a six-minute track is a few megabytes here rather than
+ * the hundred-plus its decoded form would be — and nothing decodes it until an
+ * editor opens it or a region is committed out of it.
+ */
+interface StoredSource {
+  bytes: Blob
+  storedAt: number
+}
+
+/** Keep a source's bytes so its chops stay re-editable. */
+export async function saveSource(id: string, bytes: Blob): Promise<void> {
+  const record: StoredSource = { bytes, storedAt: Date.now() }
+  await withStore(STORES.sources, 'readwrite', (store) => store.put(record, id))
+}
+
+/** A source's bytes, or nothing when they were never kept or have been reclaimed. */
+export async function loadSource(id: string): Promise<Blob | undefined> {
+  const record = await withStore<StoredSource | undefined>(STORES.sources, 'readonly', (store) =>
+    store.get(id),
+  )
+  return record?.bytes
+}
+
+/**
+ * Reclaim a source's bytes. Slices are untouched by construction — they live in
+ * a different store — which is what makes deleting a source cost re-editability
+ * and never sound.
+ */
+export async function deleteSource(id: string): Promise<void> {
+  await withStore(STORES.sources, 'readwrite', (store) => store.delete(id))
+}
+
+/** What a document still points at: slice keys across all its pads, and its sources. */
+export interface AudioReferences {
+  sliceKeys: ReadonlySet<string>
+  sourceIds: ReadonlySet<string>
+}
+
+/**
+ * Drop every slice and source the document does not reference.
+ *
+ * The feature makes orphans three ways — re-chopping a pad, clearing or
+ * reassigning one, and loading audio inside a share preview that is then
+ * abandoned — and the third is why this runs at load rather than at write. A
+ * write-time view of "what is referenced" can be wrong: audio written during a
+ * preview is referenced only by a document that is never persisted. At load
+ * there is exactly one authoritative document, so one sweep is enough.
+ *
+ * The caller's reference set must be collected across all four pads before any
+ * deletion, because one source legitimately backs several of them.
+ */
+export async function collectUnreferencedAudio(
+  references: AudioReferences,
+): Promise<{ slices: number; sources: number }> {
+  return {
+    slices: await collectStore(STORES.slices, references.sliceKeys),
+    sources: await collectStore(STORES.sources, references.sourceIds),
+  }
+}
+
+async function collectStore(
+  name: typeof STORES.slices | typeof STORES.sources,
+  referenced: ReadonlySet<string>,
+): Promise<number> {
+  const keys = await withStore<IDBValidKey[]>(name, 'readonly', (store) => store.getAllKeys())
+  const orphans = keys.filter((key) => !referenced.has(String(key)))
+  for (const key of orphans) {
+    await withStore(name, 'readwrite', (store) => store.delete(key))
+  }
+  return orphans.length
+}

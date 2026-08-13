@@ -73,9 +73,9 @@ describe('audio that was recorded rather than chosen', () => {
   })
 
   it('is gated on the length the clock that made it measured, never probed', async () => {
-    // A MediaRecorder container commonly declares no duration at all, so
-    // probing one would refuse every recording as over-length. The recorder's
-    // own clock is exact, free, and known before any decode.
+    // The recorder's own clock is exact, free, and known before any decode.
+    // A container that declares no duration probes as Infinity, which this
+    // gate reads as "too long" — so probing risks refusing every take.
     const { deps, load } = intake()
 
     const outcome = await load(file('Recording 1.webm'), {

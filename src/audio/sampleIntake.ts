@@ -52,10 +52,16 @@ export interface IntakeOptions {
   origin?: SampleOrigin
   /**
    * A length already measured by whatever produced the audio, used in place of
-   * the metadata probe. A recording has one and needs it: a `MediaRecorder`
-   * container commonly declares no duration at all, so probing one would refuse
-   * every recording as over-length. A chosen file has no such clock and is
+   * the metadata probe. A recording has one; a chosen file does not, and is
    * probed as it always was.
+   *
+   * That the recorder's clock is exact and costs nothing would be reason
+   * enough. The real reason is the failure mode if the probe is ever wrong: a
+   * `MediaRecorder` container that declares no duration probes as `Infinity`,
+   * which `rejectionForProbe` reads as **too long** — every take refused, in
+   * the one wording that tells the user to record something shorter. Chromium
+   * was measured declaring a correct duration, so this guards against a
+   * container that does not rather than working around one that never does.
    */
   knownDuration?: number
 }

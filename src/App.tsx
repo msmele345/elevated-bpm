@@ -804,8 +804,8 @@ export default function App() {
       return
     }
 
-    // The clock that made the take measured it, so the gate reads that rather
-    // than probing a container that commonly declares no duration at all.
+    // The clock that made the take measured it exactly, so the gate reads that
+    // rather than probing the container it happens to have come back in.
     const seconds = elapsedSeconds(stopping, performance.now())
     const name = recordingFileName(sourcesRef.current, captured.type)
     // From here it is a file, and travels the exact path an upload does.

@@ -8,12 +8,18 @@ import {
   createPadSoundingLanes,
   createSamplerSettings,
   formatPadRate,
+  padAudioState,
   padForKeyboardInput,
   padPlaybackRate,
+  padsUsingSource,
   setPadFit,
   setPadTune,
   tunePlaybackRate,
+  type SampleRegion,
 } from './sampler'
+import { sliceKey } from './slice'
+
+const REGION: SampleRegion = { sourceId: 'upload-1', start: 0.2, duration: 0.5 }
 
 describe('sampler settings', () => {
   it('starts with four empty pads and the curated source ready to assign', () => {
@@ -79,6 +85,55 @@ describe('sampler settings', () => {
     expect(tuned.pad3.tune).toBe(-12)
     expect(tuned.pad2).toBe(sampler.pad2)
     expect(setPadTune(sampler, 'pad1', -100).pad1.tune).toBe(-24)
+  })
+})
+
+describe('padAudioState', () => {
+  const chopped = commitRegionToPad(createSamplerSettings(), 'pad1', REGION, 'Break').pad1
+  const key = sliceKey(REGION)
+
+  it('is fully functional with both its slice and its source', () => {
+    expect(padAudioState(chopped, { slices: new Set([key]), sources: new Set(['upload-1']) })).toBe(
+      'ready',
+    )
+  })
+
+  it('still sounds when only the original is gone, having lost re-editability', () => {
+    // The browser reclaiming space, or the user deleting a source, must never
+    // be audible. The pad loses the ability to be re-chopped and nothing else.
+    expect(padAudioState(chopped, { slices: new Set([key]), sources: new Set() })).toBe(
+      'sourceMissing',
+    )
+  })
+
+  it('goes silent but keeps its programming when the slice is gone', () => {
+    // Share links produce this by design, so it is a state the deck holds
+    // rather than an error — and relinking is what gets the sound back.
+    expect(padAudioState(chopped, { slices: new Set(), sources: new Set(['upload-1']) })).toBe(
+      'silent',
+    )
+  })
+
+  it('is empty, not missing, when nothing was ever chopped onto it', () => {
+    expect(
+      padAudioState(createSamplerSettings().pad1, { slices: new Set(), sources: new Set() }),
+    ).toBe('empty')
+  })
+})
+
+describe('padsUsingSource', () => {
+  it('names every pad a source is under, so deleting it can warn first', () => {
+    // One source legitimately backs several pads: the warning, and the sweep,
+    // both have to see all of them.
+    const settings = commitRegionToPad(
+      commitRegionToPad(createSamplerSettings(), 'pad1', REGION, 'Break'),
+      'pad3',
+      { sourceId: 'upload-1', start: 1.5, duration: 0.25 },
+      'Break tail',
+    )
+
+    expect(padsUsingSource(settings, 'upload-1')).toEqual(['Break', 'Break tail'])
+    expect(padsUsingSource(settings, 'upload-2')).toEqual([])
   })
 })
 

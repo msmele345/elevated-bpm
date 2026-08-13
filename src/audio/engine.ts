@@ -40,6 +40,7 @@ import {
   renderSlice,
   sliceChannelData,
   type RenderableAudio,
+  type Slice,
 } from '../model/slice'
 import { voiceStep } from './hits'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
@@ -203,14 +204,37 @@ export function registerSourceBytes(sourceId: string, bytes: Blob): void {
 }
 
 /**
- * A source's bytes, fetching the shipped one on first use. The curated source
- * is deliberately not downloaded at startup: no pad points at it until the
- * user assigns it, and the first-click promise is worth more than a head start
- * on a file that may never be opened.
+ * How to reach bytes this session never saw. Injected rather than imported,
+ * following the same rule the decoders do: real I/O is handed in, so the engine
+ * stays a sound surface and the deck stays the one place that knows about
+ * storage.
+ */
+let loadStoredSource: ((sourceId: string) => Promise<Blob | undefined>) | null = null
+
+export function setStoredSourceLoader(
+  load: (sourceId: string) => Promise<Blob | undefined>,
+): void {
+  loadStoredSource = load
+}
+
+/**
+ * A source's bytes: held from this session, else kept in storage, else the
+ * shipped asset fetched on first use.
+ *
+ * Storage is second rather than first because a source loaded a moment ago is
+ * already in hand, and it is what makes a chop still re-editable after a
+ * reload. The curated source is deliberately not downloaded at startup — no pad
+ * points at it until the user assigns it, and the first-click promise is worth
+ * more than a head start on a file that may never be opened.
  */
 async function sourceBlob(sourceId: string): Promise<Blob | undefined> {
   const held = sourceBytes.get(sourceId)
   if (held) return held
+  const stored = await loadStoredSource?.(sourceId)
+  if (stored) {
+    sourceBytes.set(sourceId, stored)
+    return stored
+  }
   if (sourceId !== CURATED_SAMPLE_SOURCE.id) return undefined
   const response = await fetch(CURATED_SAMPLE_URL)
   const blob = await response.blob()
@@ -232,14 +256,26 @@ export function renderPadSlice(
   padId: PadLaneId,
   source: RenderableAudio,
   region: SampleRegion,
-): boolean {
+): Slice | null {
   const slice = renderSlice(source, region)
   // A region that lands outside the decoded audio renders nothing, and a pad
   // must never be given a document entry for a sound it cannot make. Saying so
   // is what lets the caller leave the project alone.
-  if (slice.frames === 0) return false
+  if (slice.frames === 0) return null
+  registerSlice(padId, slice)
+  // Handed back rather than kept private, because rendering is also the moment
+  // the audio becomes worth storing — and only the caller owns storage.
+  return slice
+}
+
+/**
+ * Give a pad audio that has already been rendered — the startup path. Stored
+ * PCM wraps straight into a playable buffer, which is the whole reason a deck
+ * with four pads loaded reaches its first sound as fast as an empty one:
+ * nothing here decodes anything.
+ */
+export function registerSlice(padId: PadLaneId, slice: Slice): void {
   sliceRegistry.set(padId, Tone.ToneAudioBuffer.fromArray(sliceChannelData(slice)))
-  return true
 }
 
 /**
@@ -251,15 +287,15 @@ export function renderPadSlice(
 export async function commitPadRegion(
   padId: PadLaneId,
   region: SampleRegion,
-): Promise<boolean> {
+): Promise<Slice | null> {
   const blob = await sourceBlob(region.sourceId)
-  if (!blob) return false
+  if (!blob) return null
   try {
     return renderPadSlice(padId, await decodeForRender(blob), region)
   } catch {
     // A source the browser will no longer decode leaves the pad exactly as it
     // was, sounding whatever it sounded before.
-    return false
+    return null
   }
 }
 

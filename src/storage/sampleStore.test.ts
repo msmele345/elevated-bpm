@@ -2,12 +2,14 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
 import { renderSlice, sliceKey, type RenderableAudio } from '../model/slice'
-import type { SampleRegion } from '../model/sampler'
+import { CURATED_SAMPLE_SOURCE, type SampleRegion } from '../model/sampler'
+import { addSource, commitRegionToSamplerPad, createInitialProjectState } from '../model/projectState'
 import {
   collectUnreferencedAudio,
   deleteSource,
   loadSlice,
   loadSource,
+  loadStoredAudio,
   saveSlice,
   saveSliceWithinQuota,
   saveSource,
@@ -59,6 +61,49 @@ describe('sampleStore missing audio', () => {
 
     await expect(loadSource('upload-1')).resolves.toBeUndefined()
     await expect(loadSlice(sliceKey(REGION))).resolves.toEqual(slice)
+  })
+})
+
+describe('loading a document’s audio', () => {
+  it('gives every chopped pad its slice, and says what is reachable', async () => {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    const state = commitRegionToSamplerPad(
+      addSource(createInitialProjectState(), uploaded),
+      'pad2',
+      REGION,
+    )
+    const slice = renderSlice(sourceFake(2), REGION)
+    await saveSlice(sliceKey(REGION), slice)
+    await saveSource('upload-1', new Blob([Uint8Array.of(1)]))
+
+    const audio = await loadStoredAudio(state)
+
+    expect(audio.padSlices).toEqual([['pad2', slice]])
+    expect(audio.available.slices).toEqual(new Set([sliceKey(REGION)]))
+    // The shipped source's bytes were never stored — it is a static asset the
+    // app can always fetch again — so it is reachable without costing quota.
+    expect(audio.available.sources).toEqual(
+      new Set(['upload-1', CURATED_SAMPLE_SOURCE.id]),
+    )
+  })
+
+  it('leaves a pad without a stored slice out, rather than failing the load', async () => {
+    const state = commitRegionToSamplerPad(createInitialProjectState(), 'pad1', {
+      sourceId: CURATED_SAMPLE_SOURCE.id,
+      start: 0,
+      duration: 0.2,
+    })
+
+    const audio = await loadStoredAudio(state)
+
+    expect(audio.padSlices).toEqual([])
+    expect(audio.available.slices.size).toBe(0)
   })
 })
 

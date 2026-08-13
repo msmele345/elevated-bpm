@@ -1,5 +1,8 @@
-import type { Slice } from '../model/slice'
-import { STORES, withStore } from './db'
+import type { ProjectState } from '../model/projectState'
+import { PAD_LANES, type AvailableAudio } from '../model/sampler'
+import { sliceKey, type Slice } from '../model/slice'
+import type { PadLaneId } from '../model/types'
+import { STORES, withStore, type StoreName } from './db'
 
 /**
  * The sampler's audio, kept beside the project document but deliberately apart
@@ -67,6 +70,50 @@ export async function loadSource(id: string): Promise<Blob | undefined> {
  */
 export async function deleteSource(id: string): Promise<void> {
   await withStore(STORES.sources, 'readwrite', (store) => store.delete(id))
+}
+
+/** Everything the deck needs from storage to open a document with its audio. */
+export interface StoredAudio {
+  /** The rendered audio of each pad that has any, ready to register unchanged. */
+  padSlices: Array<[PadLaneId, Slice]>
+  /** What survived, in the two terms a pad's state is derived from. */
+  available: AvailableAudio
+}
+
+/**
+ * Open a document's audio. **Slices only** — no source is read and nothing is
+ * decoded, which is what keeps the deck playable on the first click however
+ * much audio the user has.
+ *
+ * The sources half is answered from keys alone: whether a source is *reachable*
+ * decides whether a pad can be re-chopped, and that costs nothing to know. A
+ * shipped source counts as reachable without being stored, because it is a
+ * static asset the app can always fetch again.
+ */
+export async function loadStoredAudio(deck: ProjectState): Promise<StoredAudio> {
+  const [sliceKeys, storedSources] = await Promise.all([
+    storedKeys(STORES.slices),
+    storedKeys(STORES.sources),
+  ])
+  const padSlices: Array<[PadLaneId, Slice]> = []
+  for (const pad of PAD_LANES) {
+    const region = deck.instrumentSettings.sampler[pad.id].region
+    if (!region || !sliceKeys.has(sliceKey(region))) continue
+    const slice = await loadSlice(sliceKey(region))
+    if (slice) padSlices.push([pad.id, slice])
+  }
+  const shipped = deck.sources.flatMap((source) =>
+    source.origin === 'shipped' ? [source.id] : [],
+  )
+  return {
+    padSlices,
+    available: { slices: sliceKeys, sources: new Set([...storedSources, ...shipped]) },
+  }
+}
+
+async function storedKeys(name: StoreName): Promise<Set<string>> {
+  const keys = await withStore<IDBValidKey[]>(name, 'readonly', (store) => store.getAllKeys())
+  return new Set(keys.map(String))
 }
 
 /**
@@ -175,12 +222,8 @@ export async function collectUnreferencedAudio(
   }
 }
 
-async function collectStore(
-  name: typeof STORES.slices | typeof STORES.sources,
-  referenced: ReadonlySet<string>,
-): Promise<number> {
-  const keys = await withStore<IDBValidKey[]>(name, 'readonly', (store) => store.getAllKeys())
-  const orphans = keys.filter((key) => !referenced.has(String(key)))
+async function collectStore(name: StoreName, referenced: ReadonlySet<string>): Promise<number> {
+  const orphans = [...(await storedKeys(name))].filter((key) => !referenced.has(key))
   for (const key of orphans) {
     await withStore(name, 'readwrite', (store) => store.delete(key))
   }

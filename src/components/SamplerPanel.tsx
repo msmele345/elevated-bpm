@@ -5,9 +5,12 @@ import type { Mixer } from '../model/mixer'
 import {
   PAD_LANES,
   formatPadRate,
+  padAudioState,
+  padsUsingSource,
   padPlaybackRate,
   samplerParamForPad,
   padForKeyboardInput,
+  type AvailableAudio,
   type SampleSource,
   type SamplerParamId,
   type SamplerSettings,
@@ -26,19 +29,41 @@ import { StepRow } from './StepRow'
  */
 const FIT_TARGETS = [1, 2, 4, 8, 16] as const
 
+/**
+ * What deleting a source costs, said before it happens. Naming the pads is the
+ * whole point of the warning — and so is saying they keep sounding, because the
+ * consequence is milder than "delete" suggests.
+ */
+function deleteWarning(settings: SamplerSettings, source: SampleSource): string {
+  const pads = padsUsingSource(settings, source.id)
+  if (pads.length === 0) return `Delete ${source.name}? No pad is using it.`
+  return `${pads.join(' and ')} ${pads.length === 1 ? 'uses' : 'use'} ${source.name}. ${
+    pads.length === 1 ? 'That pad keeps' : 'Those pads keep'
+  } sounding, but can no longer be re-chopped.`
+}
+
 interface SamplerPanelProps {
   lanes: PadLane[]
   settings: SamplerSettings
   sources: readonly SampleSource[]
+  /** What survived in storage; a pad's state is derived from it. */
+  audio: AvailableAudio
   mixer: Mixer
   soloing: boolean
   intakeError: string | null
+  storageNotice: { message: string; severity: 'info' | 'error' } | null
+  /** A delete asked for but not yet confirmed, so the warning can name its pads. */
+  sourceToDelete: string | null
   /** Fit is a fraction of the bar, so its readout moves with the tempo. */
   bpm: number
   onAssign: (padId: PadLaneId, sourceId: string) => void
   onOpenEditor: (sourceId: string, padId: PadLaneId | null) => void
   onFitChange: (padId: PadLaneId, fit: number | null) => void
   onLoadFile: (file: File, padId: PadLaneId | null) => void
+  onRelinkPad: (file: File, padId: PadLaneId) => void
+  onAskDeleteSource: (sourceId: string | null) => void
+  onDeleteSource: (sourceId: string) => void
+  onDismissStorageNotice: () => void
   onDismissIntakeError: () => void
   onTuneChange: (id: SamplerParamId, value: number) => void
   onAttack: (inputSourceId: string, padId: PadLaneId) => void
@@ -54,14 +79,21 @@ function SamplerInstrument({
   lanes,
   settings,
   sources,
+  audio,
   mixer,
   soloing,
   intakeError,
+  storageNotice,
+  sourceToDelete,
   bpm,
   onAssign,
   onOpenEditor,
   onFitChange,
   onLoadFile,
+  onRelinkPad,
+  onAskDeleteSource,
+  onDeleteSource,
+  onDismissStorageNotice,
   onDismissIntakeError,
   onTuneChange,
   onAttack,
@@ -209,6 +241,22 @@ function SamplerInstrument({
         </div>
       )}
 
+      {storageNotice && (
+        <div
+          className={`sampler-notice${storageNotice.severity === 'error' ? ' is-error' : ''}`}
+          role={storageNotice.severity === 'error' ? 'alert' : 'status'}
+        >
+          <p>{storageNotice.message}</p>
+          <button
+            type="button"
+            className="sampler-notice-dismiss"
+            onClick={onDismissStorageNotice}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <div className="sampler-source-bank" role="group" aria-label="Sample sources">
         <span className="sampler-source-label">Sources</span>
         <ul>
@@ -223,6 +271,39 @@ function SamplerInstrument({
               >
                 Chop {source.name}
               </button>
+              {/* The shipped source is a static asset rather than the user's
+                  own audio, so there is nothing of theirs to reclaim. */}
+              {source.origin !== 'shipped' && (
+                <button
+                  type="button"
+                  className="sampler-source-delete"
+                  onClick={() => onAskDeleteSource(source.id)}
+                >
+                  Delete {source.name}
+                </button>
+              )}
+              {sourceToDelete === source.id && (
+                <div className="sampler-delete-warning" role="alert">
+                  {/* Naming the pads first is the point: the user learns the
+                      consequence before it happens, and it is a mild one —
+                      those pads keep sounding and lose re-editability. */}
+                  <p>{deleteWarning(settings, source)}</p>
+                  <button
+                    type="button"
+                    className="sampler-source-delete"
+                    onClick={() => onDeleteSource(source.id)}
+                  >
+                    Delete anyway
+                  </button>
+                  <button
+                    type="button"
+                    className="sampler-notice-dismiss"
+                    onClick={() => onAskDeleteSource(null)}
+                  >
+                    Keep {source.name}
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
@@ -237,6 +318,7 @@ function SamplerInstrument({
           const rate = region
             ? padPlaybackRate(settingsForPad, region.duration, secondsPerStep(bpm))
             : 1
+          const state = padAudioState(settingsForPad, audio)
           return (
             <div
               className="sampler-pad-strip"
@@ -295,11 +377,33 @@ function SamplerInstrument({
               <button
                 type="button"
                 className="sampler-chop"
-                disabled={!region}
+                // Without its original there is nothing to re-trim against. The
+                // pad keeps sounding; only the editing is gone, and it says so.
+                disabled={!region || state === 'sourceMissing'}
                 onClick={() => region && onOpenEditor(region.sourceId, pad.id)}
               >
                 Chop {pad.label}
               </button>
+              {state === 'sourceMissing' && (
+                <p className="sampler-pad-state">
+                  Original cleared — {settingsForPad.name} still sounds, but cannot be re-chopped.
+                </p>
+              )}
+              {state === 'silent' && (
+                <label className="sampler-relink">
+                  {/* One action: point a silent pad at a file and it comes back
+                      with its name, its tune, its fit and its programming. */}
+                  <span>Relink {pad.label}</span>
+                  <input
+                    type="file"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      event.target.value = ''
+                      if (file) onRelinkPad(file, pad.id)
+                    }}
+                  />
+                </label>
+              )}
             </div>
           )
         })}

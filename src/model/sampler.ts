@@ -1,5 +1,6 @@
 import { claimsInstrumentKeys } from './instrumentKeys'
 import { clampParam, type ParamSpec } from './knob'
+import { sliceKey } from './slice'
 import type { PadLaneId } from './types'
 
 export type SampleOrigin = 'shipped' | 'upload' | 'recording'
@@ -61,6 +62,49 @@ export const CURATED_SAMPLE_SOURCE: SampleSource = {
   origin: 'shipped',
   duration: 0.25,
   channels: 1,
+}
+
+/**
+ * What a pad has, given what audio actually survived.
+ *
+ * Missing audio is a modelled state rather than an error path, and it has to
+ * exist regardless of how storage behaves: a share link carries programming but
+ * no audio, so it produces the silent state **by design**. A dangling reference
+ * resolves to one of these and must never throw or stop the deck loading.
+ */
+export type PadAudioState = 'empty' | 'ready' | 'sourceMissing' | 'silent'
+
+/** The audio that is actually reachable, named the two ways a pad depends on it. */
+export interface AvailableAudio {
+  /** Keys of slices held in storage — what makes sound. */
+  slices: ReadonlySet<string>
+  /** Ids of sources whose bytes can still be got at — what makes re-editing possible. */
+  sources: ReadonlySet<string>
+}
+
+/**
+ * Derive a pad's state from what is present. The asymmetry is the whole point
+ * of the storage split: losing a slice costs the sound, losing a source costs
+ * only the ability to chop it again.
+ */
+export function padAudioState(pad: PadSettings, audio: AvailableAudio): PadAudioState {
+  if (!pad.region) return 'empty'
+  if (!audio.slices.has(sliceKey(pad.region))) return 'silent'
+  return audio.sources.has(pad.region.sourceId) ? 'ready' : 'sourceMissing'
+}
+
+/**
+ * The pads a source is under, by the name the user reads on them. Deleting a
+ * source is permitted, but only after saying what it is under — and one source
+ * legitimately backs several pads, so this has to see all four.
+ */
+export function padsUsingSource(
+  settings: SamplerSettings,
+  sourceId: string,
+): string[] {
+  return PAD_LANES.flatMap((pad) =>
+    settings[pad.id].region?.sourceId === sourceId ? [settings[pad.id].name] : [],
+  )
 }
 
 export const MIN_PAD_TUNE = -24
@@ -155,6 +199,20 @@ export function createSamplerSettings(saved?: unknown): SamplerSettings {
  */
 export const DEFAULT_PAD_REGION_SECONDS = 4
 
+/**
+ * The region a pad opens on when it is first pointed at a source. One place,
+ * because the same window has to be rendered into a slice and written into the
+ * document, and a slice is stored under the region that made it — two call
+ * sites computing it separately could quietly disagree on the key.
+ */
+export function openingRegionForSource(source: SampleSource): SampleRegion {
+  return {
+    sourceId: source.id,
+    start: 0,
+    duration: Math.min(source.duration, DEFAULT_PAD_REGION_SECONDS),
+  }
+}
+
 /** Point a pad at a source, opening on the front of it for trimming. */
 export function assignSourceToPad(
   settings: SamplerSettings,
@@ -166,12 +224,24 @@ export function assignSourceToPad(
     [padId]: {
       ...settings[padId],
       name: source.name,
-      region: {
-        sourceId: source.id,
-        start: 0,
-        duration: Math.min(source.duration, DEFAULT_PAD_REGION_SECONDS),
-      },
+      region: openingRegionForSource(source),
     },
+  }
+}
+
+/**
+ * Point a pad that has lost its audio at a replacement. Assignment is a choice
+ * and takes the source's name with it; relinking is a repair, so the name the
+ * user is reading on that pad stays exactly as it was.
+ */
+export function relinkPadToSource(
+  settings: SamplerSettings,
+  padId: PadLaneId,
+  source: SampleSource,
+): SamplerSettings {
+  return {
+    ...settings,
+    [padId]: { ...settings[padId], region: openingRegionForSource(source) },
   }
 }
 

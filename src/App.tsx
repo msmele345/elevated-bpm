@@ -44,6 +44,9 @@ import {
   cycleActivePatternStep,
   enterLesson,
   openingProjectState,
+  referencedAudio,
+  relinkSamplerPad,
+  removeSource,
   resizeActivePatternNote,
   setBassParamValue,
   setFxParamValue,
@@ -64,11 +67,14 @@ import {
   SHARE_QUERY_PARAM,
 } from './model/share'
 import {
-  DEFAULT_PAD_REGION_SECONDS,
+  openingRegionForSource,
+  padsUsingSource,
+  type AvailableAudio,
   type SampleRegion,
   type SampleSource,
   type SamplerParamId,
 } from './model/sampler'
+import { sliceKey, type Slice } from './model/slice'
 import type { AnalysisAudio } from './audio/engine'
 import { clampRegionToSource } from './model/region'
 import { RegionEditor } from './components/RegionEditor'
@@ -78,6 +84,14 @@ import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
 import { createSampleIntake } from './audio/sampleIntake'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
+import {
+  collectUnreferencedAudio,
+  deleteSource,
+  loadSource,
+  loadStoredAudio,
+  saveSliceWithinQuota,
+  saveSourceWithinQuota,
+} from './storage/sampleStore'
 import { ARC } from './lessons'
 
 // Long enough to coalesce a burst of step taps into one IndexedDB write,
@@ -97,6 +111,14 @@ const sampleIntake = createSampleIntake<File>({
   decode: decodeSample,
   newSourceId,
 })
+
+// How the engine reaches bytes this session never saw — the reason a chop is
+// still re-editable after a reload. Wired once, at the composition root, so the
+// engine keeps knowing nothing about storage.
+engine.setStoredSourceLoader(loadSource)
+
+/** Nothing has been read from storage yet; every pad reads as silent until it has. */
+const NO_AUDIO: AvailableAudio = { slices: new Set(), sources: new Set() }
 
 export default function App() {
   // ProjectState is the single source of truth: pattern edits, transport
@@ -118,6 +140,24 @@ export default function App() {
   // A refused file is a message and nothing else: the document is never
   // touched on the way to this state, so experimenting with files is free.
   const [intakeError, setIntakeError] = useState<string | null>(null)
+  /**
+   * Which audio actually survived, in the two terms a pad depends on: the
+   * slices that make sound and the sources that make re-chopping possible.
+   * Read from storage at load and kept current as audio is written or given up.
+   */
+  const [audio, setAudio] = useState<AvailableAudio>(NO_AUDIO)
+  // What storage cost, when it cost anything. An eviction is worth saying; a
+  // write that could not be made at all is worth saying loudly.
+  const [storageNotice, setStorageNotice] = useState<{
+    message: string
+    severity: 'info' | 'error'
+  } | null>(null)
+  // The source a delete has been asked for but not confirmed. Deleting is
+  // permitted, but only after the user has been told what it is under.
+  const [sourceToDelete, setSourceToDelete] = useState<string | null>(null)
+  // Durability is requested once there is user-created audio worth protecting,
+  // and not at startup, where it would be a permission prompt about nothing.
+  const persistenceRequested = useRef(false)
   const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
   const [isSharing, setIsSharing] = useState(false)
   const [sharedUrl, setSharedUrl] = useState<string | null>(null)
@@ -221,30 +261,49 @@ export default function App() {
   // the document that won.
   useEffect(() => {
     let cancelled = false
-    void Promise.all([loadProjectState(), readSharedBeat(window.location.href)]).then(
-      ([saved, incoming]) => {
+    void (async () => {
+      const [saved, incoming] = await Promise.all([
+        loadProjectState(),
+        readSharedBeat(window.location.href),
+      ])
+      if (cancelled) return
+      const opening = openingProjectState(saved)
+      const next =
+        incoming.status === 'ready' ? projectWithSharedBeat(opening, incoming.project) : opening
+      if (incoming.status === 'ready') {
+        inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
+          pattern: activePattern(next),
+          motion: NO_PARAM_MOTION,
+          bpm: next.transport.bpm,
+          chord: NO_CHORD_PLAY,
+        })
+      }
+      try {
+        // Orphans are collected against the user's *own* document, never the
+        // preview: a previewed beat is not authoritative, and sweeping against
+        // it would delete the recipient's audio rather than the stranded audio.
+        // This is the one moment a referencing document is authoritative, which
+        // is why the sweep lives here and not at write time.
+        await collectUnreferencedAudio(referencedAudio(opening))
+        const stored = await loadStoredAudio(next)
         if (cancelled) return
-        const opening = openingProjectState(saved)
-        const next =
-          incoming.status === 'ready'
-            ? projectWithSharedBeat(opening, incoming.project)
-            : opening
-        if (incoming.status === 'ready') {
-          setSharePreview({ recipientProject: opening })
-          inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
-            pattern: activePattern(next),
-            motion: NO_PARAM_MOTION,
-            bpm: next.transport.bpm,
-            chord: NO_CHORD_PLAY,
-          })
-        } else if (incoming.status === 'error') {
-          setIncomingShareError(incoming.message)
-        }
-        setProject(next)
-        engine.setBpm(next.transport.bpm)
-        setHydrated(true)
-      },
-    )
+        // Slices only, and no decode: this is the whole startup budget.
+        for (const [padId, slice] of stored.padSlices) engine.registerSlice(padId, slice)
+        setAudio(stored.available)
+      } catch {
+        // A storage problem is never a broken app. The deck opens with its
+        // pads reading as silent, and every one of them offers a relink.
+      }
+      if (cancelled) return
+      // The document and everything that describes it arrive together, in one
+      // transition: a preview strip on screen before the beat it announces
+      // would be describing the wrong deck.
+      if (incoming.status === 'ready') setSharePreview({ recipientProject: opening })
+      else if (incoming.status === 'error') setIncomingShareError(incoming.message)
+      setProject(next)
+      engine.setBpm(next.transport.bpm)
+      setHydrated(true)
+    })()
     return () => {
       cancelled = true
     }
@@ -432,6 +491,75 @@ export default function App() {
   }, [])
 
   /**
+   * Keep new audio, and say what keeping it cost.
+   *
+   * Every write goes through the quota policy: a browser out of room gives up
+   * sources — never slices — and retries, so the user is only told there is not
+   * enough space once that has genuinely failed. What is reported names pads
+   * rather than ids, because a pad is the thing the user can act on.
+   */
+  const keepAudio = useCallback(
+    async (write: {
+      source?: { id: string; bytes: Blob }
+      slice?: { key: string; value: Slice; padName: string }
+    }) => {
+      const evicted: string[] = []
+      const unsaved: string[] = []
+      try {
+        if (write.source) {
+          // The first moment there is user-created audio worth protecting.
+          if (!persistenceRequested.current) {
+            persistenceRequested.current = true
+            void navigator.storage?.persist?.()
+          }
+          const outcome = await saveSourceWithinQuota(write.source.id, write.source.bytes)
+          evicted.push(...outcome.evicted)
+          if (outcome.status === 'saved') {
+            const id = write.source.id
+            setAudio((held) => ({ ...held, sources: new Set([...held.sources, id]) }))
+          }
+        }
+        if (write.slice) {
+          const outcome = await saveSliceWithinQuota(write.slice.key, write.slice.value)
+          evicted.push(...outcome.evicted)
+          if (outcome.status === 'saved') {
+            const key = write.slice.key
+            setAudio((held) => ({ ...held, slices: new Set([...held.slices, key]) }))
+          } else {
+            unsaved.push(write.slice.padName)
+          }
+        }
+      } catch {
+        if (write.slice) unsaved.push(write.slice.padName)
+      }
+      // Evicting is housekeeping the user should know about but never hear:
+      // those pads keep sounding and lose only the ability to be re-chopped.
+      const evictedPads = evicted.flatMap((id) => padsUsingSource(samplerRef.current, id))
+      if (unsaved.length > 0) {
+        setStorageNotice({
+          severity: 'error',
+          message: `There is not enough room to keep ${unsaved.join(' and ')}. ${unsaved.length === 1 ? 'It sounds' : 'They sound'} until you reload — delete a source to make space.`,
+        })
+      } else if (evictedPads.length > 0) {
+        setStorageNotice({
+          severity: 'info',
+          message: `Made room by discarding the original audio behind ${evictedPads.join(' and ')}. ${evictedPads.length === 1 ? 'That pad keeps' : 'Those pads keep'} sounding, but can no longer be re-chopped.`,
+        })
+      }
+      // Sources went, so pads that used them are no longer re-editable.
+      if (evicted.length > 0) {
+        setAudio((held) => ({
+          ...held,
+          sources: new Set([...held.sources].filter((id) => !evicted.includes(id))),
+        }))
+      }
+    },
+    [],
+  )
+
+  const handleDismissStorageNotice = useCallback(() => setStorageNotice(null), [])
+
+  /**
    * Point a pad at a source. The audio has to be rendered before the document
    * moves: a pad that claimed a sound it could not make would be the silent
    * state EB2-06 models, arrived at by accident rather than by loss.
@@ -440,15 +568,13 @@ export default function App() {
     async (padId: PadLaneId, sourceId: string) => {
       const source = sourcesRef.current.find((candidate) => candidate.id === sourceId)
       if (!source) return
-      const rendered = await engine.commitPadRegion(padId, {
-        sourceId,
-        start: 0,
-        duration: Math.min(source.duration, DEFAULT_PAD_REGION_SECONDS),
-      })
+      const region = openingRegionForSource(source)
+      const rendered = await engine.commitPadRegion(padId, region)
       if (!rendered) return
       setProject((p) => assignSourceToSamplerPad(p, padId, sourceId))
+      await keepAudio({ slice: { key: sliceKey(region), value: rendered, padName: source.name } })
     },
-    [],
+    [keepAudio],
   )
 
   const handleFitChange = useCallback((padId: PadLaneId, fit: number | null) => {
@@ -476,11 +602,10 @@ export default function App() {
     const region =
       existing && existing.sourceId === sourceId
         ? clampRegionToSource(existing, analysis.duration)
-        : {
-            sourceId,
-            start: 0,
-            duration: Math.min(analysis.duration, DEFAULT_PAD_REGION_SECONDS),
-          }
+        : // The analysis decode is the authority on how long the audio really
+          // is, so the opening window is measured against it rather than the
+          // duration the document recorded at intake.
+          openingRegionForSource({ ...source, duration: analysis.duration })
     setEditor({ source, analysis, padId, region })
   }, [])
 
@@ -502,13 +627,25 @@ export default function App() {
    * document. A render that fails leaves the pad sounding exactly what it
    * sounded before.
    */
-  const handleCommitRegion = useCallback(async (padId: PadLaneId, region: SampleRegion) => {
-    const rendered = await engine.commitPadRegion(padId, region)
-    if (!rendered) return
-    setProject((p) => commitRegionToSamplerPad(p, padId, region))
-    engine.closeSourceAnalysis()
-    setEditor(null)
-  }, [])
+  const handleCommitRegion = useCallback(
+    async (padId: PadLaneId, region: SampleRegion) => {
+      const rendered = await engine.commitPadRegion(padId, region)
+      if (!rendered) return
+      setProject((p) => commitRegionToSamplerPad(p, padId, region))
+      engine.closeSourceAnalysis()
+      setEditor(null)
+      // The chop's audio is kept under the region that made it, so re-chopping
+      // writes a new key and leaves the old slice for the sweep to collect.
+      await keepAudio({
+        slice: {
+          key: sliceKey(region),
+          value: rendered,
+          padName: samplerRef.current[padId].name,
+        },
+      })
+    },
+    [keepAudio],
+  )
 
   /**
    * Bring a file in, from the picker or from a drop. Nothing reaches the
@@ -516,30 +653,63 @@ export default function App() {
    * stage leaves the project byte-identical — and the source and its pad
    * arrive in one transition, never as two edits a save could land between.
    */
-  const handleLoadFile = useCallback(async (file: File, padId: PadLaneId | null) => {
-    const outcome = await sampleIntake.load(file)
-    if (outcome.status === 'rejected') {
-      setIntakeError(outcome.rejection.message)
-      return
-    }
-    // The bytes are kept so the source can be chopped later; the decode is
-    // not. It is the render decode — the feature's peak memory moment — and it
-    // is used here to render the pad's opening slice and then dropped.
-    engine.registerSourceBytes(outcome.source.id, file)
-    if (padId !== null) {
-      engine.renderPadSlice(padId, outcome.buffer, {
-        sourceId: outcome.source.id,
-        start: 0,
-        duration: Math.min(outcome.source.duration, DEFAULT_PAD_REGION_SECONDS),
+  const handleLoadFile = useCallback(
+    async (file: File, padId: PadLaneId | null, relinking = false) => {
+      const outcome = await sampleIntake.load(file)
+      if (outcome.status === 'rejected') {
+        setIntakeError(outcome.rejection.message)
+        return
+      }
+      // The bytes are kept so the source can be chopped later; the decode is
+      // not. It is the render decode — the feature's peak memory moment — and it
+      // is used here to render the pad's opening slice and then dropped.
+      engine.registerSourceBytes(outcome.source.id, file)
+      const region = openingRegionForSource(outcome.source)
+      const rendered =
+        padId !== null ? engine.renderPadSlice(padId, outcome.buffer, region) : null
+      setIntakeError(null)
+      setProject((p) => {
+        const withSource = addSource(p, outcome.source)
+        if (padId === null) return withSource
+        // Relinking is a repair, so the pad keeps the name the user reads on
+        // it; a plain assignment is a choice and takes the file's name.
+        return relinking
+          ? relinkSamplerPad(withSource, padId, outcome.source.id)
+          : assignSourceToSamplerPad(withSource, padId, outcome.source.id)
       })
+      await keepAudio({
+        source: { id: outcome.source.id, bytes: file },
+        slice: rendered
+          ? { key: sliceKey(region), value: rendered, padName: outcome.source.name }
+          : undefined,
+      })
+    },
+    [keepAudio],
+  )
+
+  /** Point a pad that lost its audio at a file that has it again. */
+  const handleRelinkPad = useCallback(
+    (file: File, padId: PadLaneId) => handleLoadFile(file, padId, true),
+    [handleLoadFile],
+  )
+
+  /**
+   * Reclaim a source. The pads it is under keep their regions and so keep their
+   * slices — housekeeping is never audible — and lose only re-editability.
+   */
+  const handleDeleteSource = useCallback(async (sourceId: string) => {
+    setSourceToDelete(null)
+    setProject((p) => removeSource(p, sourceId))
+    setAudio((held) => ({
+      ...held,
+      sources: new Set([...held.sources].filter((id) => id !== sourceId)),
+    }))
+    try {
+      await deleteSource(sourceId)
+    } catch {
+      // The bytes outliving the document is a wasted few megabytes the next
+      // load's sweep collects — never a reason to refuse the user's edit.
     }
-    setIntakeError(null)
-    setProject((p) => {
-      const withSource = addSource(p, outcome.source)
-      return padId === null
-        ? withSource
-        : assignSourceToSamplerPad(withSource, padId, outcome.source.id)
-    })
   }, [])
 
   const handleDismissIntakeError = useCallback(() => setIntakeError(null), [])
@@ -836,14 +1006,21 @@ export default function App() {
         lanes={pattern.padLanes}
         settings={samplerSettings}
         sources={project.sources}
+        audio={audio}
         mixer={project.mixer}
         soloing={soloing}
         intakeError={intakeError}
+        storageNotice={storageNotice}
+        sourceToDelete={sourceToDelete}
         bpm={bpm}
         onAssign={handleAssignSamplerSource}
         onOpenEditor={handleOpenEditor}
         onFitChange={handleFitChange}
         onLoadFile={handleLoadFile}
+        onRelinkPad={handleRelinkPad}
+        onAskDeleteSource={setSourceToDelete}
+        onDeleteSource={handleDeleteSource}
+        onDismissStorageNotice={handleDismissStorageNotice}
         onDismissIntakeError={handleDismissIntakeError}
         onTuneChange={handleSamplerParamChange}
         onAttack={handlePadAttack}

@@ -14,6 +14,11 @@ import {
   activePattern,
   addSource,
   assignSourceToSamplerPad,
+  commitRegionToSamplerPad,
+  referencedAudio,
+  relinkSamplerPad,
+  removeSource,
+  setSamplerPadFit,
   createInitialProjectState,
   openingProjectState,
   PROJECT_STATE_VERSION,
@@ -199,6 +204,96 @@ describe('sampler editing', () => {
     expect(withSource.instrumentSettings).toBe(state.instrumentSettings)
     expect(withSource.mixer).toBe(state.mixer)
     expect(state.sources).toEqual([CURATED_SAMPLE_SOURCE])
+  })
+
+  it('references every pad chop and every source in the bank', () => {
+    // What the sweep keeps. One source legitimately backs several pads, and a
+    // source loaded but not yet chopped is still the user's — neither may be
+    // collected as an orphan.
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    const state = commitRegionToSamplerPad(
+      commitRegionToSamplerPad(addSource(createInitialProjectState(), uploaded), 'pad1', {
+        sourceId: 'upload-1',
+        start: 0,
+        duration: 0.5,
+      }),
+      'pad2',
+      { sourceId: 'upload-1', start: 2, duration: 0.5 },
+    )
+
+    expect(referencedAudio(state)).toEqual({
+      sliceKeys: new Set(['upload-1|0|0.5', 'upload-1|2|0.5']),
+      sourceIds: new Set([CURATED_SAMPLE_SOURCE.id, 'upload-1']),
+    })
+  })
+
+  it('lets a source go while every pad it is under keeps its chop', () => {
+    // Housekeeping is never audible: the pads lose re-editability, not sound,
+    // so their regions stay and keep their slices referenced.
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    const state = commitRegionToSamplerPad(
+      addSource(createInitialProjectState(), uploaded),
+      'pad1',
+      { sourceId: 'upload-1', start: 0, duration: 0.5 },
+    )
+
+    const removed = removeSource(state, 'upload-1')
+
+    expect(removed.sources).toEqual([CURATED_SAMPLE_SOURCE])
+    expect(removed.instrumentSettings.sampler.pad1.region).toEqual({
+      sourceId: 'upload-1',
+      start: 0,
+      duration: 0.5,
+    })
+    expect(referencedAudio(removed).sliceKeys).toEqual(new Set(['upload-1|0|0.5']))
+    expect(activePattern(removed)).toBe(activePattern(state))
+  })
+
+  it('relinks a silent pad to new audio, keeping the name the user gave it', () => {
+    // Losing a file costs one click, not the beat: the pad comes back with its
+    // name, its tune, its fit target and its programming intact.
+    const state = setSamplerPadFit(
+      setSamplerParamValue(
+        commitRegionToSamplerPad(createInitialProjectState(), 'pad2', {
+          sourceId: 'gone',
+          start: 0,
+          duration: 0.5,
+        }),
+        samplerParamForPad('pad2').id,
+        7,
+      ),
+      'pad2',
+      4,
+    )
+    const replacement = {
+      id: 'upload-2',
+      name: 'Some other file.wav',
+      origin: 'upload' as const,
+      duration: 1,
+      channels: 1,
+    }
+
+    const relinked = relinkSamplerPad(addSource(state, replacement), 'pad2', 'upload-2')
+
+    expect(relinked.instrumentSettings.sampler.pad2).toEqual({
+      region: { sourceId: 'upload-2', start: 0, duration: 1 },
+      tune: 7,
+      fit: 4,
+      name: state.instrumentSettings.sampler.pad2.name,
+    })
+    expect(activePattern(relinked)).toBe(activePattern(state))
   })
 
   it('stores a pad Tune knob value without changing its pattern or sibling pads', () => {

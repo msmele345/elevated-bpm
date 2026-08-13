@@ -137,7 +137,11 @@ a question anyone should have to check visually.
       goes through `stopTransport`, the state the play control, playhead and room
       light all read, rather than `engine.stop()` alone. Covered at the mounted
       deck ("says it will stop the loop, then stops it…"): the deck is playing,
-      recording starts, and the play control reads stopped
+      recording starts, and the play control reads stopped. **And the loop
+      cannot be started again while the microphone is live** — the criterion as
+      worded is about the starting condition, but the rule it exists for
+      ("do not resolve it by allowing both to run") is about the state, and
+      stopping the transport is pointless if the next click undoes it
 - [x] A denied permission, or a failed recording, produces a dismissible message
       and leaves the project untouched — both are worded like a refused file and
       go to the same dismissible alert. Covered at the mounted deck: a refused
@@ -152,9 +156,16 @@ a question anyone should have to check visually.
       released
 - [x] The browser machinery sits behind an injected adapter, and the slice's tests
       stop at that boundary — `src/audio/microphone.ts` holds `getUserMedia` and
-      `MediaRecorder` and nothing else, mocked in tests exactly as
-      `sampleDecoder` already is. The boundary hands back a `Blob` and a list of
-      inputs, never an audio node, which is what keeps monitoring inexpressible
+      `MediaRecorder` and nothing else, and the boundary hands back a `Blob` and
+      a list of inputs, never an audio node, which is what keeps monitoring
+      inexpressible. **Substituted at the module boundary rather than passed as
+      a constructor argument**, which is a real difference from the sibling
+      adapter: `sampleDecoder`'s functions are imported *and* injected into
+      `createSampleIntake`, because intake is a thing with a lifetime that can
+      be constructed. Recording is orchestrated directly by `App`, so there is
+      no constructor to inject into, and inventing one to earn the word would be
+      ceremony. What the criterion is protecting — one seam, browser machinery
+      on the far side of it, tests stopping there — holds exactly
 
 ## Testing decisions
 
@@ -230,6 +241,22 @@ gate calls that `undecodable` — "This browser cannot play that file", which
 blames the browser for something the user did. `EMPTY_RECORDING_MESSAGE` says
 the take was too short instead.
 
+**The adapter releases the tracks on exactly one path, and the app on every
+other.** The rule is that the privacy commitment lives above the boundary where
+a test can hold the app to it. There is one path where it cannot: both
+`new MediaRecorder` and `start()` can throw *after* the browser has granted
+access, and on that path the session — the only thing carrying the tracks — is
+never returned. Nothing above the boundary could ever stop them. So the adapter
+stops them there, and only there.
+
+**The gate reads a wall clock, which slightly over-measures.** `knownDuration`
+is elapsed time including the recorder's flush, while the `duration` the
+document keeps comes from the decoded buffer. Near the six-minute limit the two
+can disagree by a fraction of a second, and the wall clock is the larger — so
+the error is toward refusing a take marginally early rather than accepting one
+over the cap. That is the safe direction for a limit whose whole job is bounding
+peak memory.
+
 **The announcement is carried in the machine's state.** "The microphone is off"
 is only worth announcing to someone who was just told it was on, and idle is the
 state both before a recording and after one — so it cannot be derived from the
@@ -263,6 +290,38 @@ A metadata probe of that blob reported **1.439982 s** for a 1.5 s take: finite
 and roughly right, contradicting the premise that a `MediaRecorder` container
 commonly declares no duration. The design did not change but the comments did;
 see the decision above.
+
+**What review found, and why the deliberate test gap is where it found it.**
+Three real defects, two of them inside the untested adapter or the transitions
+around it — which is the cost of the gap, arriving exactly where the gap is:
+
+1. **The loop could be restarted mid-take.** Nothing knew the mic was live, so
+   Play worked one click after recording had stopped the transport. Fixed at
+   both ends: the handler refuses and the control says so.
+2. **A microphone that opened but could not be recorded from leaked.** Verified
+   in-browser against the real `MediaRecorder` by handing it a stream it
+   refuses (a stream whose track is already ended makes `start()` throw
+   `NotSupportedError` — observed in this session before it was a fix): one
+   `stop()` call, track `ended`, and the failure reported as the recorder's
+   rather than as a refusal.
+3. **A second stop was refused by status but not by identity.** `stopRequested`
+   from `'stopping'` is refused *into* `'stopping'`, which passed a status
+   check — and would have flushed and imported the same take twice, landing it
+   as two sources. The transitions already returned their input unchanged, so
+   the machine could always answer this; the caller now asks by identity.
+
+Review also caught the record control unmounting itself: three buttons that
+swapped meant pressing Record dropped focus to the document, 163 tab stops from
+where the user was. It is one button through every state now, and `aria-disabled`
+rather than `disabled` for the same reason — verified in-browser that focus stays
+on the control through record, stop, and back.
+
+**A note on the suite.** One full-suite run failed in `App region editor > is a
+modal over an inert deck…` on a `waitFor` timeout, in a test this slice does not
+touch; three subsequent full runs and the file in isolation all passed. It reads
+as a pre-existing timing flake under parallel load rather than a regression, but
+it is recorded here rather than dismissed, since this slice does add about two
+and a half seconds of work to that file.
 
 **An unanswered permission prompt is a real state.** Playwright leaves the
 prompt pending rather than answering it, and the deck sat on "Waiting for

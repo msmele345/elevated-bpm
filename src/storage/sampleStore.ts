@@ -69,6 +69,84 @@ export async function deleteSource(id: string): Promise<void> {
   await withStore(STORES.sources, 'readwrite', (store) => store.delete(id))
 }
 
+/**
+ * What a write ran into, and what it cost. A failure is reported only once
+ * eviction has genuinely failed to make room — the caller turns `full` into a
+ * message naming the pads affected, which is something only it knows.
+ */
+export interface SaveOutcome {
+  status: 'saved' | 'full'
+  /** Sources given up along the way; those pads keep sounding, minus re-editability. */
+  evicted: readonly string[]
+}
+
+/** Persist a slice, making room by dropping sources if the browser refuses. */
+export function saveSliceWithinQuota(key: string, slice: Slice): Promise<SaveOutcome> {
+  return writeWithinQuota(() => saveSlice(key, slice))
+}
+
+/** Persist a source, making room by dropping *other* sources if the browser refuses. */
+export function saveSourceWithinQuota(id: string, bytes: Blob): Promise<SaveOutcome> {
+  return writeWithinQuota(() => saveSource(id, bytes), id)
+}
+
+/**
+ * The designed answer to a full disk, rather than an error message.
+ *
+ * Sources are already declared expendable, so a refused write evicts one and
+ * tries again, and only gives up when there is nothing left to give up. Slices
+ * are never candidates: they are what make sound, and housekeeping the user can
+ * hear would be a worse failure than the one being handled.
+ */
+async function writeWithinQuota(
+  write: () => Promise<void>,
+  except?: string,
+): Promise<SaveOutcome> {
+  const evicted: string[] = []
+  for (;;) {
+    try {
+      await write()
+      return { status: 'saved', evicted }
+    } catch (error) {
+      if (!isOutOfRoom(error)) throw error
+      const given = await evictOneSource(new Set([...evicted, ...(except ? [except] : [])]))
+      if (given === undefined) return { status: 'full', evicted }
+      evicted.push(given)
+    }
+  }
+}
+
+/** Only a browser out of room gets the eviction path; every other failure is real. */
+function isOutOfRoom(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === 'QuotaExceededError'
+}
+
+/**
+ * Give up one source: the largest first, oldest breaking a tie. Each eviction
+ * costs the user a sound they can no longer re-edit, so freeing the most room
+ * per source given up is the kindest order — the fewest losses to survive the
+ * write.
+ */
+async function evictOneSource(skip: ReadonlySet<string>): Promise<string | undefined> {
+  const [keys, records] = await Promise.all([
+    withStore<IDBValidKey[]>(STORES.sources, 'readonly', (store) => store.getAllKeys()),
+    withStore<StoredSource[]>(STORES.sources, 'readonly', (store) => store.getAll()),
+  ])
+  const candidates = keys
+    .map((key, index) => ({ id: String(key), record: records[index] }))
+    .filter((entry) => entry.record && !skip.has(entry.id))
+  if (candidates.length === 0) return undefined
+  const largest = candidates.reduce((best, entry) =>
+    entry.record.bytes.size > best.record.bytes.size ||
+    (entry.record.bytes.size === best.record.bytes.size &&
+      entry.record.storedAt < best.record.storedAt)
+      ? entry
+      : best,
+  )
+  await deleteSource(largest.id)
+  return largest.id
+}
+
 /** What a document still points at: slice keys across all its pads, and its sources. */
 export interface AudioReferences {
   sliceKeys: ReadonlySet<string>

@@ -3,7 +3,15 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
 import { renderSlice, sliceKey, type RenderableAudio } from '../model/slice'
 import type { SampleRegion } from '../model/sampler'
-import { collectUnreferencedAudio, deleteSource, loadSlice, loadSource, saveSlice, saveSource } from './sampleStore'
+import {
+  collectUnreferencedAudio,
+  deleteSource,
+  loadSlice,
+  loadSource,
+  saveSlice,
+  saveSliceWithinQuota,
+  saveSource,
+} from './sampleStore'
 
 beforeEach(() => {
   // Fresh database per test.
@@ -51,6 +59,77 @@ describe('sampleStore missing audio', () => {
 
     await expect(loadSource('upload-1')).resolves.toBeUndefined()
     await expect(loadSlice(sliceKey(REGION))).resolves.toEqual(slice)
+  })
+})
+
+describe('sampleStore quota policy', () => {
+  /**
+   * A browser out of room. Writes are refused until `freeAfter` sources have
+   * been given up, which is the only way the app can make space — fake-indexeddb
+   * has no quota of its own to run into.
+   */
+  function outOfRoomUntil(freeAfter: number): () => void {
+    const put = IDBObjectStore.prototype.put
+    const remove = IDBObjectStore.prototype.delete
+    let freed = 0
+    IDBObjectStore.prototype.put = function (this: IDBObjectStore, ...args: never[]) {
+      if (freed < freeAfter) throw new DOMException('no room', 'QuotaExceededError')
+      return put.apply(this, args as never)
+    }
+    IDBObjectStore.prototype.delete = function (this: IDBObjectStore, ...args: never[]) {
+      if (this.name === 'sources') freed += 1
+      return remove.apply(this, args as never)
+    }
+    return () => {
+      IDBObjectStore.prototype.put = put
+      IDBObjectStore.prototype.delete = remove
+    }
+  }
+
+  async function storeTwoSources(): Promise<void> {
+    await saveSource('small', new Blob([new Uint8Array(10)]))
+    await saveSource('large', new Blob([new Uint8Array(5000)]))
+  }
+
+  it('makes room by giving up a source, then keeps the chop', async () => {
+    await storeTwoSources()
+    const slice = renderSlice(sourceFake(2), REGION)
+    const restore = outOfRoomUntil(1)
+
+    const outcome = await saveSliceWithinQuota(sliceKey(REGION), slice)
+    restore()
+
+    expect(outcome).toEqual({ status: 'saved', evicted: ['large'] })
+    await expect(loadSlice(sliceKey(REGION))).resolves.toEqual(slice)
+    // Largest first: one eviction that frees the most room costs the user the
+    // fewest sounds to re-edit.
+    await expect(loadSource('large')).resolves.toBeUndefined()
+    await expect(loadSource('small')).resolves.toBeDefined()
+  })
+
+  it('never gives up a slice to make room, and says so only once evicting has failed', async () => {
+    // Slices are what make sound. A pad that went quiet to save space would be
+    // housekeeping the user can hear.
+    const kept: SampleRegion = { sourceId: 'upload-9', start: 0, duration: 0.3 }
+    const keptSlice = renderSlice(sourceFake(2), kept)
+    await saveSlice(sliceKey(kept), keptSlice)
+    await storeTwoSources()
+    const restore = outOfRoomUntil(Number.POSITIVE_INFINITY)
+
+    const outcome = await saveSliceWithinQuota(sliceKey(REGION), renderSlice(sourceFake(2), REGION))
+    restore()
+
+    expect(outcome).toEqual({ status: 'full', evicted: ['large', 'small'] })
+    await expect(loadSlice(sliceKey(kept))).resolves.toEqual(keptSlice)
+  })
+
+  it('leaves storage alone when a write succeeds', async () => {
+    await storeTwoSources()
+
+    const outcome = await saveSliceWithinQuota(sliceKey(REGION), renderSlice(sourceFake(2), REGION))
+
+    expect(outcome).toEqual({ status: 'saved', evicted: [] })
+    await expect(loadSource('large')).resolves.toBeDefined()
   })
 })
 

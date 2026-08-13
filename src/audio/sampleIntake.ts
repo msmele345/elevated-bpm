@@ -5,7 +5,7 @@ import {
   undecodableRejection,
   type IntakeRejection,
 } from '../model/intake'
-import type { SampleSource } from '../model/sampler'
+import type { SampleOrigin, SampleSource } from '../model/sampler'
 import type { RenderableAudio } from '../model/slice'
 
 /**
@@ -41,25 +41,45 @@ export interface SampleIntakeDeps<F extends IntakeFile> {
   newSourceId(): string
 }
 
+/**
+ * What differs between a file the user chose and audio they recorded. Neither
+ * changes the gate: same limits, same order, same refusals, same decode. A
+ * recording is indistinguishable from an upload everywhere downstream, which is
+ * the whole reason it is brought in as a file rather than by its own path.
+ */
+export interface IntakeOptions {
+  /** Carried for the curriculum's benefit, not the audio path's. */
+  origin?: SampleOrigin
+  /**
+   * A length already measured by whatever produced the audio, used in place of
+   * the metadata probe. A recording has one and needs it: a `MediaRecorder`
+   * container commonly declares no duration at all, so probing one would refuse
+   * every recording as over-length. A chosen file has no such clock and is
+   * probed as it always was.
+   */
+  knownDuration?: number
+}
+
 export type IntakeOutcome =
   | { status: 'loaded'; source: SampleSource; buffer: DecodedSample }
   | { status: 'rejected'; rejection: IntakeRejection }
 
 export interface SampleIntake<F extends IntakeFile> {
-  load(file: F): Promise<IntakeOutcome>
+  load(file: F, options?: IntakeOptions): Promise<IntakeOutcome>
 }
 
 export function createSampleIntake<F extends IntakeFile>(
   deps: SampleIntakeDeps<F>,
 ): SampleIntake<F> {
   return {
-    async load(file) {
+    async load(file, options = {}) {
       const oversized = rejectionForSize(file.name, file.size)
       if (oversized) return { status: 'rejected', rejection: oversized }
 
       let buffer: DecodedSample
       try {
-        const overLong = rejectionForProbe(file.name, await deps.probeDuration(file))
+        const seconds = options.knownDuration ?? (await deps.probeDuration(file))
+        const overLong = rejectionForProbe(file.name, seconds)
         if (overLong) return { status: 'rejected', rejection: overLong }
         // The browser is the authority on what it can play, so formats are
         // never allowlisted: attempt the decode and report what happened.
@@ -78,7 +98,7 @@ export function createSampleIntake<F extends IntakeFile>(
         source: {
           id: deps.newSourceId(),
           name: sourceNameFromFileName(file.name),
-          origin: 'upload',
+          origin: options.origin ?? 'upload',
           duration: buffer.duration,
           channels: buffer.numberOfChannels,
         },

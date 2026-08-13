@@ -23,6 +23,11 @@ import {
   setTransportBpm,
 } from './model/projectState'
 import { MAX_SOURCE_BYTES, MAX_SOURCE_SECONDS } from './model/intake'
+import {
+  MICROPHONE_DENIED_MESSAGE,
+  MIC_LIVE_ANNOUNCEMENT,
+  MIC_OFF_ANNOUNCEMENT,
+} from './model/recording'
 import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
 import { sliceKey } from './model/slice'
 import { createShareUrl, readSharedBeat } from './model/share'
@@ -102,6 +107,62 @@ function analysisFake(sampleRate = 1000, duration = 3) {
 vi.mock('./audio/sampleDecoder', () => decoder)
 
 /**
+ * The browser machinery, faked at exactly the boundary EB2-07 draws: a session
+ * that hands back a blob and the inputs it opened. `getUserMedia` and
+ * `MediaRecorder` themselves are left to manual verification, which is the
+ * trade the issue records — everything above this line is the real thing.
+ *
+ * Its tracks behave like real ones, so releasing them is observable: `stop()`
+ * ends a track and `readyState` says so, which is how a test can tell the
+ * inputs were actually stopped rather than the stream merely dropped.
+ */
+const microphone = vi.hoisted(() => {
+  interface FakeTrack {
+    readyState: string
+    stop(): void
+  }
+  const control = {
+    /** What a finished recording hands back. */
+    blob: new Blob(['recorded bytes'], { type: 'audio/webm;codecs=opus' }),
+    /** Set to have the user refuse the permission prompt. */
+    denial: null as Error | null,
+    /** Set to have capture fail after the microphone opened. */
+    failure: null as Error | null,
+    /** Every input opened this session, so a test can check they all ended. */
+    tracks: [] as FakeTrack[],
+  }
+  const openMicrophone = vi.fn(async () => {
+    if (control.denial) throw control.denial
+    const opened = [1, 2].map(() => {
+      const track: FakeTrack = {
+        readyState: 'live',
+        stop: () => {
+          track.readyState = 'ended'
+        },
+      }
+      return track
+    })
+    control.tracks = opened
+    return {
+      tracks: opened,
+      finish: async () => {
+        if (control.failure) throw control.failure
+        return control.blob
+      },
+    }
+  })
+  return { openMicrophone, control }
+})
+
+vi.mock('./audio/microphone', () => ({ openMicrophone: microphone.openMicrophone }))
+
+/** Start a take and wait for the deck to show that the microphone is live. */
+async function startRecording(): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: 'Record from microphone' }))
+  await screen.findByRole('button', { name: 'Stop recording' })
+}
+
+/**
  * What a render hands back and storage keeps. Small on purpose — these tests
  * are about the audio surviving, not about what it sounds like.
  */
@@ -176,6 +237,11 @@ beforeEach(async () => {
   decoder.decodeSample.mockClear().mockResolvedValue(decodedFake(2))
   decoder.newSourceId.mockClear().mockReturnValue('upload-1')
   engineSpies.getSoundingPadIds.mockReturnValue([])
+  microphone.openMicrophone.mockClear()
+  microphone.control.blob = new Blob(['recorded bytes'], { type: 'audio/webm;codecs=opus' })
+  microphone.control.denial = null
+  microphone.control.failure = null
+  microphone.control.tracks = []
   vi.stubGlobal('indexedDB', indexedDB)
   vi.stubGlobal('requestAnimationFrame', () => 1)
   vi.stubGlobal('cancelAnimationFrame', () => undefined)
@@ -333,6 +399,156 @@ describe('App audio intake', () => {
   })
 })
 
+describe('App microphone recording', () => {
+  it('turns a take into a source that behaves exactly like an uploaded one', async () => {
+    decoder.newSourceId.mockReturnValue('recording-1')
+    await hydratedDeck()
+
+    await startRecording()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    // A source like any other: listed by name, and marked by what made it.
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    const recorded = await within(sourceList).findByText('Recording 1')
+    expect(within(recorded.closest('li')!).getByText('recording')).toBeTruthy()
+    // Its bytes are kept under the same id the document stores, so it can be
+    // chopped later exactly as an upload can.
+    expect(engineSpies.registerSourceBytes).toHaveBeenCalledWith('recording-1', expect.anything())
+    // Never probed: the clock that made it already measured it.
+    expect(decoder.probeDuration).not.toHaveBeenCalled()
+
+    // And from here it is indistinguishable — the same assignment gesture, the
+    // same render-before-the-document-moves rule, the same pad.
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
+      target: { value: 'recording-1' },
+    })
+
+    expect(await screen.findByRole('button', { name: 'Play Pad 1 — Recording 1' })).toBeTruthy()
+  })
+
+  it('says it will stop the loop, then stops it, and is unmistakable while it runs', async () => {
+    await hydratedDeck()
+    // The user is told before it happens, not after.
+    expect(screen.getByText(/Recording stops the loop/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await screen.findByRole('button', { name: 'Stop' })
+
+    await startRecording()
+
+    // Stopped through the state the whole deck reads, not just at the engine:
+    // the loop would otherwise be baked into the sample, unrecoverably.
+    expect(engineSpies.stop).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy()
+    // Unmistakable, with elapsed time and a stop control.
+    expect(screen.getByText('Recording')).toBeTruthy()
+    expect(screen.getByText('0:00')).toBeTruthy()
+    // And said out loud, for anyone not watching it.
+    expect(screen.getByRole('status').textContent).toBe(MIC_LIVE_ANNOUNCEMENT)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(MIC_OFF_ANNOUNCEMENT),
+    )
+    expect(screen.queryByText('Recording')).toBeNull()
+  })
+
+  it('asks for the microphone only on record, and ends every input on stop', async () => {
+    await hydratedDeck()
+
+    // Never at startup, and never speculatively.
+    expect(microphone.openMicrophone).not.toHaveBeenCalled()
+
+    await startRecording()
+    expect(microphone.control.tracks.map((track) => track.readyState)).toEqual(['live', 'live'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    // Ended by name rather than dropped by reference — this is what puts the
+    // browser's own recording indicator out.
+    await waitFor(() =>
+      expect(microphone.control.tracks.map((track) => track.readyState)).toEqual([
+        'ended',
+        'ended',
+      ]),
+    )
+  })
+
+  it('releases the microphone even when the recording itself fails', async () => {
+    await hydratedDeck()
+    await startRecording()
+    microphone.control.failure = new Error('the recorder gave up')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('project is unchanged')
+    // A failed take must not be a mic left open.
+    expect(microphone.control.tracks.every((track) => track.readyState === 'ended')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Record from microphone' })).toBeTruthy()
+  })
+
+  it('explains a refused permission and leaves the project byte-identical', async () => {
+    const saved = setTransportBpm(cycleActivePatternStep(createInitialProjectState(), 'kick', 4), 133)
+    await saveProjectState(saved)
+    await hydratedDeck()
+    microphone.control.denial = new Error('NotAllowedError')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record from microphone' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(MICROPHONE_DENIED_MESSAGE)
+    // Nothing was captured, so nothing about the mic is claimed either way.
+    expect(screen.queryByText('Recording')).toBeNull()
+    expect(screen.getByRole('status').textContent).toBe('')
+
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    expect(await loadProjectState()).toEqual(saved)
+
+    // A normal, dismissible failure — the deck stays open and recordable.
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Record from microphone' })).toBeTruthy()
+  })
+
+  it('refuses an over-long take at the same gate an over-long file hits', async () => {
+    // A take long enough to refuse, without waiting six minutes for it.
+    const clock = { now: 0 }
+    vi.spyOn(performance, 'now').mockImplementation(() => clock.now)
+    await hydratedDeck()
+
+    await startRecording()
+    clock.now = (MAX_SOURCE_SECONDS + 1) * 1000
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('6 minutes')
+    // The same refusal as a file: nothing decoded, nothing kept, no source.
+    expect(decoder.decodeSample).not.toHaveBeenCalled()
+    expect(engineSpies.registerSourceBytes).not.toHaveBeenCalled()
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    expect(within(sourceList).queryByText('Recording 1')).toBeNull()
+    // And the microphone still went off.
+    expect(microphone.control.tracks.every((track) => track.readyState === 'ended')).toBe(true)
+  })
+
+  it('says nothing was captured when a take is stopped before it caught anything', async () => {
+    microphone.control.blob = new Blob([], { type: 'audio/webm' })
+    await hydratedDeck()
+
+    await startRecording()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+
+    // The intake gate would call an empty take undecodable, which blames the
+    // browser for something the user did. It is an empty recording, and the
+    // deck says so.
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('too short to keep')
+    expect(decoder.decodeSample).not.toHaveBeenCalled()
+  })
+})
+
 describe('App sampler workflow', () => {
   it('assigns the curated source, programs its lane, and plays it live without changing the pattern', async () => {
     render(createElement(App))
@@ -434,6 +650,7 @@ afterEach(() => {
   cleanup()
   Reflect.deleteProperty(navigator, 'clipboard')
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('App sharing workflow', () => {

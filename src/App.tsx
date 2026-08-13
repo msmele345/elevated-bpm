@@ -70,6 +70,7 @@ import {
   openingRegionForSource,
   padsUsingSource,
   type AvailableAudio,
+  type SampleOrigin,
   type SampleRegion,
   type SampleSource,
   type SamplerParamId,
@@ -82,6 +83,20 @@ import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
 import { createSampleIntake } from './audio/sampleIntake'
+import { openMicrophone, type MicrophoneSession } from './audio/microphone'
+import {
+  EMPTY_RECORDING_MESSAGE,
+  IDLE_RECORDING,
+  MICROPHONE_DENIED_MESSAGE,
+  RECORDING_FAILED_MESSAGE,
+  elapsedSeconds,
+  microphoneOpened,
+  microphoneReleased,
+  recordingFileName,
+  requestMicrophone,
+  stopRequested,
+  type RecordingState,
+} from './model/recording'
 import { createAutosaver } from './storage/autosave'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import {
@@ -158,6 +173,15 @@ export default function App() {
   // Durability is requested once there is user-created audio worth protecting,
   // and not at startup, where it would be a permission prompt about nothing.
   const persistenceRequested = useRef(false)
+  /**
+   * Whether the microphone is live, and nothing else is allowed to have an
+   * opinion about it. Mirrored in a ref because a transition has to be read
+   * back inside the same async handler that made it, before React re-renders.
+   */
+  const [recordingState, setRecordingState] = useState(IDLE_RECORDING)
+  const recordingRef = useRef(recordingState)
+  /** The open session, held only while one is running. */
+  const micSessionRef = useRef<MicrophoneSession | null>(null)
   const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
   const [isSharing, setIsSharing] = useState(false)
   const [sharedUrl, setSharedUrl] = useState<string | null>(null)
@@ -654,8 +678,20 @@ export default function App() {
    * arrive in one transition, never as two edits a save could land between.
    */
   const handleLoadFile = useCallback(
-    async (file: File, padId: PadLaneId | null, relinking = false) => {
-      const outcome = await sampleIntake.load(file)
+    async (
+      file: File,
+      padId: PadLaneId | null,
+      options: {
+        /** A repair rather than a choice, so the pad keeps the name it wears. */
+        relinking?: boolean
+        origin?: SampleOrigin
+        knownDuration?: number
+      } = {},
+    ) => {
+      const outcome = await sampleIntake.load(file, {
+        origin: options.origin,
+        knownDuration: options.knownDuration,
+      })
       if (outcome.status === 'rejected') {
         setIntakeError(outcome.rejection.message)
         return
@@ -673,7 +709,7 @@ export default function App() {
         if (padId === null) return withSource
         // Relinking is a repair, so the pad keeps the name the user reads on
         // it; a plain assignment is a choice and takes the file's name.
-        return relinking
+        return options.relinking
           ? relinkSamplerPad(withSource, padId, outcome.source.id)
           : assignSourceToSamplerPad(withSource, padId, outcome.source.id)
       })
@@ -689,9 +725,95 @@ export default function App() {
 
   /** Point a pad that lost its audio at a file that has it again. */
   const handleRelinkPad = useCallback(
-    (file: File, padId: PadLaneId) => handleLoadFile(file, padId, true),
+    (file: File, padId: PadLaneId) => handleLoadFile(file, padId, { relinking: true }),
     [handleLoadFile],
   )
+
+  /**
+   * Silence the loop, through the state the whole deck reads. Calling
+   * `engine.stop()` alone would leave the play control, the playhead and the
+   * room light all believing the loop was still running.
+   */
+  const stopTransport = useCallback(() => {
+    if (!isPlayingRef.current) return
+    engine.stop()
+    setIsPlaying(false)
+  }, [])
+
+  /** Move the machine and read back what it became, in one step. */
+  const advanceRecording = useCallback(
+    (transition: (state: RecordingState) => RecordingState) => {
+      const advanced = transition(recordingRef.current)
+      recordingRef.current = advanced
+      setRecordingState(advanced)
+      return advanced
+    },
+    [],
+  )
+
+  /**
+   * Ask for the microphone — only here, only because the user chose to, and
+   * never at startup. The loop stops first: recording over it would bake the
+   * loop into the sample with no way to undo that, and it is also the loudest
+   * thing the microphone could be pointed at.
+   */
+  const handleStartRecording = useCallback(async () => {
+    if (advanceRecording(requestMicrophone).status !== 'requesting') return
+    stopTransport()
+    try {
+      micSessionRef.current = await openMicrophone()
+    } catch {
+      // A refusal is a normal, dismissible failure, worded like a refused file.
+      advanceRecording(microphoneReleased)
+      setIntakeError(MICROPHONE_DENIED_MESSAGE)
+      return
+    }
+    advanceRecording((state) => microphoneOpened(state, performance.now()))
+  }, [advanceRecording, stopTransport])
+
+  /**
+   * Stop, and bring the take in as a source. The recorder is flushed first and
+   * the inputs are released in a `finally`, so the browser's own recording
+   * indicator goes out whether the take succeeded or failed.
+   */
+  const handleStopRecording = useCallback(async () => {
+    // Read before the transition, so there is no path that reaches "stopping"
+    // with nothing to stop — which would leave the indicator claiming a live
+    // microphone that nothing would ever release.
+    const session = micSessionRef.current
+    if (!session) return
+    const stopping = advanceRecording(stopRequested)
+    if (stopping.status !== 'stopping') return
+
+    let captured: Blob
+    try {
+      captured = await session.finish()
+    } catch {
+      setIntakeError(RECORDING_FAILED_MESSAGE)
+      return
+    } finally {
+      // Stopped by name rather than dropped by reference: granting permission
+      // once must not mean being listened to continuously.
+      for (const track of session.tracks) track.stop()
+      micSessionRef.current = null
+      advanceRecording(microphoneReleased)
+    }
+
+    if (captured.size === 0) {
+      setIntakeError(EMPTY_RECORDING_MESSAGE)
+      return
+    }
+
+    // The clock that made the take measured it, so the gate reads that rather
+    // than probing a container that commonly declares no duration at all.
+    const seconds = elapsedSeconds(stopping, performance.now())
+    const name = recordingFileName(sourcesRef.current, captured.type)
+    // From here it is a file, and travels the exact path an upload does.
+    await handleLoadFile(new File([captured], name, { type: captured.type }), null, {
+      origin: 'recording',
+      knownDuration: seconds,
+    })
+  }, [advanceRecording, handleLoadFile])
 
   /**
    * Reclaim a source. The pads it is under keep their regions and so keep their
@@ -721,13 +843,12 @@ export default function App() {
 
   const handleTogglePlay = useCallback(async () => {
     if (isPlayingRef.current) {
-      engine.stop()
-      setIsPlaying(false)
+      stopTransport()
     } else {
       await engine.play()
       setIsPlaying(true)
     }
-  }, [])
+  }, [stopTransport])
 
   const handleStabAttack = useCallback((source: string, midi: number) => {
     // Sound first: the note is attacked before any bookkeeping, so watching
@@ -1013,6 +1134,9 @@ export default function App() {
         storageNotice={storageNotice}
         sourceToDelete={sourceToDelete}
         bpm={bpm}
+        recording={recordingState}
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
         onAssign={handleAssignSamplerSource}
         onOpenEditor={handleOpenEditor}
         onFitChange={handleFitChange}

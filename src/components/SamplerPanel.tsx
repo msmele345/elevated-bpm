@@ -15,6 +15,13 @@ import {
   type SamplerParamId,
   type SamplerSettings,
 } from '../model/sampler'
+import {
+  RECORDING_HINT,
+  elapsedSeconds,
+  formatElapsed,
+  isMicrophoneLive,
+  type RecordingState,
+} from '../model/recording'
 import { secondsPerStep } from '../model/transport'
 import type { LaneId, PadLane, PadLaneId } from '../model/types'
 import { Knob } from './Knob'
@@ -42,6 +49,28 @@ function deleteWarning(settings: SamplerSettings, source: SampleSource): string 
   } sounding, but can no longer be re-chopped.`
 }
 
+/**
+ * How often the elapsed readout is redrawn. Display time, not musical time —
+ * the deck's clock rule is about note scheduling, and nothing here is heard.
+ */
+const ELAPSED_TICK_MS = 500
+
+/**
+ * The elapsed readout, which ticks itself. It is its own component so a running
+ * clock redraws four characters twice a second instead of the whole panel,
+ * keeping the render discipline Phase 9 set.
+ */
+function RecordingElapsed({ state }: { state: RecordingState }) {
+  const [now, setNow] = useState(() => performance.now())
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(performance.now()), ELAPSED_TICK_MS)
+    return () => window.clearInterval(tick)
+  }, [])
+  return (
+    <span className="sampler-recording-elapsed">{formatElapsed(elapsedSeconds(state, now))}</span>
+  )
+}
+
 interface SamplerPanelProps {
   lanes: PadLane[]
   settings: SamplerSettings
@@ -56,6 +85,10 @@ interface SamplerPanelProps {
   sourceToDelete: string | null
   /** Fit is a fraction of the bar, so its readout moves with the tempo. */
   bpm: number
+  /** The one authority on whether the microphone is live. */
+  recording: RecordingState
+  onStartRecording: () => void
+  onStopRecording: () => void
   onAssign: (padId: PadLaneId, sourceId: string) => void
   onOpenEditor: (sourceId: string, padId: PadLaneId | null) => void
   onFitChange: (padId: PadLaneId, fit: number | null) => void
@@ -86,6 +119,9 @@ function SamplerInstrument({
   storageNotice,
   sourceToDelete,
   bpm,
+  recording,
+  onStartRecording,
+  onStopRecording,
   onAssign,
   onOpenEditor,
   onFitChange,
@@ -230,7 +266,51 @@ function SamplerInstrument({
         </label>
         {/* The limits are stated before the user waits on anything. */}
         <p className="sampler-intake-hint">{INTAKE_LIMITS_HINT} Drop one on a pad to load it there.</p>
+
+        <div className="sampler-record">
+          {recording.status === 'idle' && (
+            <button type="button" className="sampler-record-start" onClick={onStartRecording}>
+              Record from microphone
+            </button>
+          )}
+          {recording.status === 'requesting' && (
+            // Distinct copy, so a browser prompt the user has not answered yet
+            // reads as waiting on them rather than as a frozen deck. There is
+            // no cancel here because the prompt itself is the cancel.
+            <button type="button" className="sampler-record-start" disabled>
+              Waiting for permission…
+            </button>
+          )}
+          {isMicrophoneLive(recording) && (
+            <div className="sampler-recording">
+              <span className="sampler-recording-dot" aria-hidden="true" />
+              <span className="sampler-recording-label">Recording</span>
+              <RecordingElapsed state={recording} />
+              <button
+                type="button"
+                className="sampler-record-stop"
+                // Still live while the recorder flushes, so the indicator is
+                // honest — but there is nothing left to ask for.
+                disabled={recording.status === 'stopping'}
+                onClick={onStopRecording}
+              >
+                Stop recording
+              </button>
+            </div>
+          )}
+          {/* Said before it happens, once, quietly. */}
+          <p className="sampler-intake-hint">{RECORDING_HINT}</p>
+        </div>
       </div>
+
+      {/*
+        Whether the mic is live, for anyone not watching the indicator. It
+        carries the state change alone and never the ticking clock, which
+        would otherwise be read aloud twice a second.
+      */}
+      <p className="sampler-recording-announcement" role="status">
+        {recording.announcement}
+      </p>
 
       {intakeError && (
         <div className="sampler-notice is-error" role="alert">

@@ -1916,6 +1916,151 @@ body::before {
   line-height: 1.5;
 }
 
+/* Recording takes the whole width under the load row: while it runs it is the
+   loudest thing on the panel, which is the point. */
+.sampler-record {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* The same pressed-steel key as the file picker beside it — bringing audio in
+   is one job with two doors, and they should not look like different machines. */
+.sampler-record-start {
+  flex: none;
+  padding: 8px 14px;
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sampler-record-start:not([aria-disabled='true']):hover {
+  background: var(--key-face-hover);
+}
+
+.sampler-record-start:not([aria-disabled='true']):active {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+.sampler-record-start[aria-disabled='true'],
+.sampler-record-stop[aria-disabled='true'] {
+  color: var(--ink-dim);
+  cursor: progress;
+}
+
+.sampler-record-start:focus-visible,
+.sampler-record-stop:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Lit red and impossible to mistake for anything else on the deck. It sits
+   beside the stop control rather than around it, so that control can be one
+   button that never unmounts — see the comment in SamplerPanel. */
+.sampler-recording {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--quad-0);
+  border-radius: 6px;
+  background: var(--well-bg);
+  box-shadow:
+    var(--well-shadow),
+    0 0 18px rgb(255 77 51 / 0.35);
+}
+
+.sampler-recording-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--quad-0);
+  box-shadow: 0 0 10px var(--quad-0);
+  animation: recording-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* The dot stays lit rather than blinking. It is an indicator before it is an
+   animation, so what it must never do is go out. */
+@media (prefers-reduced-motion: reduce) {
+  .sampler-recording-dot {
+    animation: none;
+  }
+}
+
+.sampler-recording-label {
+  color: var(--quad-0);
+  font-family: var(--font-display);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.sampler-recording-elapsed {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Deliberately the largest control on the panel: a user who wants this to
+   stop should not have to look for the way to stop it. */
+.sampler-record-stop {
+  padding: 12px 26px;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--quad-0);
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sampler-record-stop:not([aria-disabled='true']):hover {
+  background: var(--key-face-hover);
+}
+
+.sampler-record-stop:not([aria-disabled='true']):active {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+/* The indicator is already unmistakable on screen; this is the same news for
+   anyone not looking at it, so it is heard rather than seen. Clipped rather
+   than hidden, so assistive technology still reads it. */
+.sampler-recording-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* A refusal wears the same plate as a share error — see the .share-notice
    rules it is grouped into above; only its own spacing lives here. */
 .sampler-notice {

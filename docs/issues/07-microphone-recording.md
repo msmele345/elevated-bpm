@@ -276,15 +276,75 @@ What could **not** be reached: the headless browser has no audio output device
 (`The AudioContext encountered an error from the audio device or the WebAudio
 renderer`), so `Tone.start()` never resolves and the deck's audio never runs
 there at all — the Play control never engages and no kit sample is ever
-requested. That leaves the *decode* of a real recording, and the transport stop
+requested. That left the *decode* of a real recording, and the transport stop
 as an audible event, unverified in-browser. Both are covered at the unit seams,
-and both are on the manual list above. **This is the slice's real remaining
-risk and it is the user's pass to make**, on a machine with an audio device: a
-real microphone with speakers on (the howl check), the browser's own indicator
-going out, and Safari's container decoding.
+and both were on the manual list above. **That was the slice's real remaining
+risk**, and it has since been closed for Chrome — see the next section. Safari
+remains open.
 
-**Measured, on the container question.** Real `MediaRecorder` in this Chromium
-produced `audio/webm;codecs=opus`, 18,650 bytes for ~1.2 s — which is what makes
+## The manual pass, on real hardware (Chrome)
+
+Run in the user's own Chrome on macOS, on a machine with a real audio device,
+with the user present for the checks only a human can make. This is the gap the
+headless pass could not reach.
+
+**The deck sounds, on a real device.** `contextState: "running"`,
+`sampleRate: 44100`, destination `channelCount: 2`; transport ticks 15610 →
+15818 in 500 ms; a meter off the destination read peak **−3.2 dB** with 23/24
+frames above −60 dB. Confirmed audible by the user.
+
+**Five takes through the real `getUserMedia` → `MediaRecorder` path.** Container
+was `audio/webm;codecs=opus` throughout; all mono at 44.1 kHz.
+
+| take | bytes | recorder clock | decoded | Δ | peak |
+|---|---|---|---|---|---|
+| 1 | 747,046 | 46.357 s | 46.379977 s | 23 ms | 1.00161 |
+| 2 | 1,319,916 | 81.946 s | 81.959977 s | 14 ms | 0.19375 |
+| 3 | — | — | 32.939977 s | — | 0.59119 |
+| 4 | 594,418 | — | 36.899977 s | — | 0.07353 |
+
+The decode-vs-recorder-clock deltas are the `knownDuration` decision paying off
+in the only place it matters: **≤23 ms**, and the durations that reached storage
+(46.38 / 81.96 / 32.94) are the recorder's numbers, not a probe's.
+
+**Session-wide invariants, across all five takes:** `createMediaStreamSource`
+called **zero** times — the feedback path is provably absent rather than merely
+unwired; every `MediaStreamTrack` ended (`live` → `ended`, 5/5); zero decode
+failures; the transport `stopped` with ticks frozen on record, and it stops
+*before* the permission await rather than after the mic opens; Play held
+(`aria-disabled="true"`) for the duration of a take and released after.
+
+**The release proof, which only the OS can give.** With the user watching, the
+Chrome tab indicator and the macOS menu-bar dot both **appeared on record and
+were gone after stop**. The app can only report on itself; this is the
+independent confirmation that the tracks were genuinely handed back. Done as a
+differential test — appear, then disappear — because absence alone is not
+observable by someone who has not seen the indicator present.
+
+**A recording is indistinguishable from an upload, downstream.** Named
+`Recording 1`…`5` with the extension stripped by the upload path's own
+`sourceNameFromFileName`; chopped in the same editor (87 onsets over 36.900 s on
+a real take, region set to 16.465 → 18.270 s); committed to a pad; sequenced and
+**heard by the user**, soloed so nothing else sounded. Persisted with
+`origin: "recording"` in a record shaped exactly like the shipped source
+(`id, name, origin, duration, channels`).
+
+**Two incidental findings, neither a defect.** Slices normalize to peak **0.95**
+on render — measured identically across four slices whose sources peaked from
+0.0735 to 1.0 — so a quiet take is still fully usable and the user does not have
+to shout at the mic. And the chop editor's default 0–4 s region landed on pure
+silence for a take where the user did not start speaking until second 16; the
+per-second RMS profile (−74 dB through second 15, −43 dB from second 16) made
+that legible immediately. Worth knowing when authoring guidance, not a bug.
+
+**Still open.** The deny path was not run — Chrome's permission state is sticky,
+so a Block poisons every later take, and it has to go last. Safari is untouched:
+`MediaRecorder` container support differs and the decode path must accept
+whatever it produces, which is the one substantive unknown left.
+
+**Measured, on the container question.** Real `MediaRecorder` in the headless
+Chromium produced `audio/webm;codecs=opus`, 18,650 bytes for ~1.2 s — the same
+container the later real-hardware pass saw — which is what makes
 `recordingFileName` yield `Recording 1.webm`, stripping back to `Recording 1`.
 A metadata probe of that blob reported **1.439982 s** for a 1.5 s take: finite
 and roughly right, contradicting the premise that a `MediaRecorder` container
@@ -329,3 +389,29 @@ permission…" indefinitely — which is correct, and is why that state has its 
 copy rather than sharing the idle button's. There is no cancel affordance
 because the prompt itself is the cancel; the cost is that a user who walks away
 from an open prompt has no Record button until they answer it.
+
+## Open defect: the loop is not held while the prompt is open
+
+Found during the real-hardware pass, **not yet fixed**.
+
+`isMicrophoneLive` is `'recording' | 'stopping'` by design — asking is not
+capturing, and that distinction is what lets the MIC_OFF announcement fire
+exactly when the mic was ever actually on. But `App` also uses it to guard Play,
+and `'requesting'` is a long window the user controls, because Chrome does not
+block the page while a permission prompt is open:
+
+1. Record → the transport stops, status `'requesting'`, Play **not** held
+2. Press Play → the guard sees the mic is not live → **the loop starts**
+3. Click Allow → the mic opens → **loop and microphone running together**
+
+That is the condition AC5's rule forbids and the howl `RECORDING_HINT` warns
+about. It is the same class as the defect review already caught — "the loop
+could be restarted mid-take" — surviving in the one window that fix did not
+cover. Confirmed by reading `App.tsx` and by observing `aria-disabled` absent on
+the Play control while a real prompt was pending; not yet reproduced end to end.
+
+The fix is not to widen `isMicrophoneLive`, which would make the announcement
+lie about a refused permission. It wants a second selector — the set of states
+in which the transport must not run (`requesting | recording | stopping`) is
+simply not the same set as the states in which the microphone is live, and
+conflating them is what caused this.

@@ -8,6 +8,7 @@ import {
   collectUnreferencedAudio,
   deleteSource,
   loadSlice,
+  loadSlicesFor,
   loadSource,
   loadStoredAudio,
   saveSlice,
@@ -104,6 +105,19 @@ describe('loading a document’s audio', () => {
 
     expect(audio.padSlices).toEqual([])
     expect(audio.available.slices.size).toBe(0)
+  })
+
+  it('gathers named slices for a bundle, omitting the ones that are gone', async () => {
+    // What a bundle is assembled from. A key with nothing behind it is left out
+    // rather than faked, so the caller can see a pad has lost its audio and
+    // refuse to write a bundle it would itself refuse to open.
+    const other: SampleRegion = { sourceId: 'upload-1', start: 1, duration: 0.5 }
+    const slice = renderSlice(sourceFake(2), REGION)
+    await saveSlice(sliceKey(REGION), slice)
+
+    const gathered = await loadSlicesFor([sliceKey(REGION), sliceKey(other)])
+
+    expect(gathered).toEqual(new Map([[sliceKey(REGION), slice]]))
   })
 })
 

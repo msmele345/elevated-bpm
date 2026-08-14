@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   activePattern,
+  addSource,
   assignSourceToSamplerPad,
+  commitRegionToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
   PROJECT_STATE_VERSION,
@@ -19,12 +21,25 @@ import {
 import { DEFAULT_FX_SETTINGS } from './fx'
 import { DEFAULT_MASTER_SETTINGS } from './master'
 import { createInitialPattern, cycleStep } from './pattern'
-import { CURATED_SAMPLE_SOURCE, samplerParamForPad } from './sampler'
+import {
+  CURATED_SAMPLE_SOURCE,
+  samplerParamForPad,
+  type AvailableAudio,
+  type SampleRegion,
+} from './sampler'
+import { sliceKey, type Slice } from './slice'
+import {
+  BUNDLE_FILE_EXTENSION,
+  createBundle,
+  readBundle,
+  SENDABLE_BUNDLE_LIMIT,
+} from './bundle'
 import {
   createShareUrl,
   PRACTICAL_SHARE_URL_LIMIT,
   projectWithSharedBeat,
   readSharedBeat,
+  sharedAudioNotice,
   SHARE_QUERY_PARAM,
 } from './share'
 import type { DrumLaneId, NoteLaneId, PadLaneId } from './types'
@@ -416,5 +431,334 @@ describe('share URL', () => {
     expect(preview.prefs).toBe(recipient.prefs)
     expect(activePattern(recipient)).toBe(ownPattern)
     expect(ownPattern.lanes[0].steps[2].on).toBe(true)
+  })
+})
+
+/**
+ * White noise, which is the *worst* case a bundle can be asked to carry: audio
+ * that compresses no better than random bytes. Sizing the format against it is
+ * what makes the ceiling below an honest promise rather than a lucky fixture.
+ */
+function noisePcm(samples: number, seed = 1): Int16Array {
+  const pcm = new Int16Array(samples)
+  let x = seed
+  for (let at = 0; at < samples; at += 1) {
+    x ^= x << 13
+    x >>>= 0
+    x ^= x >>> 17
+    x ^= x << 5
+    x >>>= 0
+    pcm[at] = (x & 0xffff) - 32_768
+  }
+  return pcm
+}
+
+function sliceFixture(seconds: number, channels = 2, sampleRate = 48_000, seed = 1): Slice {
+  const frames = Math.round(seconds * sampleRate)
+  return { sampleRate, channels, frames, pcm: noisePcm(frames * channels, seed) }
+}
+
+const BREAK = {
+  id: 'upload-break',
+  name: 'Warehouse Break',
+  origin: 'upload' as const,
+  duration: 8,
+  channels: 2,
+}
+
+/** A beat with two chops cut out of one uploaded break, and the audio for both. */
+function senderWithChops(): { project: ProjectState; slices: Map<string, Slice> } {
+  const first: SampleRegion = { sourceId: BREAK.id, start: 0.5, duration: 1 }
+  const second: SampleRegion = { sourceId: BREAK.id, start: 4, duration: 0.25 }
+  let project = addSource(createInitialProjectState(), BREAK)
+  project = commitRegionToSamplerPad(project, 'pad1', first)
+  project = commitRegionToSamplerPad(project, 'pad3', second)
+  project = cycleActivePatternStep(project, 'pad1', 0)
+  project = cycleActivePatternStep(project, 'pad3', 6)
+  project = cycleActivePatternStep(project, 'pad3', 6)
+  project = setSamplerParamValue(project, samplerParamForPad('pad1').id, -5)
+  project = setTransportBpm(project, 138)
+  return {
+    project,
+    slices: new Map([
+      [sliceKey(first), sliceFixture(0.01, 2, 48_000, 7)],
+      [sliceKey(second), sliceFixture(0.005, 1, 44_100, 11)],
+    ]),
+  }
+}
+
+async function exportedBytes(
+  project: ProjectState,
+  slices: Map<string, Slice>,
+): Promise<ArrayBuffer> {
+  const bundle = await createBundle(project, slices)
+  if (bundle.status !== 'ready') throw new Error(`Expected a bundle, got ${bundle.status}`)
+  return bundle.blob.arrayBuffer()
+}
+
+/**
+ * A bundle's wire format, spelled out here rather than reached for through the
+ * writer — the point of the cases below is a file this codebase did not
+ * produce, so the tests must not track whatever `bundle.ts` happens to do.
+ */
+const BUNDLE_MAGIC = 'elevated-bpm-bundle/'
+
+function bundleBody(bytes: Uint8Array): Uint8Array {
+  return bytes.subarray(bytes.indexOf(0x0a) + 1)
+}
+
+function carriedIn(header: string, body: Uint8Array): ArrayBuffer {
+  const prefix = new TextEncoder().encode(header)
+  const file = new Uint8Array(prefix.length + body.length)
+  file.set(prefix)
+  file.set(body, prefix.length)
+  return file.buffer as ArrayBuffer
+}
+
+async function gzipped(text: string): Promise<Uint8Array> {
+  const stream = new CompressionStream('gzip')
+  const output = new Response(stream.readable).arrayBuffer()
+  const writer = stream.writable.getWriter()
+  await writer.write(new TextEncoder().encode(text))
+  await writer.close()
+  return new Uint8Array(await output)
+}
+
+async function gunzipped(bytes: Uint8Array): Promise<string> {
+  const stream = new DecompressionStream('gzip')
+  const output = new Response(stream.readable).arrayBuffer()
+  const writer = stream.writable.getWriter()
+  await writer.write(bytes)
+  await writer.close()
+  return new TextDecoder().decode(await output)
+}
+
+/** Rewrite what is inside a bundle: an older build's document, or a damaged one. */
+async function rewriteBundleDocument(
+  bytes: Uint8Array,
+  rewrite: (document: unknown) => unknown,
+): Promise<ArrayBuffer> {
+  const document = JSON.parse(await gunzipped(bundleBody(bytes)))
+  return carriedIn(
+    `${BUNDLE_MAGIC}${PROJECT_STATE_VERSION}\n`,
+    await gzipped(JSON.stringify(rewrite(document))),
+  )
+}
+
+/** The same bundle, stamped as though a different build had written it. */
+function withBundleVersion(bytes: Uint8Array, version: number): ArrayBuffer {
+  return carriedIn(`${BUNDLE_MAGIC}${version}\n`, bundleBody(bytes))
+}
+
+describe('beat bundle', () => {
+  it('reproduces the beat and its pad audio on a machine that has neither', async () => {
+    const { project: sender, slices } = senderWithChops()
+
+    const opened = await readBundle(await exportedBytes(sender, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(activePattern(opened.project)).toEqual(activePattern(sender))
+    expect(opened.project.transport.bpm).toBe(138)
+    expect(opened.project.instrumentSettings).toEqual(sender.instrumentSettings)
+    expect(opened.project.sources).toEqual(sender.sources)
+    // The audio is the whole reason a bundle is worth the extra step over a
+    // link, so it has to come back sample for sample.
+    expect(new Map(opened.slices)).toEqual(slices)
+  })
+
+  it('names itself after the beat and blanks the recipient-owned fields a link does', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const withProgress: ProjectState = {
+      ...sender,
+      lessonProgress: { 'four-on-the-floor': { completed: true, dismissed: true } },
+      prefs: { reducedFlashes: true },
+      activeLessonId: 'filter-sweep',
+    }
+
+    const bundle = await createBundle(withProgress, slices)
+
+    if (bundle.status !== 'ready') throw new Error('Expected a bundle')
+    expect(bundle.fileName.endsWith(BUNDLE_FILE_EXTENSION)).toBe(true)
+    expect(bundle.fileName).toContain(activePattern(sender).name)
+    const opened = await readBundle(await bundle.blob.arrayBuffer())
+    if (opened.status !== 'ready') throw new Error('Expected a playable bundle')
+    expect(opened.project.lessonProgress).toEqual({})
+    expect(opened.project.prefs).toEqual({})
+    expect(opened.project.activeLessonId).toBeNull()
+  })
+
+  it('refuses to write a bundle whose own pad has lost its audio, naming that pad', async () => {
+    const { project: sender, slices } = senderWithChops()
+    // Pad 3's slice is gone from storage: the pad is silent here and would be
+    // silent there, so exporting it would produce a file this build refuses.
+    slices.delete(sliceKey(sender.instrumentSettings.sampler.pad3.region!))
+
+    const bundle = await createBundle(sender, slices)
+
+    expect(bundle).toEqual({
+      status: 'error',
+      code: 'silent-pad',
+      message:
+        'Pad 3 (Warehouse Break) has no audio to put in a bundle. Relink it, then export again.',
+    })
+  })
+
+  it('keeps four one-second stereo slices inside the size that makes a bundle sendable', async () => {
+    let sender = addSource(createInitialProjectState(), BREAK)
+    const slices = new Map<string, Slice>()
+    for (const [index, pad] of (['pad1', 'pad2', 'pad3', 'pad4'] as PadLaneId[]).entries()) {
+      const region: SampleRegion = { sourceId: BREAK.id, start: index, duration: 1 }
+      sender = commitRegionToSamplerPad(sender, pad, region)
+      slices.set(sliceKey(region), sliceFixture(1, 2, 48_000, index + 1))
+    }
+
+    const bytes = await exportedBytes(sender, slices)
+
+    // Four seconds of 16-bit stereo at 48 kHz is 768 KB of PCM. Base64 inflates
+    // it by a third and gzip takes that back, so the file lands near the raw
+    // audio — the arithmetic the slice format in EB2-05 was chosen for. Float32
+    // slices would be roughly double and would break this.
+    expect(bytes.byteLength).toBeLessThan(SENDABLE_BUNDLE_LIMIT)
+    // And a floor, because a bundle that quietly stopped carrying its audio
+    // would pass a ceiling on its own.
+    expect(bytes.byteLength).toBeGreaterThan(600_000)
+  })
+
+  it('opens a bundle written at an older schema version', async () => {
+    // Bundles are files people keep, so they have to survive schema bumps. This
+    // works because the decode path runs every payload through the same
+    // migration a saved document takes — asserted here so a later change that
+    // skips it fails loudly.
+    const { project: sender, slices } = senderWithChops()
+    const bytes = new Uint8Array(await exportedBytes(sender, slices))
+    const older = await rewriteBundleDocument(bytes, (document) => ({
+      ...(document as Record<string, unknown>),
+      project: v6ShareDocument(sender),
+    }))
+
+    const opened = await readBundle(older)
+
+    if (opened.status !== 'ready') throw new Error(`Expected an older bundle to open, got ${opened.status}`)
+    expect(opened.project.version).toBe(PROJECT_STATE_VERSION)
+    expect(activePattern(opened.project).lanes).toEqual(activePattern(sender).lanes)
+    expect(opened.project.transport.bpm).toBe(138)
+    // A version that predates the sampler brings empty pads, so the bundle
+    // needs no audio to be complete.
+    expect(opened.project.instrumentSettings.sampler.pad1.region).toBeNull()
+  })
+
+  it('refuses a bundle from a newer build with the unsupported-version message', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const bytes = new Uint8Array(await exportedBytes(sender, slices))
+
+    const opened = await readBundle(withBundleVersion(bytes, PROJECT_STATE_VERSION + 1))
+
+    expect(opened).toEqual({
+      status: 'error',
+      code: 'unsupported-version',
+      message:
+        'This shared beat uses an incompatible version of Elevated BPM and cannot be opened here.',
+    })
+  })
+
+  /**
+   * The accepted cost of reusing the share pipeline is opacity: nobody can open
+   * a bundle and look inside it, so the refusal message is the only diagnostic
+   * anyone will ever get. Each of these has to name a different thing.
+   */
+  it('tells truncation, an unreadable document, missing audio and a stray file apart', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const bytes = new Uint8Array(await exportedBytes(sender, slices))
+
+    const truncated = await readBundle(bytes.slice(0, Math.floor(bytes.length / 2)))
+    const unreadable = await rewriteBundleDocument(bytes, () => ({ project: { nonsense: true } }))
+    const withoutAudio = await rewriteBundleDocument(bytes, (document) => ({
+      ...(document as Record<string, unknown>),
+      slices: {},
+    }))
+    const strayFile = new TextEncoder().encode('just a text file, not a bundle at all')
+
+    expect(truncated).toEqual({
+      status: 'error',
+      code: 'truncated',
+      message:
+        'This bundle is incomplete — the file was cut short before it finished. Ask whoever sent it to send it again.',
+    })
+    expect(await readBundle(unreadable)).toEqual({
+      status: 'error',
+      code: 'malformed',
+      message:
+        'This bundle opened, but the beat inside it could not be read. Your saved project is safe.',
+    })
+    // Two pads chopped from one break wear the same name, so the pad each one
+    // sits on is what makes the message actionable.
+    expect(await readBundle(withoutAudio)).toEqual({
+      status: 'error',
+      code: 'missing-audio',
+      message:
+        'This bundle is missing the audio for Pad 1 (Warehouse Break) and Pad 3 (Warehouse Break). Ask whoever sent it to export it again.',
+    })
+    expect(await readBundle(strayFile.buffer as ArrayBuffer)).toEqual({
+      status: 'error',
+      code: 'not-a-bundle',
+      message: 'This file is not an Elevated BPM bundle. Your saved project is safe.',
+    })
+  })
+
+  it('refuses a slice whose audio is not the size it claims, rather than playing rubbish', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const bytes = new Uint8Array(await exportedBytes(sender, slices))
+
+    const shortened = await rewriteBundleDocument(bytes, (document) => {
+      const payload = document as { slices: Record<string, { pcm: string }> }
+      const [key] = Object.keys(payload.slices)
+      return {
+        ...payload,
+        slices: {
+          ...payload.slices,
+          [key]: { ...payload.slices[key], pcm: payload.slices[key].pcm.slice(0, 8) },
+        },
+      }
+    })
+
+    expect(await readBundle(shortened)).toMatchObject({ status: 'error', code: 'malformed' })
+  })
+})
+
+describe('link degradation', () => {
+  const availableFor = (keys: string[]): AvailableAudio => ({
+    slices: new Set(keys),
+    sources: new Set<string>(),
+  })
+
+  it('names how many sounds could not travel and points at a bundle', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+    if (shared.status !== 'ready') throw new Error('Expected a playable shared beat')
+
+    // The recipient has one of the two chops already; the other could not travel.
+    const [firstKey] = [...slices.keys()]
+
+    expect(sharedAudioNotice(shared.project, availableFor([...slices.keys()]))).toBeNull()
+    expect(sharedAudioNotice(shared.project, availableFor([firstKey]))).toBe(
+      '1 sound could not travel: audio is far too large to fit in a link. Ask whoever sent it for a bundle file to hear it.',
+    )
+    expect(sharedAudioNotice(shared.project, availableFor([]))).toBe(
+      '2 sounds could not travel: audio is far too large to fit in a link. Ask whoever sent it for a bundle file to hear them.',
+    )
+  })
+
+  it('says nothing about a beat that never had any audio to lose', async () => {
+    const shared = await readSharedBeat(
+      await createShareUrl(
+        cycleActivePatternStep(createInitialProjectState(), 'kick', 0),
+        'https://elevated-bpm.example/',
+      ),
+    )
+    if (shared.status !== 'ready') throw new Error('Expected a playable shared beat')
+
+    expect(sharedAudioNotice(shared.project, availableFor([]))).toBeNull()
   })
 })

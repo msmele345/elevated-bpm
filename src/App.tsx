@@ -59,16 +59,21 @@ import {
   toggleLaneSolo,
   transposeActivePatternNote,
   updateLessonProgress,
+  type ProjectState,
 } from './model/projectState'
 import {
   createShareUrl,
   projectWithSharedBeat,
   readSharedBeat,
+  sharedAudioNotice,
   SHARE_QUERY_PARAM,
 } from './model/share'
+import { createBundle, padsNeedingAudio, readBundle } from './model/bundle'
 import {
   openingRegionForSource,
   padsUsingSource,
+  namedPad,
+  PAD_LANES,
   type AvailableAudio,
   type SampleRegion,
   type SampleSource,
@@ -102,6 +107,7 @@ import { loadProjectState, saveProjectState } from './storage/projectStore'
 import {
   collectUnreferencedAudio,
   deleteSource,
+  loadSlicesFor,
   loadSource,
   loadStoredAudio,
   saveSliceWithinQuota,
@@ -184,6 +190,9 @@ export default function App() {
   const micSessionRef = useRef<MicrophoneSession | null>(null)
   const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
   const [isSharing, setIsSharing] = useState(false)
+  // Assembling a bundle reads every pad's audio back out of storage, so unlike
+  // a link it is not instant and the action says so while it runs.
+  const [isBundling, setIsBundling] = useState(false)
   const [sharedUrl, setSharedUrl] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   // A session-only graduation overlay: it appears on the transition into an
@@ -584,6 +593,24 @@ export default function App() {
   const handleDismissStorageNotice = useCallback(() => setStorageNotice(null), [])
 
   /**
+   * Point the engine at exactly the audio one document owns.
+   *
+   * Registering is not enough by itself, because a *slice* — not a region — is
+   * what decides whether a pad sounds. A deck that **swaps** documents rather
+   * than editing one therefore has to take audio away as well as give it:
+   * entering and leaving a shared-beat preview are both that swap, and without
+   * the clear a pad the incoming beat leaves empty goes on playing whatever the
+   * outgoing one had put there.
+   */
+  const openAudioFor = useCallback(async (document: ProjectState) => {
+    const stored = await loadStoredAudio(document)
+    const sounding = new Set(stored.padSlices.map(([padId]) => padId))
+    for (const pad of PAD_LANES) if (!sounding.has(pad.id)) engine.clearSlice(pad.id)
+    for (const [padId, slice] of stored.padSlices) engine.registerSlice(padId, slice)
+    setAudio(stored.available)
+  }, [])
+
+  /**
    * Point a pad at a source. The audio has to be rendered before the document
    * moves: a pad that claimed a sound it could not make would be the silent
    * state EB2-06 models, arrived at by accident rather than by loss.
@@ -950,6 +977,106 @@ export default function App() {
     }
   }
 
+  /**
+   * Write a bundle: the same payload a link carries, plus the audio a link
+   * cannot. Assembly rather than processing — the slices were rendered and
+   * persisted when the chops were committed.
+   */
+  const handleExportBundle = async () => {
+    setIsBundling(true)
+    setOutgoingShareError(null)
+    try {
+      const needed = padsNeedingAudio(project.instrumentSettings.sampler)
+      const bundle = await createBundle(
+        project,
+        await loadSlicesFor(needed.map(({ key }) => key)),
+      )
+      if (bundle.status === 'error') {
+        // A pad silent here would be silent there, so this is a file this very
+        // build would refuse to open. Better to say so than to write it.
+        setOutgoingShareError(bundle.message)
+        return
+      }
+      const href = URL.createObjectURL(bundle.blob)
+      const link = document.createElement('a')
+      link.href = href
+      link.download = bundle.fileName
+      link.click()
+      // The handle owns a megabyte of audio, so it is given back — but only
+      // once the browser has had the click, which it takes synchronously.
+      window.setTimeout(() => URL.revokeObjectURL(href), 0)
+    } catch {
+      setOutgoingShareError(
+        'A bundle could not be written in this browser. Your project is still safe.',
+      )
+    } finally {
+      setIsBundling(false)
+    }
+  }
+
+  /**
+   * Open a bundle: the same preview-and-confirm a link gets, because trying
+   * someone else's beat must never cost you your own.
+   *
+   * The audio is registered before the document moves, so a pad never claims a
+   * sound it cannot make — and it is written to storage the way an upload's is,
+   * which is what lets a kept beat survive a reload. A preview that is backed
+   * out of leaves that audio referenced by nothing, and the sweep at next load
+   * is what collects it.
+   */
+  const handleOpenBundle = async (file: File) => {
+    setIncomingShareError(null)
+    setOutgoingShareError(null)
+    let opened
+    try {
+      opened = await readBundle(await file.arrayBuffer())
+    } catch {
+      setIncomingShareError(
+        'That bundle could not be read from disk. Your saved project is safe.',
+      )
+      return
+    }
+    if (opened.status === 'error') {
+      setIncomingShareError(opened.message)
+      return
+    }
+
+    // Whose project to give back on "Back to my project": the one already held
+    // if a beat is being previewed, so opening a second bundle cannot lose it.
+    const recipientProject = sharePreview?.recipientProject ?? project
+    const next = projectWithSharedBeat(recipientProject, opened.project)
+    const carried = new Map(opened.slices)
+    const needed = padsNeedingAudio(next.instrumentSettings.sampler)
+    const sounding = new Map(needed.map(({ padId, key }) => [padId, carried.get(key)]))
+    for (const pad of PAD_LANES) {
+      const slice = sounding.get(pad.id)
+      if (slice) engine.registerSlice(pad.id, slice)
+      else engine.clearSlice(pad.id)
+    }
+    // Goals describe what the *user* did, so a beat that arrives already built
+    // is inherited rather than earned — exactly as it is through a link.
+    inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
+      pattern: activePattern(next),
+      motion: NO_PARAM_MOTION,
+      bpm: next.transport.bpm,
+      chord: NO_CHORD_PLAY,
+    })
+    setSharePreview({ recipientProject })
+    setProject(next)
+    engine.setBpm(next.transport.bpm)
+    setAudio((held) => ({
+      ...held,
+      slices: new Set([...held.slices, ...carried.keys()]),
+    }))
+    for (const { padId, key } of needed) {
+      const slice = carried.get(key)
+      if (!slice) continue
+      await keepAudio({
+        slice: { key, value: slice, padName: namedPad(next.instrumentSettings.sampler, padId) },
+      })
+    }
+  }
+
   const handleKeepSharedBeat = async () => {
     try {
       await saveProjectState(project)
@@ -972,6 +1099,10 @@ export default function App() {
     inheritedLessonsRef.current = new Set()
     setSharePreview(null)
     removeShareFromAddress()
+    // A bundle put audio on the pads, so giving the document back is only half
+    // of it: the sound has to go back too, or the sender's chop keeps playing
+    // under the recipient's own beat.
+    void openAudioFor(sharePreview.recipientProject)
   }
 
   const handleDismissIncomingError = () => {
@@ -1020,9 +1151,15 @@ export default function App() {
         errorMessage={incomingShareError ?? outgoingShareError}
         shareReady={hydrated}
         isSharing={isSharing}
+        isBundling={isBundling}
         sharedUrl={sharedUrl}
         copied={shareCopied}
+        // Counted from the pads that landed silent, so a bundle — which carries
+        // its audio — says nothing, and a link says exactly what it cost.
+        degradedNotice={sharePreview ? sharedAudioNotice(project, audio) : null}
         onShare={handleShare}
+        onExportBundle={handleExportBundle}
+        onOpenBundle={handleOpenBundle}
         onKeep={handleKeepSharedBeat}
         onRestore={handleRestoreOwnProject}
         onDismissError={() => {

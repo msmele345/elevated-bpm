@@ -39,6 +39,25 @@ export function loadSlice(key: string): Promise<Slice | undefined> {
 }
 
 /**
+ * The audio behind a named set of slice keys — what a bundle is assembled from.
+ *
+ * A key with nothing behind it is left out rather than faked. That absence is
+ * the signal: it means a pad on this very deck has lost its audio, and the
+ * caller needs to see it to refuse writing a bundle it would itself refuse to
+ * open.
+ */
+export async function loadSlicesFor(
+  keys: Iterable<string>,
+): Promise<Map<string, Slice>> {
+  const gathered = new Map<string, Slice>()
+  for (const key of new Set(keys)) {
+    const slice = await loadSlice(key)
+    if (slice) gathered.set(key, slice)
+  }
+  return gathered
+}
+
+/**
  * A stored source: the bytes exactly as they arrived, plus when they arrived.
  * Compressed audio, so a six-minute track is a few megabytes here rather than
  * the hundred-plus its decoded form would be — and nothing decodes it until an

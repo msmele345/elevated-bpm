@@ -146,9 +146,22 @@ export interface SaveOutcome {
   evicted: readonly string[]
 }
 
-/** Persist a slice, making room by dropping sources if the browser refuses. */
-export function saveSliceWithinQuota(key: string, slice: Slice): Promise<SaveOutcome> {
-  return writeWithinQuota(() => saveSlice(key, slice))
+/**
+ * Persist a slice, making room by dropping sources if the browser refuses.
+ *
+ * `mayEvictSources` exists for one caller: a **shared beat being previewed**.
+ * Eviction spends the recipient's own audio, and a preview is not their work
+ * yet — they may back out of it, and backing out cannot give reclaimed bytes
+ * back. So a preview writes only into room that is already free, and when there
+ * is none the pad sounds now and says it will not survive a reload, which is
+ * the same honest answer a full disk already gets.
+ */
+export function saveSliceWithinQuota(
+  key: string,
+  slice: Slice,
+  { mayEvictSources = true }: { mayEvictSources?: boolean } = {},
+): Promise<SaveOutcome> {
+  return writeWithinQuota(() => saveSlice(key, slice), undefined, mayEvictSources)
 }
 
 /** Persist a source, making room by dropping *other* sources if the browser refuses. */
@@ -167,6 +180,7 @@ export function saveSourceWithinQuota(id: string, bytes: Blob): Promise<SaveOutc
 async function writeWithinQuota(
   write: () => Promise<void>,
   except?: string,
+  mayEvictSources = true,
 ): Promise<SaveOutcome> {
   const evicted: string[] = []
   for (;;) {
@@ -175,6 +189,7 @@ async function writeWithinQuota(
       return { status: 'saved', evicted }
     } catch (error) {
       if (!isOutOfRoom(error)) throw error
+      if (!mayEvictSources) return { status: 'full', evicted }
       const given = await evictOneSource(new Set([...evicted, ...(except ? [except] : [])]))
       if (given === undefined) return { status: 'full', evicted }
       evicted.push(given)

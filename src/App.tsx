@@ -318,11 +318,9 @@ export default function App() {
         // This is the one moment a referencing document is authoritative, which
         // is why the sweep lives here and not at write time.
         await collectUnreferencedAudio(referencedAudio(opening))
-        const stored = await loadStoredAudio(next)
         if (cancelled) return
         // Slices only, and no decode: this is the whole startup budget.
-        for (const [padId, slice] of stored.padSlices) engine.registerSlice(padId, slice)
-        setAudio(stored.available)
+        await openAudioFor(next)
       } catch {
         // A storage problem is never a broken app. The deck opens with its
         // pads reading as silent, and every one of them offers a relink.
@@ -532,10 +530,18 @@ export default function App() {
    * rather than ids, because a pad is the thing the user can act on.
    */
   const keepAudio = useCallback(
-    async (write: {
-      source?: { id: string; bytes: Blob }
-      slice?: { key: string; value: Slice; padName: string }
-    }) => {
+    async (
+      write: {
+        source?: { id: string; bytes: Blob }
+        slice?: { key: string; value: Slice; padName: string }
+      },
+      /**
+       * A shared beat being previewed may not spend the recipient's own audio
+       * to make room for itself. Eviction is not undoable, and backing out of a
+       * preview has to be free.
+       */
+      { mayEvictSources = true }: { mayEvictSources?: boolean } = {},
+    ) => {
       const evicted: string[] = []
       const unsaved: string[] = []
       try {
@@ -553,7 +559,9 @@ export default function App() {
           }
         }
         if (write.slice) {
-          const outcome = await saveSliceWithinQuota(write.slice.key, write.slice.value)
+          const outcome = await saveSliceWithinQuota(write.slice.key, write.slice.value, {
+            mayEvictSources,
+          })
           evicted.push(...outcome.evicted)
           if (outcome.status === 'saved') {
             const key = write.slice.key
@@ -593,22 +601,43 @@ export default function App() {
   const handleDismissStorageNotice = useCallback(() => setStorageNotice(null), [])
 
   /**
-   * Point the engine at exactly the audio one document owns.
+   * Point the engine at exactly the audio a set of pads owns — and at nothing
+   * else.
    *
    * Registering is not enough by itself, because a *slice* — not a region — is
    * what decides whether a pad sounds. A deck that **swaps** documents rather
    * than editing one therefore has to take audio away as well as give it:
-   * entering and leaving a shared-beat preview are both that swap, and without
-   * the clear a pad the incoming beat leaves empty goes on playing whatever the
-   * outgoing one had put there.
+   * opening a shared beat and backing out of one are both that swap, and
+   * without the clear a pad the incoming beat leaves empty goes on playing
+   * whatever the outgoing one had put there.
+   *
+   * The audio arrives as an argument rather than being fetched, because the
+   * three callers get it from three places: startup and restore read storage,
+   * and a bundle carries its own.
    */
-  const openAudioFor = useCallback(async (document: ProjectState) => {
-    const stored = await loadStoredAudio(document)
-    const sounding = new Set(stored.padSlices.map(([padId]) => padId))
-    for (const pad of PAD_LANES) if (!sounding.has(pad.id)) engine.clearSlice(pad.id)
-    for (const [padId, slice] of stored.padSlices) engine.registerSlice(padId, slice)
-    setAudio(stored.available)
+  const soundPads = useCallback((padSlices: Iterable<[PadLaneId, Slice]>) => {
+    const owned = new Map(padSlices)
+    for (const pad of PAD_LANES) {
+      const slice = owned.get(pad.id)
+      if (slice) engine.registerSlice(pad.id, slice)
+      else engine.clearSlice(pad.id)
+    }
   }, [])
+
+  /** Put one stored document's audio on the deck: startup, and backing out. */
+  const openAudioFor = useCallback(
+    async (state: ProjectState) => {
+      try {
+        const stored = await loadStoredAudio(state)
+        soundPads(stored.padSlices)
+        setAudio(stored.available)
+      } catch {
+        // A storage problem is never a broken app — here it costs the pads
+        // whatever they were already sounding, and nothing else.
+      }
+    },
+    [soundPads],
+  )
 
   /**
    * Point a pad at a source. The audio has to be rendered before the document
@@ -1045,14 +1074,14 @@ export default function App() {
     // if a beat is being previewed, so opening a second bundle cannot lose it.
     const recipientProject = sharePreview?.recipientProject ?? project
     const next = projectWithSharedBeat(recipientProject, opened.project)
-    const carried = new Map(opened.slices)
+    const carried = opened.slices
     const needed = padsNeedingAudio(next.instrumentSettings.sampler)
-    const sounding = new Map(needed.map(({ padId, key }) => [padId, carried.get(key)]))
-    for (const pad of PAD_LANES) {
-      const slice = sounding.get(pad.id)
-      if (slice) engine.registerSlice(pad.id, slice)
-      else engine.clearSlice(pad.id)
-    }
+    soundPads(
+      needed.flatMap(({ padId, key }) => {
+        const slice = carried.get(key)
+        return slice ? [[padId, slice] as [PadLaneId, Slice]] : []
+      }),
+    )
     // Goals describe what the *user* did, so a beat that arrives already built
     // is inherited rather than earned — exactly as it is through a link.
     inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
@@ -1071,9 +1100,14 @@ export default function App() {
     for (const { padId, key } of needed) {
       const slice = carried.get(key)
       if (!slice) continue
-      await keepAudio({
-        slice: { key, value: slice, padName: namedPad(next.instrumentSettings.sampler, padId) },
-      })
+      await keepAudio(
+        {
+          slice: { key, value: slice, padName: namedPad(next.instrumentSettings.sampler, padId) },
+        },
+        // Someone else's beat may not cost the recipient their own sounds to
+        // make room for itself — not while they can still hand it back.
+        { mayEvictSources: false },
+      )
     }
   }
 

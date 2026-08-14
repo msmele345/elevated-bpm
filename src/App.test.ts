@@ -1036,7 +1036,7 @@ describe('App beat bundles', () => {
     if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
     expect(activePattern(opened.project)).toEqual(activePattern(mine))
     expect(opened.project.transport.bpm).toBe(144)
-    expect(opened.slices).toEqual([[sliceKey(SENDER_CHOP), sliceFake()]])
+    expect(opened.slices).toEqual(new Map([[sliceKey(SENDER_CHOP), sliceFake()]]))
     // The object URL is a handle on a megabyte of audio; holding it would leak.
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:bundle'))
   })

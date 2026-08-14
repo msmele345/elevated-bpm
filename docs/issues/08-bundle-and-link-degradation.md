@@ -269,3 +269,38 @@ is deterministic and the hash matched, but the last step is the user's own.
 as an unhandled rejection all along — invisible until a bundle made truncation a
 case worth naming, at which point it surfaced in the test run. Both ends are now
 settled together in `decompressPayload`.
+
+## What the two-axis review changed
+
+The Standards axis found no documented-standard violations. The Spec axis found
+one real hole and two half-covered guards; all are fixed:
+
+- **A preview could spend the recipient's own audio.** Bundle slices were
+  written through the ordinary quota path, which under pressure evicts the
+  recipient's *sources* to make room — during a beat they might hand back, and
+  an eviction cannot be handed back with it. Against story 47, *"opening a
+  bundle or a link to never silently destroy my own saved project"*.
+  `saveSliceWithinQuota` now takes `mayEvictSources`, and a preview passes
+  `false`: it writes into room that is already free, and when there is none the
+  pad sounds and says it will not survive a reload — the same honest answer a
+  full disk already gets. Covered at the storage seam.
+- **The version-tolerance test never wrote an older *header*.** It rewrote the
+  inner document as v6 but re-stamped the header current, so it proved migration
+  ran and not that a below-current header is accepted — exactly the regression
+  the issue calls "the property most likely to be broken later". The test now
+  stamps v6 in both places.
+- **Orphan collection was proved only at the mounted seam**, where the issue
+  names Seam 3. Added at the storage seam too, in the terms the deck meets it:
+  the sweep runs against the *recipient's* `referencedAudio`, drops the bundle's
+  stranded slice and keeps theirs.
+- **A file cut inside its own header** reported `not-a-bundle` — the least
+  useful message for the case this issue most wants named. What it holds is a
+  prefix of a real header, so it now reports `truncated`; an empty or unrelated
+  file still reports `not-a-bundle`.
+
+Three code-quality items came out of the Standards axis: the "point the engine
+at one document's audio" logic existed at three sites and is now one `soundPads`
+seam all three use; `readBundle` narrows its wrapper from `unknown` with the
+shared `isRecord` instead of asserting a shape it had not checked, and returns a
+`Map` rather than a list it had to de-duplicate; and the header/body split, which
+was computed in two places that could have disagreed, is read once.

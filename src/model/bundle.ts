@@ -6,6 +6,7 @@ import {
   bytesToBase64Url,
   compressPayload,
   decompressPayload,
+  isRecord,
   projectForSharing,
   readSharedDocument,
   UNSUPPORTED_VERSION_MESSAGE,
@@ -88,7 +89,7 @@ export type BundleErrorCode =
   | 'missing-audio'
 
 export type BundleResult =
-  | { status: 'ready'; project: ProjectState; slices: Array<[string, Slice]> }
+  | { status: 'ready'; project: ProjectState; slices: ReadonlyMap<string, Slice> }
   | { status: 'error'; code: BundleErrorCode; message: string }
 
 /**
@@ -191,7 +192,7 @@ export async function createBundle(
     }
   }
 
-  const document: BundleDocument = {
+  const payload: BundleDocument = {
     project: projectForSharing(project),
     slices: Object.fromEntries(
       needed.map(({ key }) => [key, encodeSlice(slices.get(key)!)]),
@@ -200,7 +201,7 @@ export async function createBundle(
   const header = new TextEncoder().encode(`${BUNDLE_MAGIC}${PROJECT_STATE_VERSION}\n`)
   return {
     status: 'ready',
-    blob: new Blob([header, await compressPayload(document)], { type: BUNDLE_MEDIA_TYPE }),
+    blob: new Blob([header, await compressPayload(payload)], { type: BUNDLE_MEDIA_TYPE }),
     fileName: bundleFileName(activePattern(project).name),
   }
 }
@@ -209,14 +210,25 @@ function refuse(code: BundleErrorCode, message: string): BundleResult {
   return { status: 'error', code, message }
 }
 
-/** The version this file was written at, or nothing if it is not a bundle. */
-function bundleVersion(bytes: Uint8Array): number | null {
+/**
+ * What the header says, and where the compressed body starts — read together,
+ * so the two can never disagree about where one ends and the other begins.
+ *
+ * A file too short to hold a whole header is reported as `'truncated'` when
+ * what it *does* hold is a prefix of a real one, because that is what it is: a
+ * bundle that lost even its first line. Anything else is simply not a bundle.
+ */
+function readBundleHeader(
+  bytes: Uint8Array,
+): { version: number; body: Uint8Array } | 'truncated' | 'not-a-bundle' {
   const head = new TextDecoder().decode(bytes.subarray(0, MAX_HEADER_BYTES))
-  if (!head.startsWith(BUNDLE_MAGIC)) return null
   const newline = head.indexOf('\n')
-  if (newline < 0) return null
+  if (!head.startsWith(BUNDLE_MAGIC) || newline < 0) {
+    return BUNDLE_MAGIC.startsWith(head) && head.length > 0 ? 'truncated' : 'not-a-bundle'
+  }
   const version = head.slice(BUNDLE_MAGIC.length, newline)
-  return /^\d+$/.test(version) ? Number(version) : null
+  if (!/^\d+$/.test(version)) return 'not-a-bundle'
+  return { version: Number(version), body: bytes.subarray(newline + 1) }
 }
 
 /**
@@ -231,9 +243,13 @@ function bundleVersion(bytes: Uint8Array): number | null {
  * exactly that.
  */
 export async function readBundle(file: ArrayBuffer): Promise<BundleResult> {
-  const bytes = new Uint8Array(file)
-  const version = bundleVersion(bytes)
-  if (version === null) {
+  const truncated = refuse(
+    'truncated',
+    'This bundle is incomplete — the file was cut short before it finished. Ask whoever sent it to send it again.',
+  )
+  const header = readBundleHeader(new Uint8Array(file))
+  if (header === 'truncated') return truncated
+  if (header === 'not-a-bundle') {
     return refuse(
       'not-a-bundle',
       'This file is not an Elevated BPM bundle. Your saved project is safe.',
@@ -242,63 +258,61 @@ export async function readBundle(file: ArrayBuffer): Promise<BundleResult> {
   // Everything at or below this build is lifted by the same migration a saved
   // document takes, so a bundle outlives the schema bumps that follow it. Only
   // a payload from a newer build is beyond repair.
-  if (version > PROJECT_STATE_VERSION) {
+  if (header.version > PROJECT_STATE_VERSION) {
     return refuse('unsupported-version', UNSUPPORTED_VERSION_MESSAGE)
   }
 
-  const body = bytes.subarray(bytes.indexOf(0x0a) + 1)
   let json: string
   try {
-    json = await decompressPayload(body)
+    json = await decompressPayload(header.body)
   } catch {
     // gzip carries its own length and checksum, so a stream that will not
     // finish is a file that did not arrive whole.
-    return refuse(
-      'truncated',
-      'This bundle is incomplete — the file was cut short before it finished. Ask whoever sent it to send it again.',
-    )
+    return truncated
   }
 
   const malformed = refuse(
     'malformed',
     'This bundle opened, but the beat inside it could not be read. Your saved project is safe.',
   )
-  let document: BundleDocument
+  // Left `unknown` and narrowed rather than asserted, the way the link path
+  // leaves its own body to `isSharedProject`: a cast here would be this
+  // module claiming a shape it has not checked.
+  let payload: unknown
   try {
-    document = JSON.parse(json) as BundleDocument
+    payload = JSON.parse(json)
   } catch {
     return malformed
   }
-  const project = readSharedDocument(document?.project)
+  if (!isRecord(payload) || !isRecord(payload.slices)) return malformed
+  const project = readSharedDocument(payload.project)
   if (project === null) return malformed
+  const carried = payload.slices
 
   const sampler = project.instrumentSettings.sampler
-  const needed = padsNeedingAudio(sampler)
-  const carried = document.slices
-  if (carried !== null && typeof carried === 'object' && !Array.isArray(carried)) {
-    const slices: Array<[string, Slice]> = []
-    const missing: PadLaneId[] = []
-    for (const { padId, key } of needed) {
-      const decoded = decodeSlice(carried[key])
-      if (!decoded) {
-        // A slice that is absent is a bundle exported from a deck with a silent
-        // pad; one that is present but does not match its own shape is damage.
-        if (!(key in carried)) missing.push(padId)
-        else return malformed
-        continue
-      }
-      if (!slices.some(([held]) => held === key)) slices.push([key, decoded])
+  const slices = new Map<string, Slice>()
+  const missing: PadLaneId[] = []
+  for (const { padId, key } of padsNeedingAudio(sampler)) {
+    const decoded = decodeSlice(carried[key])
+    if (decoded) {
+      // A Map rather than a list, because two pads chopped identically out of
+      // one break legitimately share a single stored slice.
+      slices.set(key, decoded)
+      continue
     }
-    if (missing.length > 0) {
-      const named = missing.map((padId) => namedPad(sampler, padId))
-      return refuse(
-        'missing-audio',
-        `This bundle is missing the audio for ${named.join(
-          ' and ',
-        )}. Ask whoever sent it to export it again.`,
-      )
-    }
-    return { status: 'ready', project, slices }
+    // A slice that is absent is a bundle exported from a deck with a silent
+    // pad; one that is present but does not match its own shape is damage.
+    if (key in carried) return malformed
+    missing.push(padId)
   }
-  return malformed
+  if (missing.length > 0) {
+    const named = missing.map((padId) => namedPad(sampler, padId))
+    return refuse(
+      'missing-audio',
+      `This bundle is missing the audio for ${named.join(
+        ' and ',
+      )}. Ask whoever sent it to export it again.`,
+    )
+  }
+  return { status: 'ready', project, slices }
 }

@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
 import { renderSlice, sliceKey, type RenderableAudio } from '../model/slice'
 import { CURATED_SAMPLE_SOURCE, type SampleRegion } from '../model/sampler'
-import { addSource, commitRegionToSamplerPad, createInitialProjectState } from '../model/projectState'
+import {
+  addSource,
+  commitRegionToSamplerPad,
+  createInitialProjectState,
+  referencedAudio,
+} from '../model/projectState'
 import {
   collectUnreferencedAudio,
   deleteSource,
@@ -190,6 +195,26 @@ describe('sampleStore quota policy', () => {
     expect(outcome).toEqual({ status: 'saved', evicted: [] })
     await expect(loadSource('large')).resolves.toBeDefined()
   })
+
+  it('will not spend the user’s own audio on a beat they are only previewing', async () => {
+    // Eviction cannot be undone, and backing out of a preview has to be free.
+    // So a shared beat writes only into room that is already there: no room
+    // means the pad sounds now and says it will not survive a reload — never
+    // that someone else's beat cost the recipient a sound of their own.
+    await storeTwoSources()
+    const restore = outOfRoomUntil(Number.POSITIVE_INFINITY)
+
+    const outcome = await saveSliceWithinQuota(
+      sliceKey(REGION),
+      renderSlice(sourceFake(2), REGION),
+      { mayEvictSources: false },
+    )
+    restore()
+
+    expect(outcome).toEqual({ status: 'full', evicted: [] })
+    await expect(loadSource('large')).resolves.toBeDefined()
+    await expect(loadSource('small')).resolves.toBeDefined()
+  })
 })
 
 describe('sampleStore orphan collection', () => {
@@ -213,6 +238,37 @@ describe('sampleStore orphan collection', () => {
     await expect(loadSource('upload-1')).resolves.toBeDefined()
     await expect(loadSlice(sliceKey(orphan))).resolves.toBeUndefined()
     await expect(loadSource('upload-2')).resolves.toBeUndefined()
+  })
+
+  it('collects a bundle preview that was backed out of, against the recipient’s own document', async () => {
+    // The sharp case, in the terms the deck actually meets it: a bundle writes
+    // its audio during a preview, so if the recipient hands it back it is
+    // referenced by nothing at all. The sweep must read *their* document — the
+    // previewed one is not authoritative, and sweeping against it would delete
+    // the recipient's audio instead of the stranded audio.
+    const uploaded = {
+      id: 'upload-1',
+      name: 'My Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    const recipient = commitRegionToSamplerPad(
+      addSource(createInitialProjectState(), uploaded),
+      'pad2',
+      REGION,
+    )
+    const fromBundle: SampleRegion = { sourceId: 'upload-sender', start: 0, duration: 1 }
+    const mine = renderSlice(sourceFake(2), REGION)
+    await saveSlice(sliceKey(REGION), mine)
+    await saveSource('upload-1', new Blob([Uint8Array.of(1)]))
+    await saveSlice(sliceKey(fromBundle), renderSlice(sourceFake(2), fromBundle))
+
+    await collectUnreferencedAudio(referencedAudio(recipient))
+
+    expect(await loadSlice(sliceKey(fromBundle))).toBeUndefined()
+    expect(await loadSlice(sliceKey(REGION))).toEqual(mine)
+    expect(await loadSource('upload-1')).toBeDefined()
   })
 })
 

@@ -563,7 +563,7 @@ describe('beat bundle', () => {
     expect(opened.project.sources).toEqual(sender.sources)
     // The audio is the whole reason a bundle is worth the extra step over a
     // link, so it has to come back sample for sample.
-    expect(new Map(opened.slices)).toEqual(slices)
+    expect(opened.slices).toEqual(slices)
   })
 
   it('names itself after the beat and blanks the recipient-owned fields a link does', async () => {
@@ -631,10 +631,19 @@ describe('beat bundle', () => {
     // skips it fails loudly.
     const { project: sender, slices } = senderWithChops()
     const bytes = new Uint8Array(await exportedBytes(sender, slices))
-    const older = await rewriteBundleDocument(bytes, (document) => ({
-      ...(document as Record<string, unknown>),
-      project: v6ShareDocument(sender),
-    }))
+    // Stamped v6 *and* carrying a v6 body, because those are two separate
+    // guards: the header decides whether the file is opened at all, and only
+    // then does migration get a say. A version check that tightened to "must
+    // equal current" would pass every other case in this suite.
+    const older = withBundleVersion(
+      new Uint8Array(
+        await rewriteBundleDocument(bytes, (document) => ({
+          ...(document as Record<string, unknown>),
+          project: v6ShareDocument(sender),
+        })),
+      ),
+      6,
+    )
 
     const opened = await readBundle(older)
 
@@ -702,6 +711,18 @@ describe('beat bundle', () => {
       status: 'error',
       code: 'not-a-bundle',
       message: 'This file is not an Elevated BPM bundle. Your saved project is safe.',
+    })
+    // Cut so short it lost its own first line. What it does hold is the start
+    // of a real header, so it is a bundle that arrived incomplete — not a
+    // stray file, which is the less useful of the two things to be told.
+    expect(await readBundle(bytes.slice(0, 8))).toMatchObject({
+      status: 'error',
+      code: 'truncated',
+    })
+    // And nothing at all is nothing at all.
+    expect(await readBundle(new ArrayBuffer(0))).toMatchObject({
+      status: 'error',
+      code: 'not-a-bundle',
     })
   })
 

@@ -129,7 +129,8 @@ export async function decompressPayload(bytes: Uint8Array): Promise<string> {
   return new TextDecoder().decode(decoded)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** Exported so the bundle carrier narrows its own wrapper the same way. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 

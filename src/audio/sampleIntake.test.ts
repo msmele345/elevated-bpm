@@ -53,6 +53,55 @@ describe('loading a file as a source', () => {
   })
 })
 
+describe('audio that was recorded rather than chosen', () => {
+  it('is a source like any other, marked by what made it', async () => {
+    const { load } = intake()
+
+    const outcome = await load(file('Recording 1.webm'), { origin: 'recording' })
+
+    expect(outcome.status).toBe('loaded')
+    if (outcome.status !== 'loaded') return
+    // Identical in every term the audio path reads. The origin is carried for
+    // the curriculum's benefit, not the audio path's.
+    expect(outcome.source).toEqual({
+      id: 'source-1',
+      name: 'Recording 1',
+      origin: 'recording',
+      duration: 2,
+      channels: 2,
+    })
+  })
+
+  it('is gated on the length the clock that made it measured, never probed', async () => {
+    // The recorder's own clock is exact, free, and known before any decode.
+    // A container that declares no duration probes as Infinity, which this
+    // gate reads as "too long" — so probing risks refusing every take.
+    const { deps, load } = intake()
+
+    const outcome = await load(file('Recording 1.webm'), {
+      origin: 'recording',
+      knownDuration: 12,
+    })
+
+    expect(outcome.status).toBe('loaded')
+    expect(deps.probeDuration).not.toHaveBeenCalled()
+  })
+
+  it('hits the same gate an over-length file hits, and is not decoded either', async () => {
+    const { deps, load } = intake()
+
+    const outcome = await load(file('Recording 1.webm'), {
+      origin: 'recording',
+      knownDuration: MAX_SOURCE_SECONDS + 1,
+    })
+
+    expect(outcome.status).toBe('rejected')
+    if (outcome.status !== 'rejected') return
+    expect(outcome.rejection.code).toBe('too-long')
+    expect(deps.decode).not.toHaveBeenCalled()
+  })
+})
+
 describe('the gate, before any decode', () => {
   it('refuses an oversized file having neither probed nor decoded it', async () => {
     const { deps, load } = intake()

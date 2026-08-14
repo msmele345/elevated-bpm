@@ -132,8 +132,14 @@ const microphone = vi.hoisted(() => {
     failure: null as Error | null,
     /** Every input opened this session, so a test can check they all ended. */
     tracks: [] as FakeTrack[],
+    /**
+     * Set to leave the permission prompt unanswered, which a real one stays
+     * until the user answers it — and the page keeps taking clicks throughout.
+     */
+    unanswered: null as Promise<void> | null,
   }
   const openMicrophone = vi.fn(async () => {
+    if (control.unanswered) await control.unanswered
     if (control.denial) throw control.denial
     const opened = [1, 2].map(() => {
       const track: FakeTrack = {
@@ -249,6 +255,7 @@ beforeEach(async () => {
   microphone.control.denial = null
   microphone.control.failure = null
   microphone.control.tracks = []
+  microphone.control.unanswered = null
   vi.stubGlobal('indexedDB', indexedDB)
   vi.stubGlobal('requestAnimationFrame', () => 1)
   vi.stubGlobal('cancelAnimationFrame', () => undefined)
@@ -482,6 +489,32 @@ describe('App microphone recording', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Play' }))
     await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+  })
+
+  it('will not start the loop while the permission prompt is still open', async () => {
+    await hydratedDeck()
+    let answerPrompt!: () => void
+    microphone.control.unanswered = new Promise<void>((resolve) => {
+      answerPrompt = resolve
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record from microphone' }))
+    await screen.findByRole('button', { name: 'Waiting for permission…' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // Asking is not capturing, so the microphone is not live here — but the
+    // prompt is a long window the user controls, and answering it would open
+    // the mic onto a loop they restarted while deciding. The transport has to
+    // be held from the moment they ask, not from the moment the mic opens.
+    expect(engineSpies.play).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Play' }).getAttribute('aria-disabled')).toBe('true')
+
+    answerPrompt()
+
+    await screen.findByRole('button', { name: 'Stop recording' })
+    expect(engineSpies.play).not.toHaveBeenCalled()
   })
 
   it('asks for the microphone only on record, and ends every input on stop', async () => {

@@ -337,10 +337,20 @@ silence for a take where the user did not start speaking until second 16; the
 per-second RMS profile (−74 dB through second 15, −43 dB from second 16) made
 that legible immediately. Worth knowing when authoring guidance, not a bug.
 
-**Still open.** The deny path was not run — Chrome's permission state is sticky,
-so a Block poisons every later take, and it has to go last. Safari is untouched:
+**The deny path, run last** (Chrome's permission state is sticky, so a Block
+poisons every later take). With the site permission set to Block:
+`getUserMedia` called once and refused; a `role="alert"` carrying
+`MICROPHONE_DENIED_MESSAGE` with a Dismiss control; no indicator; **nothing
+announced** — correct, because a refused permission never opened the mic, which
+is precisely why the announcement rides in state rather than being derived from
+status; the deck fully usable with Play unheld; and `createMediaStreamSource`
+still never called. "Your project is unchanged" was literally true — 1 project,
+4 slices and 5 sources all still in IndexedDB afterwards.
+
+**Still open: Safari.** Untouched, and the one substantive unknown left —
 `MediaRecorder` container support differs and the decode path must accept
-whatever it produces, which is the one substantive unknown left.
+whatever it produces. Chrome gave `audio/webm;codecs=opus` throughout; the thing
+to capture on Safari is what it hands back instead.
 
 **Measured, on the container question.** Real `MediaRecorder` in the headless
 Chromium produced `audio/webm;codecs=opus`, 18,650 bytes for ~1.2 s — the same
@@ -390,9 +400,9 @@ copy rather than sharing the idle button's. There is no cancel affordance
 because the prompt itself is the cancel; the cost is that a user who walks away
 from an open prompt has no Record button until they answer it.
 
-## Open defect: the loop is not held while the prompt is open
+## Defect found during the manual pass: the loop was not held while the prompt was open
 
-Found during the real-hardware pass, **not yet fixed**.
+Found during the real-hardware pass, fixed test-first.
 
 `isMicrophoneLive` is `'recording' | 'stopping'` by design — asking is not
 capturing, and that distinction is what lets the MIC_OFF announcement fire
@@ -407,11 +417,19 @@ block the page while a permission prompt is open:
 That is the condition AC5's rule forbids and the howl `RECORDING_HINT` warns
 about. It is the same class as the defect review already caught — "the loop
 could be restarted mid-take" — surviving in the one window that fix did not
-cover. Confirmed by reading `App.tsx` and by observing `aria-disabled` absent on
-the Play control while a real prompt was pending; not yet reproduced end to end.
+cover. First seen in-browser as `aria-disabled` absent on the Play control while
+a real permission prompt sat open, then reproduced at the App seam: with
+`openMicrophone` left pending, clicking Play called `engine.play` once.
 
-The fix is not to widen `isMicrophoneLive`, which would make the announcement
-lie about a refused permission. It wants a second selector — the set of states
-in which the transport must not run (`requesting | recording | stopping`) is
-simply not the same set as the states in which the microphone is live, and
-conflating them is what caused this.
+The fix was not to widen `isMicrophoneLive`, which would make the indicator
+claim the mic was on while the browser was still asking, and would make a
+refused permission announce that a microphone which never opened had been turned
+off. **The set of states in which the transport must not run is simply not the
+set of states in which the microphone is live**, and conflating them is what
+caused this. So `isTransportHeld` joins it — every non-idle state — and `App`
+uses it for both the Play guard and `heldForRecording`, while `SamplerPanel`
+keeps `isMicrophoneLive` for the record control and the indicator, which really
+are asking whether capture is happening.
+
+The test fakes the one thing that made this reachable: a permission prompt that
+stays unanswered, which is what a real one does until the user answers it.

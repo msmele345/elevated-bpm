@@ -8,6 +8,7 @@ import {
   elapsedSeconds,
   formatElapsed,
   isMicrophoneLive,
+  isTransportHeld,
   microphoneOpened,
   microphoneReleased,
   recordingFileName,
@@ -40,6 +41,29 @@ describe('whether the microphone is live', () => {
     expect(isMicrophoneLive(stopping)).toBe(true)
 
     expect(isMicrophoneLive(microphoneReleased(stopping))).toBe(false)
+  })
+})
+
+describe('whether the transport is held for a recording', () => {
+  it('is held from the moment the user asks, before the microphone is open', () => {
+    // The permission prompt is a long window the user controls, and the page
+    // stays interactive the whole time it is open. "Not capturing yet" must not
+    // be allowed to mean "the loop may run" — answering the prompt would then
+    // open the mic onto a running loop, which is the howl the hint warns about.
+    const asking = requestMicrophone(IDLE_RECORDING)
+    expect(isMicrophoneLive(asking)).toBe(false)
+
+    expect(isTransportHeld(asking)).toBe(true)
+  })
+
+  it('is free before a recording and after one, and held throughout', () => {
+    expect(isTransportHeld(IDLE_RECORDING)).toBe(false)
+
+    const capturing = recording()
+    expect(isTransportHeld(capturing)).toBe(true)
+    expect(isTransportHeld(stopRequested(capturing))).toBe(true)
+
+    expect(isTransportHeld(microphoneReleased(stopRequested(capturing)))).toBe(false)
   })
 })
 

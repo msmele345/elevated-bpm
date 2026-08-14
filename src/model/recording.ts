@@ -148,3 +148,20 @@ export function formatElapsed(seconds: number): string {
 export function isMicrophoneLive(state: RecordingState): boolean {
   return state.status === 'recording' || state.status === 'stopping'
 }
+
+/**
+ * Whether the loop must stay stopped. Deliberately a wider set than
+ * `isMicrophoneLive`, and the difference is the whole point: the permission
+ * prompt is a long window the user controls, and the page keeps taking clicks
+ * for as long as it is open. Answering it would then open the microphone onto a
+ * loop the user restarted while deciding — mic plus speakers plus the master
+ * drive, which is exactly what `RECORDING_HINT` warns about.
+ *
+ * The two questions are not the same question. Widening `isMicrophoneLive` to
+ * cover this would make the indicator claim the mic was on while the browser
+ * was still asking, and would make a refused permission announce that a
+ * microphone which never opened has been turned off.
+ */
+export function isTransportHeld(state: RecordingState): boolean {
+  return state.status !== 'idle'
+}

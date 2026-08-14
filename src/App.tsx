@@ -89,7 +89,7 @@ import {
   MICROPHONE_DENIED_MESSAGE,
   RECORDING_FAILED_MESSAGE,
   elapsedSeconds,
-  isMicrophoneLive,
+  isTransportHeld,
   microphoneOpened,
   microphoneReleased,
   recordingFileName,
@@ -854,11 +854,16 @@ export default function App() {
   const handleTogglePlay = useCallback(async () => {
     if (isPlayingRef.current) {
       stopTransport()
-    } else if (isMicrophoneLive(recordingRef.current)) {
+    } else if (isTransportHeld(recordingRef.current)) {
       // Stopping the transport to record would be pointless if the next click
       // put it straight back: the loop would be in the sample, and mic plus
       // speakers plus the master drive is the howl the rule exists to prevent.
       // The two never run together — that is the whole of the feedback rule.
+      //
+      // Held from the moment the user asks, not from the moment the mic opens:
+      // the permission prompt leaves the page interactive, so "not capturing
+      // yet" would otherwise be a window in which the loop could be restarted
+      // and then recorded the instant the prompt was answered.
     } else {
       await engine.play()
       setIsPlaying(true)
@@ -1068,7 +1073,7 @@ export default function App() {
           isPlaying={isPlaying}
           bpm={bpm}
           spotlitTempo={spotlitTarget('transport:tempo')}
-          heldForRecording={isMicrophoneLive(recordingState)}
+          heldForRecording={isTransportHeld(recordingState)}
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
         />

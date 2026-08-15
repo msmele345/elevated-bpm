@@ -107,6 +107,20 @@ export function padsUsingSource(
   )
 }
 
+/**
+ * How a pad is named in something the user has to act on.
+ *
+ * Its own name alone is not enough: two chops cut from one break wear the same
+ * name, so "the audio for Warehouse Break and Warehouse Break is missing" names
+ * nothing. The lane is what makes it actionable — and a pad still wearing its
+ * default name needs no parenthesis repeating it back.
+ */
+export function namedPad(settings: SamplerSettings, padId: PadLaneId): string {
+  const label = PAD_LANES.find((pad) => pad.id === padId)!.label
+  const name = settings[padId].name
+  return name === label ? label : `${label} (${name})`
+}
+
 export const MIN_PAD_TUNE = -24
 export const MAX_PAD_TUNE = 24
 export const MIN_FIT_STEPS = 1

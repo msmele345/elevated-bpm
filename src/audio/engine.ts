@@ -279,6 +279,19 @@ export function registerSlice(padId: PadLaneId, slice: Slice): void {
 }
 
 /**
+ * Take a pad's audio away — the other half of `registerSlice`, and the one the
+ * deck needs when it swaps documents rather than edits one.
+ *
+ * A slice is what makes a pad sound, so entering or leaving a shared-beat
+ * preview has to move the audio too: without this, a pad the incoming beat
+ * leaves empty would go on playing whatever the previous document had put
+ * there.
+ */
+export function clearSlice(padId: PadLaneId): void {
+  sliceRegistry.clear(padId)
+}
+
+/**
  * Commit a region to a pad: acquire the full-quality decode, render the slice,
  * and let the decode go. It is transient by construction — the buffer is a
  * local that nothing outlives this function holds — which is what keeps the

@@ -69,6 +69,7 @@ vi.mock('./audio/engine', async () => {
     registerSampleSource: () => undefined,
     setStoredSourceLoader: () => undefined,
     registerSlice: () => undefined,
+    clearSlice: () => undefined,
     getSoundingStabNotes: () => [],
     getSoundingPadIds: () => [],
     getSpectrum: () => null,

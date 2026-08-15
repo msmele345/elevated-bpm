@@ -405,7 +405,36 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.share-action + .share-action {
+  margin-top: 9px;
+}
+
+.share-bundle-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The one line the product says about passing someone else's audio on, and the
+   one line it says about what a link cannot carry. */
+.share-hint {
+  flex-basis: 100%;
+  margin: 3px 0 0;
+  text-align: right;
+  color: var(--ink-dim);
+  font-size: 0.6rem;
+  line-height: 1.5;
+}
+
+.share-notice .share-degraded {
+  margin-top: 6px;
+  padding-left: 9px;
+  border-left: 2px solid var(--quad-1);
+  color: var(--ink);
 }
 
 .share-action-label {
@@ -1866,7 +1895,8 @@ body::before {
 
 /* The label is the button; the input sits invisibly over it so it keeps its
    own focus and keyboard activation rather than being replaced by a proxy. */
-.sampler-load {
+.sampler-load,
+.share-bundle-open {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -1885,16 +1915,19 @@ body::before {
   cursor: pointer;
 }
 
-.sampler-load:hover {
+.sampler-load:hover,
+.share-bundle-open:hover {
   background: var(--key-face-hover);
 }
 
-.sampler-load:active {
+.sampler-load:active,
+.share-bundle-open:active {
   transform: translateY(1px);
   box-shadow: var(--key-pressed);
 }
 
-.sampler-load input[type='file'] {
+.sampler-load input[type='file'],
+.share-bundle-open input[type='file'] {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1903,9 +1936,18 @@ body::before {
   cursor: pointer;
 }
 
-.sampler-load:focus-within {
+.sampler-load:focus-within,
+.share-bundle-open:focus-within {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* Matched to .share-button rather than to .sampler-load, because those two sit
+   side by side and a two-pixel difference in one key face reads as a mistake. */
+.share-bundle-open {
+  padding: 7px 12px;
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
 }
 
 .sampler-intake-hint {

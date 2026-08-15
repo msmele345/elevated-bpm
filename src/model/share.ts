@@ -1,26 +1,27 @@
+import { activePattern, PROJECT_STATE_VERSION, type ProjectState } from './projectState'
+import { PAD_LANES, padAudioState, type AvailableAudio } from './sampler'
 import {
-  activePattern,
-  migrateProjectState,
-  PROJECT_STATE_VERSION,
-  type InstrumentSettings,
-  type ProjectState,
-} from './projectState'
-import { BASS_PARAMS } from './bass'
-import { FX_PARAMS } from './fx'
-import { MASTER_PARAMS } from './master'
-import type { Mixer } from './mixer'
-import { MAX_NOTE_LENGTH, MIN_NOTE_LENGTH, NOTE_LANES } from './note'
-import { KIT_LANES } from './pattern'
-import {
-  MAX_FIT_STEPS,
-  MIN_FIT_STEPS,
-  PAD_LANES,
-  SAMPLER_PARAMS,
-  type SampleSource,
-  type SamplerSettings,
-} from './sampler'
-import { STEP_COUNT, type Pattern } from './types'
-import { MAX_BPM, MIN_BPM } from './transport'
+  base64UrlToBytes,
+  bytesToBase64Url,
+  compressPayload,
+  decompressPayload,
+  MALFORMED_SHARE_MESSAGE,
+  projectForSharing,
+  readSharedDocument,
+  UNSUPPORTED_VERSION_MESSAGE,
+} from './sharePayload'
+
+/**
+ * The link carrier. Everything about *what* a shared beat is lives in
+ * `sharePayload`; this module is only how one travels in a query string — and
+ * the one thing that is true of a link and not of a bundle: **it cannot carry
+ * audio**.
+ *
+ * That is not a limitation to engineer around. A 180 KB sample is roughly
+ * 240 KB base64-encoded, audio is already compressed so gzip buys effectively
+ * nothing, and the practical URL ceiling is 2,000 characters. Two orders of
+ * magnitude is not a budget to tune. So links degrade by design — and say so.
+ */
 
 export const SHARE_QUERY_PARAM = 'p'
 /** Conservative ceiling that stays beneath long-standing browser/proxy URL limits. */
@@ -35,281 +36,18 @@ export type SharedProjectResult =
       message: string
     }
 
-/**
- * Curriculum progress and preferences belong to whoever opens a link, never to
- * whoever sent it. Blanked on the way out so a sender never ships their own
- * progress, and again on the way in so an older payload carrying a stale
- * progress map reads as a valid beat rather than a rejected link.
- */
-function recipientOwnedBlanks(): Pick<
-  ProjectState,
-  'lessonProgress' | 'prefs' | 'activeLessonId'
-> {
-  return { lessonProgress: {}, prefs: {}, activeLessonId: null }
-}
-
-function projectForSharing(project: ProjectState): ProjectState {
-  const pattern = activePattern(project)
-  return {
-    version: PROJECT_STATE_VERSION,
-    patterns: [pattern],
-    activePatternId: pattern.id,
-    transport: project.transport,
-    instrumentSettings: project.instrumentSettings,
-    sources: project.sources,
-    mixer: project.mixer,
-    ...recipientOwnedBlanks(),
-  }
-}
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
-}
-
-function base64UrlToBytes(encoded: string): Uint8Array {
-  const padded = encoded.replaceAll('-', '+').replaceAll('_', '/').padEnd(
-    Math.ceil(encoded.length / 4) * 4,
-    '=',
-  )
-  const binary = atob(padded)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
-async function compress(text: string): Promise<Uint8Array> {
-  const input = new TextEncoder().encode(text)
-  const stream = new CompressionStream('gzip')
-  const output = new Response(stream.readable).arrayBuffer()
-  const writer = stream.writable.getWriter()
-  await writer.write(input)
-  await writer.close()
-  return new Uint8Array(await output)
-}
-
-async function decompress(bytes: Uint8Array): Promise<string> {
-  const stream = new DecompressionStream('gzip')
-  const output = new Response(stream.readable).arrayBuffer()
-  const writer = stream.writable.getWriter()
-  await writer.write(bytes)
-  await writer.close()
-  return new TextDecoder().decode(await output)
-}
-
-async function encodeSharedProject(project: ProjectState): Promise<string> {
-  const compressed = await compress(JSON.stringify(project))
-  return `${PROJECT_STATE_VERSION}.${bytesToBase64Url(compressed)}`
-}
-
 function malformedShare(): SharedProjectResult {
-  return {
-    status: 'error',
-    code: 'malformed',
-    message: 'This shared beat link is damaged or incomplete. Your saved project is safe.',
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
-function isLane(
-  value: unknown,
-  expectedId: string,
-  isStep: (step: unknown) => boolean,
-): boolean {
-  return (
-    isRecord(value) &&
-    value.id === expectedId &&
-    typeof value.label === 'string' &&
-    Array.isArray(value.steps) &&
-    value.steps.length === STEP_COUNT &&
-    value.steps.every(isStep)
-  )
-}
-
-function isDrumStep(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.on === 'boolean' &&
-    typeof value.accent === 'boolean'
-  )
-}
-
-function isNoteStep(value: unknown, minPitch: number, maxPitch: number): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.on === 'boolean' &&
-    Number.isInteger(value.pitch) &&
-    (value.pitch as number) >= minPitch &&
-    (value.pitch as number) <= maxPitch &&
-    Number.isInteger(value.length) &&
-    (value.length as number) >= MIN_NOTE_LENGTH &&
-    (value.length as number) <= MAX_NOTE_LENGTH
-  )
-}
-
-function isPattern(value: unknown): value is Pattern {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== 'string' ||
-    typeof value.name !== 'string' ||
-    !Array.isArray(value.lanes) ||
-    !Array.isArray(value.padLanes) ||
-    !Array.isArray(value.noteLanes) ||
-    value.lanes.length !== KIT_LANES.length ||
-    value.padLanes.length !== PAD_LANES.length ||
-    value.noteLanes.length !== NOTE_LANES.length
-  ) {
-    return false
-  }
-
-  const lanes = value.lanes
-  const padLanes = value.padLanes
-  const noteLanes = value.noteLanes
-  const drumsValid = KIT_LANES.every((spec, laneIndex) =>
-    isLane(lanes[laneIndex], spec.id, isDrumStep),
-  )
-  if (!drumsValid) return false
-
-  const padsValid = PAD_LANES.every((spec, laneIndex) =>
-    isLane(padLanes[laneIndex], spec.id, isDrumStep),
-  )
-  if (!padsValid) return false
-
-  return NOTE_LANES.every((spec, laneIndex) =>
-    isLane(noteLanes[laneIndex], spec.id, (step) =>
-      isNoteStep(step, spec.minPitch, spec.maxPitch),
-    ),
-  )
-}
-
-function isPatch(
-  value: unknown,
-  params: ReadonlyArray<{ id: string; min: number; max: number }>,
-): boolean {
-  if (!isRecord(value)) return false
-  return params.every((param) => {
-    const setting = value[param.id]
-    return isFiniteNumber(setting) && setting >= param.min && setting <= param.max
-  })
-}
-
-function isInstrumentSettings(value: unknown): value is InstrumentSettings {
-  return (
-    isRecord(value) &&
-    isPatch(value.bass, BASS_PARAMS) &&
-    isPatch(value.master, MASTER_PARAMS) &&
-    isPatch(value.fx, FX_PARAMS) &&
-    isSamplerSettings(value.sampler)
-  )
-}
-
-function isRegion(value: unknown): boolean {
-  return (
-    value === null ||
-    (isRecord(value) &&
-      typeof value.sourceId === 'string' &&
-      value.sourceId.length > 0 &&
-      isFiniteNumber(value.start) &&
-      value.start >= 0 &&
-      isFiniteNumber(value.duration) &&
-      value.duration > 0)
-  )
-}
-
-function isSamplerSettings(value: unknown): value is SamplerSettings {
-  if (!isRecord(value) || Object.keys(value).length !== PAD_LANES.length) return false
-  return PAD_LANES.every((pad) => {
-    const settings = value[pad.id]
-    const tune = SAMPLER_PARAMS.find((param) => param.padId === pad.id)!
-    return (
-      isRecord(settings) &&
-      isRegion(settings.region) &&
-      isFiniteNumber(settings.tune) &&
-      settings.tune >= tune.min &&
-      settings.tune <= tune.max &&
-      (settings.fit === null ||
-        (Number.isInteger(settings.fit) &&
-          (settings.fit as number) >= MIN_FIT_STEPS &&
-          (settings.fit as number) <= MAX_FIT_STEPS)) &&
-      typeof settings.name === 'string' &&
-      settings.name.trim().length > 0
-    )
-  })
-}
-
-function isSources(value: unknown): value is SampleSource[] {
-  if (!Array.isArray(value)) return false
-  const ids = new Set<string>()
-  for (const source of value) {
-    if (
-      !isRecord(source) ||
-      typeof source.id !== 'string' ||
-      source.id.length === 0 ||
-      ids.has(source.id) ||
-      typeof source.name !== 'string' ||
-      source.name.trim().length === 0 ||
-      !['shipped', 'upload', 'recording'].includes(source.origin as string) ||
-      !isFiniteNumber(source.duration) ||
-      source.duration <= 0 ||
-      !Number.isInteger(source.channels) ||
-      (source.channels as number) < 1
-    ) {
-      return false
-    }
-    ids.add(source.id)
-  }
-  return true
-}
-
-function isMixer(value: unknown): value is Mixer {
-  if (!isRecord(value)) return false
-  const laneIds = new Set<string>([
-    ...KIT_LANES.map(({ id }) => id),
-    ...PAD_LANES.map(({ id }) => id),
-  ])
-  return Object.entries(value).every(
-    ([laneId, mix]) =>
-      laneIds.has(laneId) &&
-      isRecord(mix) &&
-      typeof mix.muted === 'boolean' &&
-      typeof mix.soloed === 'boolean',
-  )
-}
-
-function isSharedProject(value: unknown): value is ProjectState {
-  return (
-    isRecord(value) &&
-    value.version === PROJECT_STATE_VERSION &&
-    Array.isArray(value.patterns) &&
-    value.patterns.length === 1 &&
-    isPattern(value.patterns[0]) &&
-    typeof value.activePatternId === 'string' &&
-    value.activePatternId === value.patterns[0].id &&
-    isRecord(value.transport) &&
-    isFiniteNumber(value.transport.bpm) &&
-    value.transport.bpm >= MIN_BPM &&
-    value.transport.bpm <= MAX_BPM &&
-    isInstrumentSettings(value.instrumentSettings) &&
-    isSources(value.sources) &&
-    isRecord(value.lessonProgress) &&
-    Object.keys(value.lessonProgress).length === 0 &&
-    isRecord(value.prefs) &&
-    Object.keys(value.prefs).length === 0 &&
-    isMixer(value.mixer) &&
-    value.activeLessonId === null
-  )
+  return { status: 'error', code: 'malformed', message: MALFORMED_SHARE_MESSAGE }
 }
 
 /** Build a share URL without disturbing unrelated query parameters. */
 export async function createShareUrl(project: ProjectState, baseUrl: string): Promise<string> {
+  const compressed = await compressPayload(projectForSharing(project))
   const url = new URL(baseUrl)
-  url.searchParams.set(SHARE_QUERY_PARAM, await encodeSharedProject(projectForSharing(project)))
+  url.searchParams.set(
+    SHARE_QUERY_PARAM,
+    `${PROJECT_STATE_VERSION}.${bytesToBase64Url(compressed)}`,
+  )
   return url.toString()
 }
 
@@ -336,6 +74,32 @@ export function projectWithSharedBeat(
   }
 }
 
+/**
+ * What an incoming beat could not bring with it, said plainly.
+ *
+ * A recipient whose pads are silent with no explanation assumes the app is
+ * broken, so the count is named and so is the only thing that would fix it.
+ * It does not offer to fetch the audio, because with no backend there is
+ * nothing to fetch from.
+ *
+ * Counted from the pads that landed **silent** — the modelled "slice missing"
+ * state — rather than from how the beat arrived, so a bundle, which carries its
+ * audio, says nothing at all.
+ */
+export function sharedAudioNotice(
+  project: ProjectState,
+  available: AvailableAudio,
+): string | null {
+  const sampler = project.instrumentSettings.sampler
+  const silent = PAD_LANES.filter(
+    (pad) => padAudioState(sampler[pad.id], available) === 'silent',
+  ).length
+  if (silent === 0) return null
+  return silent === 1
+    ? '1 sound could not travel: audio is far too large to fit in a link. Ask whoever sent it for a bundle file to hear it.'
+    : `${silent} sounds could not travel: audio is far too large to fit in a link. Ask whoever sent it for a bundle file to hear them.`
+}
+
 /** Read the optional shared beat carried by a URL. */
 export async function readSharedBeat(urlValue: string): Promise<SharedProjectResult> {
   let encoded: string | null
@@ -356,25 +120,13 @@ export async function readSharedBeat(urlValue: string): Promise<SharedProjectRes
     return {
       status: 'error',
       code: 'unsupported-version',
-      message:
-        'This shared beat uses an incompatible version of Elevated BPM and cannot be opened here.',
+      message: UNSUPPORTED_VERSION_MESSAGE,
     }
   }
   try {
     const compressed = base64UrlToBytes(encoded.slice(separator + 1))
-    // Migration both returns null and throws on bodies it cannot read, so it
-    // belongs inside this catch: a payload that fails to lift is a damaged
-    // link, not an incompatible one.
-    const migrated = migrateProjectState(JSON.parse(await decompress(compressed)))
-    if (migrated === null) return malformedShare()
-
-    // Validate the migrated document, so the structural checks keep asserting
-    // the shape the deck actually runs today. Left unknown so isSharedProject
-    // stays the only thing that narrows it — migration hands back the current
-    // version by assertion, not by checking.
-    const project: unknown = { ...migrated, ...recipientOwnedBlanks() }
-    if (!isSharedProject(project)) return malformedShare()
-    return { status: 'ready', project }
+    const project = readSharedDocument(JSON.parse(await decompressPayload(compressed)))
+    return project === null ? malformedShare() : { status: 'ready', project }
   } catch {
     return malformedShare()
   }

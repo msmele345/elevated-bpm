@@ -39,6 +39,25 @@ export function loadSlice(key: string): Promise<Slice | undefined> {
 }
 
 /**
+ * The audio behind a named set of slice keys — what a bundle is assembled from.
+ *
+ * A key with nothing behind it is left out rather than faked. That absence is
+ * the signal: it means a pad on this very deck has lost its audio, and the
+ * caller needs to see it to refuse writing a bundle it would itself refuse to
+ * open.
+ */
+export async function loadSlicesFor(
+  keys: Iterable<string>,
+): Promise<Map<string, Slice>> {
+  const gathered = new Map<string, Slice>()
+  for (const key of new Set(keys)) {
+    const slice = await loadSlice(key)
+    if (slice) gathered.set(key, slice)
+  }
+  return gathered
+}
+
+/**
  * A stored source: the bytes exactly as they arrived, plus when they arrived.
  * Compressed audio, so a six-minute track is a few megabytes here rather than
  * the hundred-plus its decoded form would be — and nothing decodes it until an
@@ -127,9 +146,22 @@ export interface SaveOutcome {
   evicted: readonly string[]
 }
 
-/** Persist a slice, making room by dropping sources if the browser refuses. */
-export function saveSliceWithinQuota(key: string, slice: Slice): Promise<SaveOutcome> {
-  return writeWithinQuota(() => saveSlice(key, slice))
+/**
+ * Persist a slice, making room by dropping sources if the browser refuses.
+ *
+ * `mayEvictSources` exists for one caller: a **shared beat being previewed**.
+ * Eviction spends the recipient's own audio, and a preview is not their work
+ * yet — they may back out of it, and backing out cannot give reclaimed bytes
+ * back. So a preview writes only into room that is already free, and when there
+ * is none the pad sounds now and says it will not survive a reload, which is
+ * the same honest answer a full disk already gets.
+ */
+export function saveSliceWithinQuota(
+  key: string,
+  slice: Slice,
+  { mayEvictSources = true }: { mayEvictSources?: boolean } = {},
+): Promise<SaveOutcome> {
+  return writeWithinQuota(() => saveSlice(key, slice), undefined, mayEvictSources)
 }
 
 /** Persist a source, making room by dropping *other* sources if the browser refuses. */
@@ -148,6 +180,7 @@ export function saveSourceWithinQuota(id: string, bytes: Blob): Promise<SaveOutc
 async function writeWithinQuota(
   write: () => Promise<void>,
   except?: string,
+  mayEvictSources = true,
 ): Promise<SaveOutcome> {
   const evicted: string[] = []
   for (;;) {
@@ -156,6 +189,7 @@ async function writeWithinQuota(
       return { status: 'saved', evicted }
     } catch (error) {
       if (!isOutOfRoom(error)) throw error
+      if (!mayEvictSources) return { status: 'full', evicted }
       const given = await evictOneSource(new Set([...evicted, ...(except ? [except] : [])]))
       if (given === undefined) return { status: 'full', evicted }
       evicted.push(given)

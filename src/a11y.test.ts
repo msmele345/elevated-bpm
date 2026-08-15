@@ -56,6 +56,7 @@ vi.mock('./audio/engine', async () => {
     registerSourceBytes: () => undefined,
     setStoredSourceLoader: () => undefined,
     registerSlice: () => undefined,
+    clearSlice: () => undefined,
     renderPadSlice: () => ({ sampleRate: 100, channels: 1, frames: 20, pcm: new Int16Array(20) }),
     commitPadRegion: () =>
       Promise.resolve({ sampleRate: 100, channels: 1, frames: 20, pcm: new Int16Array(20) }),

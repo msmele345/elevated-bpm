@@ -33,6 +33,7 @@ import {
   createMidiRouter,
   resolveSelectedDevice,
   type MidiConnection,
+  type MidiDevice,
   type MidiInstruction,
 } from './model/midi'
 import { isMidiSupported, openMidiInputs, type MidiInputSession } from './audio/midiInput'
@@ -1081,6 +1082,13 @@ export default function App() {
     if (midiSessionRef.current || midiConnectingRef.current || !isMidiSupported()) return
     midiConnectingRef.current = true
     setMidiConnection({ status: 'connecting' })
+    // What is plugged in, and which of it plays. The devices access opens with
+    // and the devices a later hot-plug reports are the same news, so they are
+    // taken the same way rather than by two paths that can disagree.
+    const showDevices = (devices: readonly MidiDevice[]) => {
+      setMidiConnection({ status: 'ready', devices })
+      selectMidiDevice(resolveSelectedDevice(devices, selectedDeviceRef.current))
+    }
     try {
       const session = await openMidiInputs({
         onMessage: (deviceId, data) => {
@@ -1089,10 +1097,7 @@ export default function App() {
           if (deviceId !== selectedDeviceRef.current) return
           runMidi(midiRouterRef.current.receive(deviceId, data))
         },
-        onDevices: (devices) => {
-          setMidiConnection({ status: 'ready', devices })
-          selectMidiDevice(resolveSelectedDevice(devices, selectedDeviceRef.current))
-        },
+        onDevices: showDevices,
         onDisconnect: (deviceId) => {
           // The classic stuck note: a controller pulled out mid-note will never
           // send its note-offs, so its disconnect is them.
@@ -1100,8 +1105,7 @@ export default function App() {
         },
       })
       midiSessionRef.current = session
-      setMidiConnection({ status: 'ready', devices: session.devices })
-      selectMidiDevice(resolveSelectedDevice(session.devices, selectedDeviceRef.current))
+      showDevices(session.devices)
     } catch {
       // A refusal is the user's answer, not a fault. The deck is untouched.
       setMidiConnection({ status: 'refused' })
@@ -1109,11 +1113,6 @@ export default function App() {
       midiConnectingRef.current = false
     }
   }, [runMidi, selectMidiDevice])
-
-  const handleSelectMidiDevice = useCallback(
-    (deviceId: string) => selectMidiDevice(deviceId),
-    [selectMidiDevice],
-  )
 
   /**
    * Reached from the unmount cleanup below, which must not depend on it.
@@ -1579,7 +1578,7 @@ export default function App() {
         connection={midiConnection}
         selectedDeviceId={selectedDeviceId}
         onConnect={handleConnectMidi}
-        onSelectDevice={handleSelectMidiDevice}
+        onSelectDevice={selectMidiDevice}
       />
     </main>
       {editor && (

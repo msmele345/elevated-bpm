@@ -32,6 +32,27 @@ function analysisFake(sampleRate = 1000, duration = 3) {
   return { sampleRate, duration, samples }
 }
 
+/**
+ * jsdom has no Web MIDI, so left alone this suite would only ever render the
+ * device panel's unsupported state — no controls, nothing to check, and the
+ * unnamed-control sweep and the bypass threshold would both permanently skip
+ * a whole panel. Stubbing support *on* is what puts it back under the
+ * contract, which is where EB2-10 asked for it to be confirmed.
+ */
+vi.mock('./audio/midiInput', () => ({
+  isMidiSupported: () => true,
+  openMidiInputs: (handlers: {
+    onDevices: (devices: { id: string; name: string }[]) => void
+  }) => {
+    const devices = [
+      { id: 'keys', name: 'Keystation 49' },
+      { id: 'pads', name: 'MPD218' },
+    ]
+    handlers.onDevices(devices)
+    return Promise.resolve({ devices, close: () => undefined })
+  },
+}))
+
 vi.mock('./audio/engine', async () => {
   const transport = await import('./model/transport')
   return {
@@ -180,6 +201,23 @@ describe('deck accessibility', () => {
     expect(headings).toEqual(
       expect.arrayContaining(['Master', 'Drum Machine', 'Sampler', 'Bass Line', 'Chord Stab']),
     )
+  })
+
+  it('holds the MIDI panel to the same contract once it has controls', async () => {
+    // The panel is titled, named and small enough to need no skip link — the
+    // claim EB2-10 asked to be confirmed here rather than assumed. Connecting
+    // first is what makes its controls exist to be checked at all.
+    const deck = await renderDeck()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect MIDI controller' }))
+    await screen.findByLabelText('MIDI device')
+
+    const panel = screen.getByRole('region', { name: 'MIDI' })
+    expect(focusable(panel).length).toBeGreaterThan(0)
+    expect(focusable(panel).filter((el) => computeAccessibleName(el).trim() === '')).toEqual([])
+    // Under the bypass threshold, so its absence from the skip links is correct
+    // rather than an oversight — and the barrier sweep above now sees it.
+    expect(focusable(panel).length).toBeLessThanOrEqual(BYPASS_THRESHOLD)
+    expect(deck.querySelector('a[href="#deck-midi"]')).toBeNull()
   })
 
   it('exposes the live stab keyboard as a named group', async () => {

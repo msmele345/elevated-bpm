@@ -62,10 +62,6 @@ export type MidiTarget =
  */
 const GM_DRUM_NOTE_BASE = 36
 
-export const MIDI_PAD_NOTES: readonly number[] = PAD_LANES.map(
-  (_, index) => GM_DRUM_NOTE_BASE + index,
-)
-
 interface MidiNoteBinding {
   note: number
   target: MidiTarget
@@ -91,6 +87,15 @@ export const MIDI_NOTE_BINDINGS: readonly MidiNoteBinding[] = [
 ]
 
 const TARGETS_BY_NOTE = new Map(MIDI_NOTE_BINDINGS.map(({ note, target }) => [note, target]))
+
+/**
+ * The notes the pads answer to, read back off the table rather than restated —
+ * so the convention the panel prints and the convention the deck obeys are the
+ * same list and cannot drift apart.
+ */
+export const MIDI_PAD_NOTES: readonly number[] = MIDI_NOTE_BINDINGS.filter(
+  (binding) => binding.target.kind === 'pad',
+).map((binding) => binding.note)
 
 /** Where a note plays, or nowhere. An unmapped note is ignored silently. */
 export function midiTargetForNote(note: number): MidiTarget | null {

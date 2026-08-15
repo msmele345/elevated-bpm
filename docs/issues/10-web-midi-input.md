@@ -130,9 +130,15 @@ assuming.
       deck's *own* live-play handlers (`handleStabAttack`/`handlePadAttack` in
       `App.tsx`) rather than straight into the engine, so the hold model, the
       lighting registry and the chord observation are literally the same code
-      path a computer key takes. Verified in-browser with the real engine: a
-      C major triad played from a device lit exactly `{60, 64, 67}`, releasing
-      the middle note left `{60, 67}`, and releasing the rest cleared it
+      path a computer key takes. **The lighting half of this claim is not held
+      by a unit test** — the jsdom suite mocks the engine, so nothing there
+      asserts a lit key; it rests on that shared code path plus an in-browser
+      run against the real engine, where a C major triad played from a device
+      lit exactly `{60, 64, 67}`, releasing the middle note left `{60, 67}`, and
+      releasing the rest cleared it. What *is* held by a test is the reason the
+      routing goes this way at all: a MIDI triad earns the chord lesson
+      (`appMidi.test.ts`), confirmed to fail if `runMidi` is "simplified" to
+      call the engine directly
 - [x] A connected pad controller plays pads 1–4 from notes 36–39 — the routing
       table is data (`MIDI_NOTE_BINDINGS`, `src/model/midi.ts`) sitting beside
       the key maps it mirrors, with the stab half *derived* from `STAB_KEYS` so
@@ -185,21 +191,26 @@ assuming.
       deck, where the engine is never handed a new pattern because there is not
       one
 - [x] MIDI input during playback causes no audio dropout and no dropped frames —
-      measured in-browser while playing. Frame cadence under **207 note pairs,
+      measured in-browser while playing, and **prose numbers from that run are
+      all this rests on**; no test holds it, consistent with how every prior
+      phase recorded its performance ACs. Frame cadence under **207 note pairs,
       207 pad hits and 1,656 CC messages in 2.5 s** was identical to idle (median
       8.3 ms both, p95 8.9 → 9.1), and over a separate 4 s run of 400 note events
       plus 400 pad hits the transport advanced **36 steps with zero skips**, its
       largest gap one 16th, still running at the end. Zero console errors
       throughout
-- [x] Every control in the device UI has a non-empty accessible name — checked
-      explicitly rather than assumed, because the deck-wide contract in
-      `src/a11y.test.ts` *cannot* reach these: jsdom has no Web MIDI, so it only
-      ever sees the unsupported state and neither control is on screen.
-      `appMidi.test.ts` connects first and then computes the accessible name of
-      every control in the panel. The panel is titled by a real `<h2>` its
-      section is labelled by, and at two controls it is far under the suite's
-      eight-control bypass threshold, so it correctly needs no skip link — which
-      the contract confirms rather than this note asserting it
+- [x] Every control in the device UI has a non-empty accessible name — confirmed
+      **against the contract suite**, as the issue asked, rather than beside it.
+      jsdom has no Web MIDI, so left alone `src/a11y.test.ts` would only ever
+      render the unsupported state and would permanently skip this panel — its
+      unnamed-control sweep and its bypass threshold would both look straight
+      past it. The suite now stubs MIDI support on, which puts the panel back
+      under the deck-wide contract, and adds one test naming what that panel
+      claims: every control accessibly named, under the eight-control threshold,
+      and therefore correctly absent from the skip links. `appMidi.test.ts`
+      keeps its own check of the connected panel as well. The panel is titled by
+      a real `<h2>` its section is labelled by, and its id now lives in
+      `DECK_SECTION_IDS` with the rest rather than in a second id space
 
 ## Testing decisions
 
@@ -266,3 +277,18 @@ opened a second request, replacing the first session without ever closing it and
 leaving its ports listening. A permission prompt leaves the page interactive —
 the same property EB2-07 had to account for with the microphone. Fixed with a
 synchronously-read ref and covered by a test confirmed to fail without it.
+
+**Found in review:** the unmount cleanup depended on `runMidi`. That is stable
+today, but a dependency added to any of the four live-play handlers would change
+its identity — and the cleanup would then close the ports mid-session with
+nothing to reopen them, taking MIDI out with nothing on screen saying so. A ref
+makes "only on unmount" true by construction rather than by the luck of four
+other callbacks; the test is confirmed to fail if the cleanup is given a
+dependency that changes.
+
+**Also from review:** the accessibility claim was originally confirmed *beside*
+the contract suite rather than against it, which is not what this issue asked
+for. The panel is now in `DECK_SECTION_IDS` rather than a second id space, and
+`src/a11y.test.ts` stubs MIDI support on so the deck-wide sweep and the bypass
+threshold can see the connected panel at all — without that stub they would have
+skipped a whole panel forever, silently, because jsdom has no Web MIDI.

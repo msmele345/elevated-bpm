@@ -77,6 +77,10 @@ export async function openMidiInputs(
   const connectedInputs = () =>
     [...access.inputs.values()].filter((input) => input.state === 'connected')
 
+  /** The connected list as the deck names it: what both callers report. */
+  const connectedDevices = (): MidiDevice[] =>
+    connectedInputs().map((input) => ({ id: input.id, name: deviceName(input) }))
+
   const attach = (input: MIDIInput) => {
     const listener = (event: Event) =>
       handlers.onMessage(input.id, (event as MIDIMessageEvent).data)
@@ -108,7 +112,7 @@ export async function openMidiInputs(
     for (const input of inputs) {
       if (!attached.has(input.id)) attach(input)
     }
-    handlers.onDevices(inputs.map((input) => ({ id: input.id, name: deviceName(input) })))
+    handlers.onDevices(connectedDevices())
   }
 
   const onStateChange = () => sync()
@@ -117,7 +121,7 @@ export async function openMidiInputs(
   for (const input of connectedInputs()) attach(input)
 
   return {
-    devices: connectedInputs().map((input) => ({ id: input.id, name: deviceName(input) })),
+    devices: connectedDevices(),
     close() {
       access.removeEventListener('statechange', onStateChange)
       for (const id of [...attached.keys()]) detach(id)

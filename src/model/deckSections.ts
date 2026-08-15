@@ -1,11 +1,11 @@
 /**
- * The deck's addressable sections, in the order they are stacked.
+ * Every addressable panel on the deck — the one id space, so a panel cannot
+ * quietly invent an id of its own somewhere else.
  *
- * A groovebox is a wall of controls — five drum lanes alone are ninety Tab
- * stops — so every block big enough to be a barrier gets an id, a heading, and
- * a skip link. This list is the single source of truth all three read from:
- * adding a panel without adding it here is what the accessibility contract in
- * `src/a11y.test.ts` fails on.
+ * Not every panel here is a *barrier*. A groovebox is a wall of controls — five
+ * drum lanes alone are ninety Tab stops — so a block big enough to be one also
+ * gets a skip link, and those are `DECK_SECTIONS` below. A small panel takes an
+ * id and a heading from here and stops there.
  */
 export const DECK_SECTION_IDS = {
   curriculum: 'deck-curriculum',
@@ -14,6 +14,15 @@ export const DECK_SECTION_IDS = {
   sampler: 'deck-sampler',
   bass: 'deck-bass',
   stabs: 'deck-stabs',
+  /**
+   * Two controls, so deliberately not in `DECK_SECTIONS`: a skip link past a
+   * button and a select is one more stop to tab through, not a bypass. The
+   * eight-control threshold in `src/a11y.test.ts` is what actually decides
+   * this — but it cannot see this panel, because jsdom has no Web MIDI and only
+   * ever renders the unsupported state. `src/appMidi.test.ts` connects first
+   * and checks it there instead.
+   */
+  midi: 'deck-midi',
 } as const
 
 export interface DeckSection {

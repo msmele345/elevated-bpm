@@ -250,6 +250,43 @@ describe('playing the deck from a controller', () => {
   })
 })
 
+describe('a chord played on hardware', () => {
+  it('earns the lesson that asks for one, exactly as the computer keys do', async () => {
+    // This is *why* MIDI routes through the deck's own live-play handlers
+    // rather than straight into the engine. Attacking the engine directly
+    // would sound the notes and light the keys while skipping the chord
+    // observation that lives in the handler — and this lesson would sit
+    // unearned for someone playing a real instrument into it.
+    await connectMidi()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 13: Play a Chord/ }))
+    await screen.findByRole('heading', { name: /Play a Chord/ })
+
+    noteOn('keys', 60)
+    noteOn('keys', 64)
+    noteOn('keys', 67)
+
+    expect(
+      await screen.findByText(/Locked in — goal complete/),
+    ).toBeTruthy()
+  })
+
+  it('does not earn it from three notes played one at a time', async () => {
+    // The goal is notes held *together*; an arpeggio is not a chord.
+    await connectMidi()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 13: Play a Chord/ }))
+    await screen.findByRole('heading', { name: /Play a Chord/ })
+
+    for (const note of [60, 64, 67]) {
+      noteOn('keys', note)
+      noteOff('keys', note)
+    }
+
+    await waitFor(() => expect(screen.queryByText(/Locked in — goal complete/)).toBeNull())
+  })
+})
+
 describe('devices', () => {
   it('asks for access only when the user asks for it', async () => {
     await renderDeck()

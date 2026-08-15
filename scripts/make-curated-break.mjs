@@ -40,8 +40,17 @@ function readWav(path) {
   throw new Error(`no data chunk in ${path}`)
 }
 
-/** Record-style pitching: one rate moves speed and pitch together, as the deck does. */
-function mixIn(track, hit, atFrame, rate, gain) {
+/**
+ * Record-style pitching: one rate moves speed and pitch together, as the deck
+ * does — plus a decay, which is doing real work rather than decoration.
+ *
+ * The 909 kick rings for over a second. Left alone it sits under the hits that
+ * follow it, and an onset detector reading the *rise* between frames cannot see
+ * a clap that lands inside a kick's tail. A break whose hits cannot be found is
+ * the wrong source for an arc that teaches finding them, so every voice is
+ * tightened the way a sampled break already would be.
+ */
+function mixIn(track, hit, atFrame, rate, gain, decay) {
   const length = Math.floor(hit.length / rate)
   for (let i = 0; i < length; i += 1) {
     const target = atFrame + i
@@ -50,7 +59,7 @@ function mixIn(track, hit, atFrame, rate, gain) {
     const low = Math.floor(source)
     const frac = source - low
     const sample = (hit[low] ?? 0) * (1 - frac) + (hit[low + 1] ?? 0) * frac
-    track[target] += sample * gain
+    track[target] += sample * gain * Math.exp(-(i / SAMPLE_RATE) / decay)
   }
 }
 
@@ -71,11 +80,11 @@ const kit = {
  * else's record rather than as the kit sitting next to it on the deck.
  */
 const VOICES = [
-  { sound: 'kick', rate: 0.94, gain: 1, steps: [0, 6, 16, 22, 26] },
-  { sound: 'clap', rate: 0.88, gain: 0.9, steps: [4, 12, 20, 28] },
-  { sound: 'closedHat', rate: 1.08, gain: 0.5, steps: [2, 6, 10, 14, 18, 22, 26, 30] },
-  { sound: 'openHat', rate: 0.96, gain: 0.4, steps: [14, 30] },
-  { sound: 'perc', rate: 1.18, gain: 0.6, steps: [7, 19, 23] },
+  { sound: 'kick', rate: 0.94, gain: 1, decay: 0.09, steps: [0, 6, 16, 22, 26] },
+  { sound: 'clap', rate: 0.88, gain: 0.95, decay: 0.1, steps: [4, 12, 20, 28] },
+  { sound: 'closedHat', rate: 1.08, gain: 0.45, decay: 0.03, steps: [2, 6, 10, 14, 18, 22, 26, 30] },
+  { sound: 'openHat', rate: 0.96, gain: 0.4, decay: 0.12, steps: [14, 30] },
+  { sound: 'perc', rate: 1.18, gain: 0.6, decay: 0.06, steps: [7, 19, 23] },
 ]
 
 const track = new Float32Array(FRAMES)
@@ -87,6 +96,7 @@ for (const voice of VOICES) {
       Math.round(step * SECONDS_PER_STEP * SAMPLE_RATE),
       voice.rate,
       voice.gain,
+      voice.decay,
     )
   }
 }

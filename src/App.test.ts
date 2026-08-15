@@ -1692,11 +1692,9 @@ describe('App curriculum tracks', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy()
   })
 
-  it('never credits a bundle’s recipient with the sampling work it arrived with', async () => {
-    // A bundle carries real audio, so this is the most obviously unearned
-    // completion the product could hand out: the sender's own uploaded source
-    // arrives in the document and would otherwise earn "load a sound".
-    const SENDER_SOURCE = {
+  /** A sender who has loaded audio of their own and chopped it onto a pad. */
+  function senderWithOwnSound(): { project: ProjectState; chop: SampleRegion } {
+    const source = {
       id: 'upload-sender',
       name: 'Sender Break',
       origin: 'upload' as const,
@@ -1704,11 +1702,38 @@ describe('App curriculum tracks', () => {
       channels: 2,
     }
     const chop: SampleRegion = { sourceId: 'upload-sender', start: 0, duration: 1 }
-    const sender = commitRegionToSamplerPad(
-      addSource(createInitialProjectState(), SENDER_SOURCE),
-      'pad1',
+    return {
+      project: commitRegionToSamplerPad(
+        addSource(createInitialProjectState(), source),
+        'pad1',
+        chop,
+      ),
       chop,
-    )
+    }
+  }
+
+  it('never credits a link’s recipient with the sampling work it arrived with', async () => {
+    // A link drops the audio but still carries the source metadata and the
+    // pad's region, so it can arrive with "load a sound" already met.
+    await saveProjectState(createInitialProjectState())
+    const shareUrl = await createShareUrl(senderWithOwnSound().project, window.location.href)
+    window.history.replaceState(null, '', new URL(shareUrl).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    switchTo('Sampling')
+
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    expect(track('Sampling').getAttribute('aria-label')).toContain('0 of 6 complete')
+  })
+
+  it('never credits a bundle’s recipient with the sampling work it arrived with', async () => {
+    // A bundle carries real audio, so this is the most obviously unearned
+    // completion the product could hand out: the sender's own uploaded source
+    // arrives in the document and would otherwise earn "load a sound".
+    const { project: sender, chop } = senderWithOwnSound()
     const bundle = await createBundle(sender, new Map([[sliceKey(chop), sliceFake()]]))
     if (bundle.status !== 'ready') throw new Error('Expected a bundle fixture')
 

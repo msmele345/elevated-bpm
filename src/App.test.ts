@@ -1343,7 +1343,9 @@ describe('App sample storage', () => {
   it('brings a chop back exactly as it was left, with nothing decoded on the way in', async () => {
     await hydratedDeck()
     chooseFile(audioFile('Warehouse Break.wav'))
-    fireEvent.change(await screen.findByLabelText('Pad 1 sound source'), {
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    await within(sourceList).findByText('Warehouse Break')
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: 'upload-1' },
     })
     await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' })
@@ -1373,7 +1375,9 @@ describe('App sample storage', () => {
   it('keeps no audio in the saved document, however much is loaded', async () => {
     await hydratedDeck()
     chooseFile(audioFile('Warehouse Break.wav'))
-    fireEvent.change(await screen.findByLabelText('Pad 1 sound source'), {
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    await within(sourceList).findByText('Warehouse Break')
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: 'upload-1' },
     })
     await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' })

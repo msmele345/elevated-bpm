@@ -173,6 +173,14 @@ vi.mock('./audio/microphone', async (importOriginal) => ({
   openMicrophone: microphone.openMicrophone,
 }))
 
+/**
+ * The recording announcement, scoped to the sampler panel that owns it: the
+ * deck has a second live region now, for the MIDI connection state.
+ */
+function recordingAnnouncement(): HTMLElement {
+  return within(screen.getByRole('region', { name: 'Sampler' })).getByRole('status')
+}
+
 /** Start a take and wait for the deck to show that the microphone is live. */
 async function startRecording(): Promise<void> {
   fireEvent.click(screen.getByRole('button', { name: 'Record from microphone' }))
@@ -462,12 +470,12 @@ describe('App microphone recording', () => {
     expect(screen.getByText('Recording')).toBeTruthy()
     expect(screen.getByText('0:00')).toBeTruthy()
     // And said out loud, for anyone not watching it.
-    expect(screen.getByRole('status').textContent).toBe(MIC_LIVE_ANNOUNCEMENT)
+    expect(recordingAnnouncement().textContent).toBe(MIC_LIVE_ANNOUNCEMENT)
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
 
     await waitFor(() =>
-      expect(screen.getByRole('status').textContent).toBe(MIC_OFF_ANNOUNCEMENT),
+      expect(recordingAnnouncement().textContent).toBe(MIC_OFF_ANNOUNCEMENT),
     )
     expect(screen.queryByText('Recording')).toBeNull()
   })
@@ -568,7 +576,7 @@ describe('App microphone recording', () => {
     expect(alert.textContent).toContain(MICROPHONE_DENIED_MESSAGE)
     // Nothing was captured, so nothing about the mic is claimed either way.
     expect(screen.queryByText('Recording')).toBeNull()
-    expect(screen.getByRole('status').textContent).toBe('')
+    expect(recordingAnnouncement().textContent).toBe('')
 
     await new Promise((resolve) => setTimeout(resolve, 450))
     expect(await loadProjectState()).toEqual(saved)
@@ -704,7 +712,7 @@ describe('App sampler workflow', () => {
     fireEvent.keyDown(window, { code: 'Digit1', key: '1' })
     fireEvent.keyUp(window, { code: 'Digit1', key: '1' })
 
-    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit1', 'pad1')
+    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit1', 'pad1', undefined)
     expect(engineSpies.releasePad).toHaveBeenCalledWith('computer:Digit1')
     await new Promise((resolve) => setTimeout(resolve, 450))
     expect(JSON.stringify(activePattern((await loadProjectState())!))).toBe(before)
@@ -726,7 +734,7 @@ describe('App sampler workflow', () => {
 
     const tempo = screen.getByRole('slider', { name: 'Tempo in beats per minute' })
     fireEvent.keyDown(tempo, { code: 'Digit2', key: '2' })
-    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit2', 'pad2')
+    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit2', 'pad2', undefined)
     fireEvent.keyUp(tempo, { code: 'Digit2', key: '2' })
     input.remove()
   })
@@ -741,8 +749,10 @@ describe('App sampler workflow', () => {
 
     fireEvent.keyDown(window, { code: 'Digit3', key: '3' })
     fireEvent.keyDown(window, { code: 'KeyA', key: 'a' })
-    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit3', 'pad3')
-    expect(engineSpies.attackStabNote).toHaveBeenCalledWith('computer:KeyA', 60)
+    // No dynamics to report — a computer key has none — so how hard it played
+    // is left to the engine's own default, as it always has been.
+    expect(engineSpies.attackPad).toHaveBeenCalledWith('computer:Digit3', 'pad3', undefined)
+    expect(engineSpies.attackStabNote).toHaveBeenCalledWith('computer:KeyA', 60, undefined)
 
     fireEvent.keyUp(window, { code: 'Digit3', key: '3' })
     expect(engineSpies.releasePad).toHaveBeenCalledWith('computer:Digit3')

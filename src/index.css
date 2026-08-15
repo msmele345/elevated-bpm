@@ -3048,3 +3048,107 @@ body::before {
   opacity: 0;
   cursor: pointer;
 }
+
+/* ── MIDI device panel ─────────────────────────────────────────────
+   A setup surface rather than an instrument: the same panel materials as
+   everything else, but no lanes and no lights — a button, a select, and a
+   line saying where the deck stands with a controller. */
+.midi-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.midi-connect {
+  padding: 7px 12px;
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.midi-connect:hover {
+  background: var(--key-face-hover);
+}
+
+.midi-connect:active {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+/* Aria-disabled rather than disabled, so the control keeps its focus while a
+   permission prompt is open — the handler is what refuses the press. */
+.midi-connect[aria-disabled='true'] {
+  color: var(--ink-dim);
+  cursor: wait;
+}
+
+.midi-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.midi-device-label {
+  font-family: var(--font-display);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.midi-device select {
+  appearance: none;
+  padding: 6px 18px 6px 8px;
+  border: 1px solid #000;
+  border-radius: 4px;
+  background:
+    /* The caret, drawn rather than left to the platform's own chrome. */
+    linear-gradient(45deg, transparent 50%, var(--ink-dim) 50%) calc(100% - 9px) 52% / 4px 4px
+      no-repeat,
+    linear-gradient(135deg, var(--ink-dim) 50%, transparent 50%) calc(100% - 5px) 52% / 4px 4px
+      no-repeat,
+    var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.56rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+/* The dropdown itself is platform chrome, so its options need readable
+   colors of their own rather than the panel's. */
+.midi-device select option {
+  background: #15171a;
+  color: var(--ink);
+}
+
+.midi-connect:focus-visible,
+.midi-device select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Recessed like every other readout on the deck. */
+.midi-status {
+  margin-top: 14px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--well-bg);
+  box-shadow: var(--well-shadow);
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}

@@ -42,7 +42,7 @@ import {
   type RenderableAudio,
   type Slice,
 } from '../model/slice'
-import { voiceStep } from './hits'
+import { ACCENT_GAIN, UNACCENTED_GAIN, voiceStep } from './hits'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
 import { decodeForAnalysis, decodeForRender } from './sampleDecoder'
@@ -660,18 +660,32 @@ export async function unlockAudio(): Promise<void> {
 }
 
 /**
+ * How hard a key with no velocity of its own plays. A pointer contact and a
+ * computer key have no dynamics to report, so they sit just under full — hard
+ * enough to feel deliberate, with headroom left above them.
+ */
+const DEFAULT_STAB_VELOCITY = 0.82
+
+/**
  * Start one live stab note. The hold is recorded before AudioContext startup
  * so a very quick tap cannot leave a late, stuck attack behind. Tone.immediate
  * bypasses transport look-ahead for direct manipulation latency.
+ *
+ * `velocity` is how hard it was played, on the 0–1 scale the synth takes.
+ * Velocity-less inputs leave it alone; hardware that reports one passes it in.
  */
-export function attackStabNote(source: string, midi: number): void {
+export function attackStabNote(
+  source: string,
+  midi: number,
+  velocity: number = DEFAULT_STAB_VELOCITY,
+): void {
   const attack = stabNoteHolds.press(source, midi)
   if (!attack) return
 
   void Tone.start().then(() => {
     ensureVoices()
     if (!stabNoteHolds.isCurrent(attack)) return
-    stab?.attackLive(midiToFrequency(attack.midi), Tone.immediate(), 0.82)
+    stab?.attackLive(midiToFrequency(attack.midi), Tone.immediate(), velocity)
     stabSoundingNotes.attackLive(attack.midi)
   })
 }
@@ -684,8 +698,19 @@ export function releaseStabNote(source: string): void {
   stabSoundingNotes.releaseLive(release.midi)
 }
 
-/** Fire a one-shot pad from pointer, keyboard, or a future MIDI source. */
-export function attackPad(inputSourceId: string, padId: PadLaneId): void {
+/**
+ * Fire a one-shot pad from pointer, keyboard, or MIDI.
+ *
+ * `accent` is how hard it was struck, in the same two-level model a sequenced
+ * step uses — so a hard MIDI hit and an accented step are the same loudness
+ * rather than two different notions of one. Inputs with no dynamics to report
+ * leave it alone and hit at full.
+ */
+export function attackPad(
+  inputSourceId: string,
+  padId: PadLaneId,
+  accent: boolean = true,
+): void {
   if (heldPadSources.has(inputSourceId)) return
   heldPadSources.add(inputSourceId)
   // Unlike the synthesized stabs, a pad cannot start until its slice exists.
@@ -694,7 +719,7 @@ export function attackPad(inputSourceId: string, padId: PadLaneId): void {
   void unlockAudio().then(() => {
     if (!laneIsAudible(padId, currentMixer)) return
     const now = Tone.immediate()
-    triggerPlayablePad(padId, 1, now, now, 'live')
+    triggerPlayablePad(padId, accent ? ACCENT_GAIN : UNACCENTED_GAIN, now, now, 'live')
   })
 }
 

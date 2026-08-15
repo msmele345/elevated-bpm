@@ -4,6 +4,7 @@ import { Knob } from './components/Knob'
 import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
+import { MidiPanel } from './components/MidiPanel'
 import { PanelTitle } from './components/PanelTitle'
 import { ShareControls } from './components/ShareControls'
 import { SamplerPanel } from './components/SamplerPanel'
@@ -28,6 +29,13 @@ import { deckParamSpec } from './model/deckParams'
 import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
 import { FX_PARAMS, type FxParamId } from './model/fx'
 import { MASTER_PARAMS, type MasterParamId } from './model/master'
+import {
+  createMidiRouter,
+  resolveSelectedDevice,
+  type MidiConnection,
+  type MidiInstruction,
+} from './model/midi'
+import { isMidiSupported, openMidiInputs, type MidiInputSession } from './audio/midiInput'
 import { NO_CHORD_PLAY, observeChordAttack, observeChordRelease } from './model/chordPlay'
 import {
   spotlightsTarget,
@@ -205,6 +213,25 @@ export default function App() {
   const recordingRef = useRef(recordingState)
   /** The open session, held only while one is running. */
   const micSessionRef = useRef<MicrophoneSession | null>(null)
+  /**
+   * Where the deck stands with MIDI, and which controller is playing it.
+   *
+   * A browser without Web MIDI opens on `unsupported` and stops there: absence
+   * is a normal state this deck reports and otherwise ignores completely.
+   */
+  const [midiConnection, setMidiConnection] = useState<MidiConnection>(() =>
+    isMidiSupported() ? { status: 'idle' } : { status: 'unsupported' },
+  )
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
+  /**
+   * Read back inside the adapter's own callbacks, which are handed over once
+   * and never see a later render's state.
+   */
+  const selectedDeviceRef = useRef<string | null>(null)
+  const midiRouterRef = useRef(createMidiRouter())
+  const midiSessionRef = useRef<MidiInputSession | null>(null)
+  /** A request is open. Read synchronously, so a second press cannot slip in. */
+  const midiConnectingRef = useRef(false)
   const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
   const [isSharing, setIsSharing] = useState(false)
   // Assembling a bundle reads every pad's audio back out of storage, so unlike
@@ -968,10 +995,10 @@ export default function App() {
     }
   }, [stopTransport])
 
-  const handleStabAttack = useCallback((source: string, midi: number) => {
+  const handleStabAttack = useCallback((source: string, midi: number, velocity?: number) => {
     // Sound first: the note is attacked before any bookkeeping, so watching
     // for a chord never costs the keyboard its latency.
-    engine.attackStabNote(source, midi)
+    engine.attackStabNote(source, midi, velocity)
     chordRef.current = observeChordAttack(chordRef.current, source, midi)
     // Same record back when the chord did not grow, so React bails out and a
     // held key repeats nothing up the tree.
@@ -985,13 +1012,122 @@ export default function App() {
     chordRef.current = observeChordRelease(chordRef.current, source)
   }, [])
 
-  const handlePadAttack = useCallback((inputSourceId: string, padId: PadLaneId) => {
-    engine.attackPad(inputSourceId, padId)
-  }, [])
+  const handlePadAttack = useCallback(
+    (inputSourceId: string, padId: PadLaneId, accent?: boolean) => {
+      engine.attackPad(inputSourceId, padId, accent)
+    },
+    [],
+  )
 
   const handlePadRelease = useCallback((inputSourceId: string) => {
     engine.releasePad(inputSourceId)
   }, [])
+
+  /**
+   * Carry out what the router decided, through the deck's own live-play
+   * handlers rather than straight into the engine.
+   *
+   * That is the whole of the integration, and it is what makes a MIDI note
+   * genuinely indistinguishable from a computer key: the same handlers mean the
+   * same hold model, the same on-screen lighting, and a chord played on
+   * hardware counting toward the lesson that asks for one.
+   */
+  const runMidi = useCallback(
+    (instructions: readonly MidiInstruction[]) => {
+      for (const instruction of instructions) {
+        switch (instruction.kind) {
+          case 'stabAttack':
+            handleStabAttack(instruction.source, instruction.midi, instruction.velocity)
+            break
+          case 'stabRelease':
+            handleStabRelease(instruction.source)
+            break
+          case 'padAttack':
+            handlePadAttack(instruction.source, instruction.padId, instruction.accent)
+            break
+          case 'padRelease':
+            handlePadRelease(instruction.source)
+            break
+        }
+      }
+    },
+    [handleStabAttack, handleStabRelease, handlePadAttack, handlePadRelease],
+  )
+
+  /** Point the deck at a controller, letting go of whatever the last one held. */
+  const selectMidiDevice = useCallback(
+    (deviceId: string | null) => {
+      const previous = selectedDeviceRef.current
+      if (previous !== null && previous !== deviceId) {
+        // Nothing will ever send those note-offs now, so switching has to be
+        // them — the same rule an unplug follows.
+        runMidi(midiRouterRef.current.releaseDevice(previous))
+      }
+      selectedDeviceRef.current = deviceId
+      setSelectedDeviceId(deviceId)
+    },
+    [runMidi],
+  )
+
+  /**
+   * Ask for MIDI access. Called from the device panel and nowhere else: a
+   * permission prompt nobody asked for is not how a deck that is playable on
+   * first click should open.
+   */
+  const handleConnectMidi = useCallback(async () => {
+    // A permission prompt leaves the page interactive, so pressing again while
+    // one is open must not open a second request — the first session would be
+    // replaced without ever being closed, leaving its ports listening.
+    if (midiSessionRef.current || midiConnectingRef.current || !isMidiSupported()) return
+    midiConnectingRef.current = true
+    setMidiConnection({ status: 'connecting' })
+    try {
+      const session = await openMidiInputs({
+        onMessage: (deviceId, data) => {
+          // Only the chosen controller plays the deck. A second one sitting on
+          // the desk is listened to but not heard, so it cannot join in.
+          if (deviceId !== selectedDeviceRef.current) return
+          runMidi(midiRouterRef.current.receive(deviceId, data))
+        },
+        onDevices: (devices) => {
+          setMidiConnection({ status: 'ready', devices })
+          selectMidiDevice(resolveSelectedDevice(devices, selectedDeviceRef.current))
+        },
+        onDisconnect: (deviceId) => {
+          // The classic stuck note: a controller pulled out mid-note will never
+          // send its note-offs, so its disconnect is them.
+          runMidi(midiRouterRef.current.releaseDevice(deviceId))
+        },
+      })
+      midiSessionRef.current = session
+      setMidiConnection({ status: 'ready', devices: session.devices })
+      selectMidiDevice(resolveSelectedDevice(session.devices, selectedDeviceRef.current))
+    } catch {
+      // A refusal is the user's answer, not a fault. The deck is untouched.
+      setMidiConnection({ status: 'refused' })
+    } finally {
+      midiConnectingRef.current = false
+    }
+  }, [runMidi, selectMidiDevice])
+
+  const handleSelectMidiDevice = useCallback(
+    (deviceId: string) => selectMidiDevice(deviceId),
+    [selectMidiDevice],
+  )
+
+  // Close the ports when the deck goes away, releasing anything still held.
+  // Deliberately not tied to blur or visibility the way computer keys are: a
+  // physical key stays down when the tab loses focus, and its note-off is
+  // still coming.
+  useEffect(
+    () => () => {
+      const held = selectedDeviceRef.current
+      if (held !== null) runMidi(midiRouterRef.current.releaseDevice(held))
+      midiSessionRef.current?.close()
+      midiSessionRef.current = null
+    },
+    [runMidi],
+  )
 
   // Which lesson these act on is read back out of the document inside the
   // updater rather than closed over, so they never change identity either.
@@ -1422,6 +1558,16 @@ export default function App() {
         onToggleStep={handleToggleNoteStep}
         onTranspose={handleTransposeNote}
         onResize={handleResizeNote}
+      />
+
+      {/* Last on the deck: a setup surface, not an instrument. Putting it here
+          keeps it out of the middle of the playing flow a keyboard user tabs
+          through to reach the pads and keys. */}
+      <MidiPanel
+        connection={midiConnection}
+        selectedDeviceId={selectedDeviceId}
+        onConnect={handleConnectMidi}
+        onSelectDevice={handleSelectMidiDevice}
       />
     </main>
       {editor && (

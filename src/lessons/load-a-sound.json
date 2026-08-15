@@ -1,0 +1,7 @@
+{
+  "id": "load-a-sound",
+  "title": "Load a Sound",
+  "intro": "Sampling starts with audio that is yours. Open the Sampler's Load control and pick any audio file — a track, a field recording, a voice memo — or hit Record and capture something through your microphone. The Basement Break already sitting in the list is ours, not yours; this one only counts when you bring something in.",
+  "spotlight": ["sampler:sources"],
+  "goal": [{ "type": "sourceLoaded", "origin": "user", "min": 1 }]
+}

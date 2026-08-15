@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   CURATED_SAMPLE_SOURCE,
+  SHIPPED_SOURCES,
+  shippedSource,
+  withShippedSources,
   DEFAULT_PAD_REGION_SECONDS,
   PAD_LANES,
   assignSourceToPad,
@@ -16,6 +19,7 @@ import {
   setPadTune,
   tunePlaybackRate,
   type SampleRegion,
+  type SampleSource,
 } from './sampler'
 import { sliceKey } from './slice'
 
@@ -322,5 +326,47 @@ describe('createPadSoundingLanes', () => {
     sounding.clearSequenced()
 
     expect(sounding.atTime(1.5)).toEqual(['pad1'])
+  })
+})
+
+describe('the shipped sources', () => {
+  it('carries the curated break the Sampling Arc is authored against', () => {
+    // A region-window lesson can only mean something musical if the app knows
+    // the file, so the curated source's duration is part of the contract the
+    // lesson parser validates windows against.
+    expect(SHIPPED_SOURCES).toContain(CURATED_SAMPLE_SOURCE)
+    expect(CURATED_SAMPLE_SOURCE.origin).toBe('shipped')
+    expect(CURATED_SAMPLE_SOURCE.duration).toBeGreaterThan(3)
+  })
+
+  it('resolves a shipped source by id, and nothing else', () => {
+    expect(shippedSource(CURATED_SAMPLE_SOURCE.id)).toEqual(CURATED_SAMPLE_SOURCE)
+    expect(shippedSource('a-file-the-user-brought')).toBeUndefined()
+  })
+
+  it('keeps a bank the user built while retiring a shipped source the app no longer has', () => {
+    // A shipped source is the app's to change; a user's own is not. Pads that
+    // pointed at a retired one keep their regions and so keep sounding — they
+    // lose only re-editability, which is the modelled sourceMissing state.
+    const mine: SampleSource = {
+      id: 'mine',
+      name: 'My Break',
+      origin: 'upload',
+      duration: 2,
+      channels: 2,
+    }
+    const retired: SampleSource = {
+      id: 'curated-gone',
+      name: 'Old Perc',
+      origin: 'shipped',
+      duration: 0.25,
+      channels: 1,
+    }
+
+    expect(withShippedSources([retired, mine])).toEqual([mine, CURATED_SAMPLE_SOURCE])
+  })
+
+  it('never installs the curated source twice', () => {
+    expect(withShippedSources([CURATED_SAMPLE_SOURCE])).toEqual([CURATED_SAMPLE_SOURCE])
   })
 })

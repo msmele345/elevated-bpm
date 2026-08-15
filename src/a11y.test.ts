@@ -198,7 +198,7 @@ describe('deck accessibility', () => {
 describe('region editor accessibility', () => {
   async function openEditor(): Promise<HTMLElement> {
     await renderDeck()
-    fireEvent.click(screen.getByRole('button', { name: 'Chop Warehouse Perc' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Basement Break' }))
     return screen.findByRole('dialog')
   }
 
@@ -272,7 +272,7 @@ describe('region editor accessibility', () => {
 describe('region editor focus containment', () => {
   async function openEditor(): Promise<HTMLElement> {
     await renderDeck()
-    fireEvent.click(screen.getByRole('button', { name: 'Chop Warehouse Perc' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Basement Break' }))
     return screen.findByRole('dialog')
   }
 

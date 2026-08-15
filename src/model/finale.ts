@@ -1,5 +1,30 @@
 import { stabKeyForCode } from './stab'
 
+/**
+ * What a track's graduation moment says, and how loudly.
+ *
+ * Copy per arc rather than hardcoded, because the deck now has more than one
+ * path to finish and a second ending that claimed the first one's words would
+ * be a lie. `scale` is the only thing the two endings genuinely differ on: the
+ * techno arc is the product's spine and its graduation stays the biggest moment
+ * on the deck, so anything after it is deliberately quieter.
+ */
+export interface ArcFinale {
+  kicker: string
+  /** The small line above the headline, e.g. "You made". */
+  lead: string
+  headline: string
+  copy: string
+  /** What the one control out of the moment says. */
+  close: string
+  scale: 'grand' | 'compact'
+}
+
+/** Lights in the step run behind the headline — the grand ending gets a full bar. */
+export function finaleStepCount(finale: ArcFinale): number {
+  return finale.scale === 'grand' ? 16 : 8
+}
+
 interface FinaleKeyInput {
   key: string
   code: string

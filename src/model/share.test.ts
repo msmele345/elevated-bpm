@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_ARC_ID,
   activePattern,
   addSource,
   assignSourceToSamplerPad,
@@ -134,7 +135,8 @@ describe('share URL', () => {
         lessonProgress: {},
         prefs: {},
         mixer: source.mixer,
-        activeLessonId: null,
+        activeArcId: DEFAULT_ARC_ID,
+        activeLessonIds: {},
       },
     })
   })
@@ -276,7 +278,8 @@ describe('share URL', () => {
     expect(activePattern(shared.project).lanes[1].steps[4].on).toBe(true)
     expect(shared.project.lessonProgress).toEqual({})
     expect(shared.project.prefs).toEqual({})
-    expect(shared.project.activeLessonId).toBeNull()
+    expect(shared.project.activeArcId).toBe(DEFAULT_ARC_ID)
+    expect(shared.project.activeLessonIds).toEqual({})
   })
 
   it('refuses a payload newer than this build without trying to open it', async () => {
@@ -572,7 +575,8 @@ describe('beat bundle', () => {
       ...sender,
       lessonProgress: { 'four-on-the-floor': { completed: true, dismissed: true } },
       prefs: { reducedFlashes: true },
-      activeLessonId: 'filter-sweep',
+      activeArcId: 'sampling',
+      activeLessonIds: { techno: 'filter-sweep', sampling: 'trim-it-tight' },
     }
 
     const bundle = await createBundle(withProgress, slices)
@@ -584,7 +588,8 @@ describe('beat bundle', () => {
     if (opened.status !== 'ready') throw new Error('Expected a playable bundle')
     expect(opened.project.lessonProgress).toEqual({})
     expect(opened.project.prefs).toEqual({})
-    expect(opened.project.activeLessonId).toBeNull()
+    expect(opened.project.activeArcId).toBe(DEFAULT_ARC_ID)
+    expect(opened.project.activeLessonIds).toEqual({})
   })
 
   it('refuses to write a bundle whose own pad has lost its audio, naming that pad', async () => {

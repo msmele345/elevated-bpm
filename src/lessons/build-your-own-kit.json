@@ -1,0 +1,12 @@
+{
+  "id": "build-your-own-kit",
+  "title": "Build Your Own Kit",
+  "intro": "Everything at once, out of your own material. Keep the sound you loaded in the bank, get chops onto three of the four pads — cut more than one out of the same file if you like, that is what a region is for — hold Pad 1 tuned away from centre, and program at least four pad steps into the loop. Then press play: that is a kit nobody else has.",
+  "spotlight": [],
+  "goal": [
+    { "type": "sourceLoaded", "origin": "user", "min": 1 },
+    { "type": "padAssigned", "min": 3 },
+    { "type": "padTuned", "pad": "pad1", "minSemitones": 5 },
+    { "type": "padStepsPlaced", "min": 4 }
+  ]
+}

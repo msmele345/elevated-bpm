@@ -1,0 +1,7 @@
+{
+  "id": "fit-the-break",
+  "title": "Fit the Break to the Grid",
+  "intro": "A whole break is a different tool from a single hit. Assign the Basement Break to Pad 2 without trimming it, then set that pad's Fit to fill the bar — 16 steps. The chop now stretches or squeezes to the grid, and its pitch moves with it, exactly the way pitching a record does. Change the tempo and watch it follow.",
+  "spotlight": ["pad:pad2"],
+  "goal": [{ "type": "fitTargetSet", "pad": "pad2", "minSteps": 8 }]
+}

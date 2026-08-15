@@ -1,20 +1,23 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
-import { finaleKeyAction } from '../model/finale'
+import { finaleKeyAction, finaleStepCount, type ArcFinale } from '../model/finale'
 
 interface FinaleMomentProps {
+  finale: ArcFinale
   onClose: () => void
 }
 
-const FINALE_STEPS = Array.from({ length: 16 }, (_, index) => index)
-
 /**
- * The one graduation beat in the curriculum. It sits over the still-running
- * deck rather than replacing it: the user's groove is the reason this exists,
- * and closing it drops them straight back into their instrument.
+ * A track's graduation beat. It sits over the still-running deck rather than
+ * replacing it: the user's groove is the reason this exists, and closing it
+ * drops them straight back into their instrument.
+ *
+ * Every word of it comes from the arc that was finished, so a second track can
+ * have an ending of its own without claiming the first one's.
  */
-export function FinaleMoment({ onClose }: FinaleMomentProps) {
+export function FinaleMoment({ finale, onClose }: FinaleMomentProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
+  const steps = Array.from({ length: finaleStepCount(finale) }, (_, index) => index)
 
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null
@@ -36,6 +39,7 @@ export function FinaleMoment({ onClose }: FinaleMomentProps) {
   return (
     <section
       className="finale"
+      data-scale={finale.scale}
       role="dialog"
       aria-modal="true"
       aria-labelledby="finale-title"
@@ -43,23 +47,22 @@ export function FinaleMoment({ onClose }: FinaleMomentProps) {
     >
       <div className="finale-glow" aria-hidden="true" />
       <div className="finale-card">
-        <p className="finale-kicker">Final challenge complete · EB-01 certified</p>
+        <p className="finale-kicker">{finale.kicker}</p>
         <div className="finale-step-run" aria-hidden="true">
-          {FINALE_STEPS.map((step) => (
+          {steps.map((step) => (
             <span key={step} style={{ '--finale-step': step } as CSSProperties} />
           ))}
         </div>
         <h2 className="finale-title" id="finale-title">
-          <span>You made</span>
-          techno
+          <span>{finale.lead}</span>
+          {finale.headline}
         </h2>
         <p className="finale-copy" id="finale-copy">
-          That groove is not a preset. You built the kick, the lift, the bass movement and the
-          stabs — one machine, speaking in your voice.
+          {finale.copy}
         </p>
         <button ref={closeRef} type="button" className="finale-close" onClick={onClose}>
           <span className="finale-close-led" aria-hidden="true" />
-          Keep it rolling
+          {finale.close}
         </button>
       </div>
     </section>

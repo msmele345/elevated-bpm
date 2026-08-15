@@ -3,14 +3,36 @@ import { DECK_PARAM_IDS, isDeckParamId, type DeckParamId } from './deckParams'
 import { NOTE_LANES } from './note'
 import { NO_PARAM_MOTION, paramTravel, type ParamMotion } from './paramMotion'
 import { KIT_LANES } from './pattern'
+import { MAX_SLICE_SECONDS } from './region'
+import {
+  MAX_FIT_STEPS,
+  MAX_PAD_TUNE,
+  MIN_FIT_STEPS,
+  PAD_LANES,
+  SHIPPED_SOURCES,
+  shippedSource,
+  type PadSettings,
+  type SampleOrigin,
+  type SampleRegion,
+  type SampleSource,
+  type SamplerSettings,
+} from './sampler'
 import { MAX_BPM, MIN_BPM } from './transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
   type NoteLaneId,
   type NoteStep,
+  type PadLaneId,
   type Pattern,
 } from './types'
+
+/**
+ * A ceiling on how many sources a goal may ask for. Nothing in the document
+ * bounds the bank, so this is the arc's own judgement: a lesson that asked for
+ * more sounds than a learner would plausibly load is one they would give up on.
+ */
+const MAX_GOAL_SOURCES = 8
 
 /**
  * Lessons are pure data (see plans/elevated-bpm-v1.md): a JSON definition of
@@ -92,6 +114,74 @@ export interface ParamSweptGoal {
   minTravel: number
 }
 
+/**
+ * Origins a sampling goal can ask for. `'user'` means either way a learner
+ * brings audio in — the point is that they brought it, not how.
+ *
+ * `'shipped'` is deliberately absent: the deck installs the curated source so a
+ * first chop is one click away, and a goal it satisfied on its own would arrive
+ * already earned. That is the trap the backbeat clap fell into in Phase 7, and
+ * this is where it is refused.
+ */
+export type GoalOrigin = 'user' | 'upload' | 'recording'
+
+/** Audio the learner brought in themselves, of a given kind and count. */
+export interface SourceLoadedGoal {
+  type: 'sourceLoaded'
+  origin: GoalOrigin
+  min: number
+}
+
+/** Pads carrying a chop — optionally only chops cut from the learner's own audio. */
+export interface PadAssignedGoal {
+  type: 'padAssigned'
+  min: number
+  origin?: GoalOrigin
+}
+
+/**
+ * A chop that starts inside a window of a particular file.
+ *
+ * The source id is as load-bearing as the window: a window alone is a false
+ * positive waiting to happen, because a learner who loads their own break and
+ * happens to chop near the same offset would complete a lesson about a file
+ * they never opened.
+ */
+export interface RegionStartsWithinGoal {
+  type: 'regionStartsWithin'
+  pad: PadLaneId
+  source: string
+  from: number
+  to: number
+}
+
+/** A chop trimmed down to at most this long — "trim it tight". */
+export interface RegionShorterThanGoal {
+  type: 'regionShorterThan'
+  pad: PadLaneId
+  seconds: number
+}
+
+/** A pad holding a chop *and* declaring how many steps it should fill. */
+export interface FitTargetSetGoal {
+  type: 'fitTargetSet'
+  pad: PadLaneId
+  minSteps: number
+}
+
+/** A pad pitched away from neutral, in either direction. */
+export interface PadTunedGoal {
+  type: 'padTuned'
+  pad: PadLaneId
+  minSemitones: number
+}
+
+/** Pad steps switched on anywhere across the sampler: the kit, sequenced. */
+export interface PadStepsPlacedGoal {
+  type: 'padStepsPlaced'
+  min: number
+}
+
 export type GoalAssertion =
   | StepsActiveGoal
   | StepsAccentedGoal
@@ -101,6 +191,13 @@ export type GoalAssertion =
   | BpmInRangeGoal
   | ParamSweptGoal
   | ChordPlayedGoal
+  | SourceLoadedGoal
+  | PadAssignedGoal
+  | RegionStartsWithinGoal
+  | RegionShorterThanGoal
+  | FitTargetSetGoal
+  | PadTunedGoal
+  | PadStepsPlacedGoal
 
 export interface Lesson {
   id: string
@@ -133,6 +230,11 @@ export function spotlitParamIds(lesson: Lesson | null): string[] {
   return spotlitIds(lesson, 'knob:')
 }
 
+/** Sampler pad ids the active lesson spotlights, e.g. "pad:pad1" → "pad1". */
+export function spotlitPadIds(lesson: Lesson | null): PadLaneId[] {
+  return spotlitIds(lesson, 'pad:') as PadLaneId[]
+}
+
 /**
  * Whether the lesson points at one particular control, for surfaces the deck
  * has exactly one of — e.g. "transport:tempo" or "keyboard:stab".
@@ -146,6 +248,16 @@ export function spotlightsTarget(lesson: Lesson | null, target: string): boolean
  * what the user has done to it this session. Goals stay declarative; the
  * context is the only thing that grows as the vocabulary does.
  */
+/**
+ * What the sampler looks like to a goal: the four pads and the bank behind
+ * them. Both halves are needed — a pad names a source id, and only the bank
+ * knows whether that source is one the app installed or one the learner did.
+ */
+export interface SamplerGoalContext {
+  pads: SamplerSettings
+  sources: readonly SampleSource[]
+}
+
 export interface GoalContext {
   pattern: Pattern
   /** Knob motion observed during playback; absent for a session that has moved nothing. */
@@ -154,6 +266,8 @@ export interface GoalContext {
   bpm?: number
   /** Live keyboard playing observed this session. */
   chord?: ChordPlay
+  /** The sampler's pads and the sources behind them. */
+  sampler?: SamplerGoalContext
 }
 
 /** True when exactly the wanted step indexes satisfy `holds`, and no others. */
@@ -188,6 +302,39 @@ function isNotesActiveMet(goal: NotesActiveGoal, pattern: Pattern): boolean {
   return exactlyOn(lane.steps, goal.steps, (step) => step.on)
 }
 
+/** True when a source's origin answers what the goal asked for. */
+function matchesOrigin(origin: SampleOrigin, wanted: GoalOrigin): boolean {
+  return wanted === 'user' ? origin !== 'shipped' : origin === wanted
+}
+
+/** One pad's settings, or nothing when the sampler is not in the context at all. */
+function padOf(context: GoalContext, padId: PadLaneId): PadSettings | undefined {
+  return context.sampler?.pads[padId]
+}
+
+/** A pad's chop and the source it was cut from, resolved together. */
+function chopOf(
+  context: GoalContext,
+  padId: PadLaneId,
+): { region: SampleRegion; source?: SampleSource } | undefined {
+  const region = padOf(context, padId)?.region
+  if (!region) return undefined
+  return {
+    region,
+    source: context.sampler?.sources.find((candidate) => candidate.id === region.sourceId),
+  }
+}
+
+/** Pads holding a chop, narrowed to a source origin when the goal names one. */
+function assignedPads(context: GoalContext, origin?: GoalOrigin): number {
+  return PAD_LANES.filter((pad) => {
+    const chop = chopOf(context, pad.id)
+    if (!chop) return false
+    if (!origin) return true
+    return chop.source !== undefined && matchesOrigin(chop.source.origin, origin)
+  }).length
+}
+
 function isAssertionMet(goal: GoalAssertion, context: GoalContext): boolean {
   switch (goal.type) {
     case 'stepsActive':
@@ -207,6 +354,40 @@ function isAssertionMet(goal: GoalAssertion, context: GoalContext): boolean {
       return paramTravel(context.motion ?? NO_PARAM_MOTION, goal.param) >= goal.minTravel
     case 'chordPlayed':
       return (context.chord ?? NO_CHORD_PLAY).maxNotes >= goal.minNotes
+    case 'sourceLoaded':
+      return (
+        (context.sampler?.sources ?? []).filter((source) =>
+          matchesOrigin(source.origin, goal.origin),
+        ).length >= goal.min
+      )
+    case 'padAssigned':
+      return assignedPads(context, goal.origin) >= goal.min
+    case 'regionStartsWithin': {
+      const chop = chopOf(context, goal.pad)
+      // The file matters as much as the window: the same offset in the
+      // learner's own break is a different chop entirely.
+      if (!chop || chop.region.sourceId !== goal.source) return false
+      return chop.region.start >= goal.from && chop.region.start <= goal.to
+    }
+    case 'regionShorterThan': {
+      const chop = chopOf(context, goal.pad)
+      return chop !== undefined && chop.region.duration <= goal.seconds
+    }
+    case 'fitTargetSet': {
+      const pad = padOf(context, goal.pad)
+      // A fit target on a pad with nothing on it is not fitting anything.
+      if (!pad?.region || pad.fit === null) return false
+      return pad.fit >= goal.minSteps
+    }
+    case 'padTuned':
+      return Math.abs(padOf(context, goal.pad)?.tune ?? 0) >= goal.minSemitones
+    case 'padStepsPlaced':
+      return (
+        context.pattern.padLanes.reduce(
+          (placed, lane) => placed + lane.steps.filter((step) => step.on).length,
+          0,
+        ) >= goal.min
+      )
   }
 }
 
@@ -390,6 +571,178 @@ function parseParamSweptGoal(
   return { type: 'paramSwept', param: goal.param, minTravel: goal.minTravel }
 }
 
+const PAD_LANE_IDS: string[] = PAD_LANES.map((pad) => pad.id)
+
+/** A pad the sampler actually has. Four, fixed and closed. */
+function parsePad(pad: unknown, lessonId: string, index: number): PadLaneId {
+  if (typeof pad !== 'string' || !PAD_LANE_IDS.includes(pad)) {
+    fail(
+      lessonId,
+      `goal[${index}] names pad "${String(pad)}"; the sampler has ${PAD_LANE_IDS.join(', ')}`,
+    )
+  }
+  return pad as PadLaneId
+}
+
+const GOAL_ORIGINS: string[] = ['user', 'upload', 'recording']
+
+/**
+ * An origin a goal may ask for. "shipped" is refused rather than accepted and
+ * ignored: a goal the pre-installed source satisfies on its own is a lesson
+ * that opens already earned, and it must fail here rather than at runtime.
+ */
+function parseOrigin(origin: unknown, lessonId: string, index: number): GoalOrigin {
+  if (typeof origin !== 'string' || !GOAL_ORIGINS.includes(origin)) {
+    fail(
+      lessonId,
+      `goal[${index}] origin must be one of ${GOAL_ORIGINS.join(', ')} — a shipped source must never earn a lesson`,
+    )
+  }
+  return origin as GoalOrigin
+}
+
+/** An integer count inside a ceiling the deck could actually reach. */
+function parseBoundedCount(
+  value: unknown,
+  field: string,
+  min: number,
+  max: number,
+  lessonId: string,
+  index: number,
+): number {
+  if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
+    fail(lessonId, `goal[${index}] ${field} must be an integer in [${min}, ${max}]`)
+  }
+  return value as number
+}
+
+function parseSourceLoadedGoal(
+  goal: Partial<SourceLoadedGoal>,
+  lessonId: string,
+  index: number,
+): SourceLoadedGoal {
+  return {
+    type: 'sourceLoaded',
+    origin: parseOrigin(goal.origin, lessonId, index),
+    min: parseBoundedCount(goal.min, 'min', 1, MAX_GOAL_SOURCES, lessonId, index),
+  }
+}
+
+function parsePadAssignedGoal(
+  goal: Partial<PadAssignedGoal>,
+  lessonId: string,
+  index: number,
+): PadAssignedGoal {
+  return {
+    type: 'padAssigned',
+    min: parseBoundedCount(goal.min, 'min', 1, PAD_LANES.length, lessonId, index),
+    ...(goal.origin === undefined
+      ? {}
+      : { origin: parseOrigin(goal.origin, lessonId, index) }),
+  }
+}
+
+function parseRegionStartsWithinGoal(
+  goal: Partial<RegionStartsWithinGoal>,
+  lessonId: string,
+  index: number,
+): RegionStartsWithinGoal {
+  const pad = parsePad(goal.pad, lessonId, index)
+  // Only a shipped source has a duration knowable when the lesson is parsed, so
+  // it is the only thing a window can be checked against — and checking is the
+  // point: a window past the end of the file is a lesson nobody can finish.
+  const source = typeof goal.source === 'string' ? shippedSource(goal.source) : undefined
+  if (!source) {
+    fail(
+      lessonId,
+      `goal[${index}] names source "${String(goal.source)}"; the app ships ${SHIPPED_SOURCES.map((s) => s.id).join(', ')}`,
+    )
+  }
+  const { from, to } = goal
+  if (
+    typeof from !== 'number' ||
+    typeof to !== 'number' ||
+    !(from >= 0) ||
+    !(to <= source.duration) ||
+    from >= to
+  ) {
+    fail(
+      lessonId,
+      `goal[${index}] window must run from → to inside [0, ${source.duration}] of "${source.id}"`,
+    )
+  }
+  return { type: 'regionStartsWithin', pad, source: source.id, from, to }
+}
+
+function parseRegionShorterThanGoal(
+  goal: Partial<RegionShorterThanGoal>,
+  lessonId: string,
+  index: number,
+): RegionShorterThanGoal {
+  const pad = parsePad(goal.pad, lessonId, index)
+  // A chop can never be longer than a slice, and a zero-length one is silence.
+  if (
+    typeof goal.seconds !== 'number' ||
+    !(goal.seconds > 0 && goal.seconds <= MAX_SLICE_SECONDS)
+  ) {
+    fail(lessonId, `goal[${index}] seconds must be a number in (0, ${MAX_SLICE_SECONDS}]`)
+  }
+  return { type: 'regionShorterThan', pad, seconds: goal.seconds }
+}
+
+function parseFitTargetSetGoal(
+  goal: Partial<FitTargetSetGoal>,
+  lessonId: string,
+  index: number,
+): FitTargetSetGoal {
+  return {
+    type: 'fitTargetSet',
+    pad: parsePad(goal.pad, lessonId, index),
+    minSteps: parseBoundedCount(
+      goal.minSteps,
+      'minSteps',
+      MIN_FIT_STEPS,
+      MAX_FIT_STEPS,
+      lessonId,
+      index,
+    ),
+  }
+}
+
+function parsePadTunedGoal(
+  goal: Partial<PadTunedGoal>,
+  lessonId: string,
+  index: number,
+): PadTunedGoal {
+  const pad = parsePad(goal.pad, lessonId, index)
+  // Neutral is no goal at all, and further than the knob turns is unreachable.
+  if (
+    typeof goal.minSemitones !== 'number' ||
+    !(goal.minSemitones > 0 && goal.minSemitones <= MAX_PAD_TUNE)
+  ) {
+    fail(lessonId, `goal[${index}] minSemitones must be a number in (0, ${MAX_PAD_TUNE}]`)
+  }
+  return { type: 'padTuned', pad, minSemitones: goal.minSemitones }
+}
+
+function parsePadStepsPlacedGoal(
+  goal: Partial<PadStepsPlacedGoal>,
+  lessonId: string,
+  index: number,
+): PadStepsPlacedGoal {
+  return {
+    type: 'padStepsPlaced',
+    min: parseBoundedCount(
+      goal.min,
+      'min',
+      1,
+      STEP_COUNT * PAD_LANES.length,
+      lessonId,
+      index,
+    ),
+  }
+}
+
 function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion {
   const goal = raw as Partial<GoalAssertion> | null
   if (goal === null || typeof goal !== 'object') fail(lessonId, `goal[${index}] must be an object`)
@@ -410,6 +763,20 @@ function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion
       return parseParamSweptGoal(goal, lessonId, index)
     case 'chordPlayed':
       return parseChordPlayedGoal(goal, lessonId, index)
+    case 'sourceLoaded':
+      return parseSourceLoadedGoal(goal, lessonId, index)
+    case 'padAssigned':
+      return parsePadAssignedGoal(goal, lessonId, index)
+    case 'regionStartsWithin':
+      return parseRegionStartsWithinGoal(goal, lessonId, index)
+    case 'regionShorterThan':
+      return parseRegionShorterThanGoal(goal, lessonId, index)
+    case 'fitTargetSet':
+      return parseFitTargetSetGoal(goal, lessonId, index)
+    case 'padTuned':
+      return parsePadTunedGoal(goal, lessonId, index)
+    case 'padStepsPlaced':
+      return parsePadStepsPlacedGoal(goal, lessonId, index)
     default:
       fail(lessonId, `goal[${index}] has unknown type "${String(goal.type)}"`)
   }

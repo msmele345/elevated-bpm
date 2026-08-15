@@ -11,8 +11,11 @@ import {
 } from './sampler'
 import { DEFAULT_BPM } from './transport'
 import {
+  DEFAULT_ARC_ID,
+  activeLessonIdFor,
   activePattern,
   addSource,
+  selectArc,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
   referencedAudio,
@@ -57,17 +60,18 @@ describe('createInitialProjectState', () => {
     expect(state.prefs).toEqual({})
     // No lesson picked yet: the document follows the arc's own path until the
     // user steps off it.
-    expect(state.activeLessonId).toBeNull()
+    expect(activeLessonIdFor(state, DEFAULT_ARC_ID)).toBeNull()
+    expect(state.activeArcId).toBe(DEFAULT_ARC_ID)
   })
 })
 
 describe('selectLesson', () => {
   it('records which lesson the user stepped into, immutably', () => {
     const state = createInitialProjectState()
-    const selected = selectLesson(state, 'filter-sweep')
+    const selected = selectLesson(state, DEFAULT_ARC_ID, 'filter-sweep')
 
-    expect(selected.activeLessonId).toBe('filter-sweep')
-    expect(state.activeLessonId).toBeNull()
+    expect(activeLessonIdFor(selected, DEFAULT_ARC_ID)).toBe('filter-sweep')
+    expect(activeLessonIdFor(state, DEFAULT_ARC_ID)).toBeNull()
   })
 
   it('leaves the pattern, transport, and progress alone — navigation is not an edit', () => {
@@ -75,16 +79,64 @@ describe('selectLesson', () => {
       cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
       137,
     )
-    const selected = selectLesson(sandbox, 'stab-chord')
+    const selected = selectLesson(sandbox, DEFAULT_ARC_ID, 'stab-chord')
 
     expect(selected.patterns).toBe(sandbox.patterns)
     expect(selected.transport).toBe(sandbox.transport)
     expect(selected.lessonProgress).toBe(sandbox.lessonProgress)
+    expect(selected.instrumentSettings).toBe(sandbox.instrumentSettings)
+    expect(selected.sources).toBe(sandbox.sources)
+    expect(selected.mixer).toBe(sandbox.mixer)
   })
 
   it('hands the path back when the selection is cleared', () => {
-    const selected = selectLesson(createInitialProjectState(), 'filter-sweep')
-    expect(selectLesson(selected, null).activeLessonId).toBeNull()
+    const selected = selectLesson(createInitialProjectState(), DEFAULT_ARC_ID, 'filter-sweep')
+    expect(activeLessonIdFor(selectLesson(selected, DEFAULT_ARC_ID, null), DEFAULT_ARC_ID))
+      .toBeNull()
+  })
+
+  it('keeps each arc its own place, so leaving one and coming back finds it unmoved', () => {
+    // One pointer cannot hold two places: with a single activeLessonId,
+    // switching to sampling would leave it naming a sampling lesson, the techno
+    // arc would fail to find it, and the user's rung would be silently gone.
+    const state = selectLesson(
+      selectLesson(createInitialProjectState(), DEFAULT_ARC_ID, 'filter-sweep'),
+      'sampling',
+      'trim-it-tight',
+    )
+
+    expect(activeLessonIdFor(state, DEFAULT_ARC_ID)).toBe('filter-sweep')
+    expect(activeLessonIdFor(state, 'sampling')).toBe('trim-it-tight')
+  })
+})
+
+describe('selectArc', () => {
+  it('names which track is on screen without disturbing either place on it', () => {
+    const state = selectLesson(
+      selectLesson(createInitialProjectState(), DEFAULT_ARC_ID, 'filter-sweep'),
+      'sampling',
+      'trim-it-tight',
+    )
+    const switched = selectArc(state, 'sampling')
+
+    expect(switched.activeArcId).toBe('sampling')
+    expect(activeLessonIdFor(switched, DEFAULT_ARC_ID)).toBe('filter-sweep')
+    expect(activeLessonIdFor(switched, 'sampling')).toBe('trim-it-tight')
+  })
+
+  it('leaves the whole sandbox by reference — switching tracks is not an edit', () => {
+    const sandbox = setTransportBpm(
+      cycleActivePatternStep(createInitialProjectState(), 'kick', 4),
+      137,
+    )
+    const switched = selectArc(sandbox, 'sampling')
+
+    expect(switched.patterns).toBe(sandbox.patterns)
+    expect(switched.instrumentSettings).toBe(sandbox.instrumentSettings)
+    expect(switched.sources).toBe(sandbox.sources)
+    expect(switched.mixer).toBe(sandbox.mixer)
+    expect(switched.transport).toBe(sandbox.transport)
+    expect(switched.lessonProgress).toBe(sandbox.lessonProgress)
   })
 })
 
@@ -93,10 +145,17 @@ describe('enterLesson', () => {
     const dismissed = updateLessonProgress(createInitialProjectState(), 'filter-sweep', {
       dismissed: true,
     })
-    const entered = enterLesson(dismissed, 'filter-sweep')
+    const entered = enterLesson(dismissed, DEFAULT_ARC_ID, 'filter-sweep')
 
-    expect(entered.activeLessonId).toBe('filter-sweep')
+    expect(activeLessonIdFor(entered, DEFAULT_ARC_ID)).toBe('filter-sweep')
     expect(entered.lessonProgress['filter-sweep'].dismissed).toBe(false)
+  })
+
+  it('brings the track it belongs to on screen with it', () => {
+    const entered = enterLesson(createInitialProjectState(), 'sampling', 'trim-it-tight')
+
+    expect(entered.activeArcId).toBe('sampling')
+    expect(activeLessonIdFor(entered, 'sampling')).toBe('trim-it-tight')
   })
 
   it('keeps a lesson already earned marked complete when the user comes back to it', () => {
@@ -104,7 +163,7 @@ describe('enterLesson', () => {
       completed: true,
       dismissed: true,
     })
-    const entered = enterLesson(earned, 'four-on-the-floor')
+    const entered = enterLesson(earned, DEFAULT_ARC_ID, 'four-on-the-floor')
 
     expect(entered.lessonProgress['four-on-the-floor']).toEqual({
       completed: true,
@@ -118,11 +177,12 @@ describe('enterLesson', () => {
       'cutoff',
       2400,
     )
-    const entered = enterLesson(sandbox, 'stab-hits')
+    const entered = enterLesson(sandbox, DEFAULT_ARC_ID, 'stab-hits')
 
     expect(entered.patterns).toBe(sandbox.patterns)
     expect(entered.instrumentSettings).toBe(sandbox.instrumentSettings)
     expect(entered.mixer).toBe(sandbox.mixer)
+    expect(entered.sources).toBe(sandbox.sources)
   })
 })
 
@@ -479,8 +539,66 @@ describe('migrateProjectState', () => {
       lessonProgress: {},
       prefs: {},
       mixer: {},
-      activeLessonId: null,
+      activeArcId: DEFAULT_ARC_ID,
+      activeLessonIds: {},
     })
+  })
+
+  it('lifts a v9 document’s single lesson pointer into the techno track', () => {
+    // v9 had one path and one pointer, so that pointer can only ever have meant
+    // the techno arc. A returning user has to resume on exactly that rung.
+    const v9 = JSON.parse(
+      JSON.stringify({
+        ...updateLessonProgress(
+          setTransportBpm(cycleActivePatternStep(createInitialProjectState(), 'kick', 4), 126),
+          'four-on-the-floor',
+          { completed: true, dismissed: true },
+        ),
+        version: 9,
+      }),
+    ) as Record<string, unknown>
+    delete v9.activeArcId
+    delete v9.activeLessonIds
+    v9.activeLessonId = 'filter-sweep'
+
+    const migrated = migrateProjectState(v9)!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.activeArcId).toBe(DEFAULT_ARC_ID)
+    expect(activeLessonIdFor(migrated, DEFAULT_ARC_ID)).toBe('filter-sweep')
+    expect(activeLessonIdFor(migrated, 'sampling')).toBeNull()
+    // Everything earned, and the beat itself, come through untouched.
+    expect(migrated.lessonProgress['four-on-the-floor']).toEqual({
+      completed: true,
+      dismissed: true,
+    })
+    expect(migrated.transport.bpm).toBe(126)
+    expect(migrated.patterns[0].lanes.find((lane) => lane.id === 'kick')!.steps[4].on).toBe(true)
+  })
+
+  it('retires a shipped source a v9 document still names, keeping the user’s own', () => {
+    // The curated source became a break in this slice. A pad still pointing at
+    // the retired one keeps its region and goes on sounding; it loses only the
+    // ability to be re-chopped, which is the modelled sourceMissing state.
+    const mine = {
+      id: 'mine',
+      name: 'My Break',
+      origin: 'upload' as const,
+      duration: 2,
+      channels: 2,
+    }
+    const v9 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 9 }),
+    ) as Record<string, unknown>
+    delete v9.activeArcId
+    delete v9.activeLessonIds
+    v9.activeLessonId = null
+    v9.sources = [
+      { id: 'curated-warehouse-perc', name: 'Warehouse Perc', origin: 'shipped', duration: 0.25, channels: 1 },
+      mine,
+    ]
+
+    expect(migrateProjectState(v9)!.sources).toEqual([mine, CURATED_SAMPLE_SOURCE])
   })
 
   it('gives a v7 document (no FX bus) closed sends, keeping its beat, patches and earned lessons', () => {
@@ -535,7 +653,7 @@ describe('migrateProjectState', () => {
 
     const migrated = migrateProjectState(v8)!
 
-    expect(migrated.version).toBe(9)
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
     expect(migrated.sources).toEqual([CURATED_SAMPLE_SOURCE])
     expect(migrated.instrumentSettings.sampler).toEqual(createSamplerSettings())
     expect(migrated.patterns[0].padLanes).toHaveLength(4)
@@ -590,7 +708,7 @@ describe('migrateProjectState', () => {
     const migrated = migrateProjectState(v5)!
 
     expect(migrated.version).toBe(PROJECT_STATE_VERSION)
-    expect(migrated.activeLessonId).toBeNull()
+    expect(activeLessonIdFor(migrated, DEFAULT_ARC_ID)).toBeNull()
     expect(migrated.lessonProgress['four-on-the-floor']).toEqual({
       completed: true,
       dismissed: true,

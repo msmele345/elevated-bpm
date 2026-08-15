@@ -392,11 +392,19 @@ function nearMiss(context: GoalContext, goal: GoalAssertion): GoalContext {
       }))
     case 'padAssigned':
       // Emptied from the far end, so a pad another assertion of the same lesson
-      // names — always the low-numbered one — is left exactly as it was.
+      // names — always the low-numbered one — is left exactly as it was. When
+      // the goal asks for the learner's own material, the pad emptied has to be
+      // one of *those*, or a lesson asserting both "three pads" and "one of them
+      // yours" would go on being satisfied by the pad this left alone.
       return withSampler(context, (sampler) => {
-        const last = [...PAD_LANES]
-          .reverse()
-          .find((pad) => sampler.pads[pad.id].region !== null)!
+        const matches = (padId: PadLaneId) => {
+          const region = sampler.pads[padId].region
+          if (!region) return false
+          if (!goal.origin) return true
+          const source = sampler.sources.find((candidate) => candidate.id === region.sourceId)
+          return source !== undefined && source.origin !== 'shipped'
+        }
+        const last = [...PAD_LANES].reverse().find((pad) => matches(pad.id))!
         return {
           ...sampler,
           pads: { ...sampler.pads, [last.id]: { ...sampler.pads[last.id], region: null } },
@@ -438,6 +446,18 @@ describe('the curriculum', () => {
       expect(arc.finale.headline.length).toBeGreaterThan(0)
     }
     expect(new Set(ARCS.map((arc) => arc.id)).size).toBe(ARCS.length)
+  })
+
+  it('registers every lesson file it ships, so authoring one is JSON plus a line', () => {
+    // Adding a lesson is a JSON file and one entry in the registry. The failure
+    // that rule invites is the quiet one — a lesson written, reviewed and
+    // shipped, but never added to an arc, so nobody can reach it.
+    const authored = Object.keys(import.meta.glob('./*.json')).map((path) =>
+      path.replace(/^\.\//, '').replace(/\.json$/, ''),
+    )
+    const registered = ALL_LESSONS.map((lesson) => lesson.id)
+
+    expect([...authored].sort()).toEqual([...registered].sort())
   })
 
   it('gives every lesson on every track a unique id, a title, and intro text', () => {

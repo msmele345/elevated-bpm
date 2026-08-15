@@ -203,7 +203,11 @@ component's copy must become data-driven per arc rather than hardcoded.
 - [x] Adding a lesson to either arc requires editing JSON and one registration
       line, with no other code change — the six sampling lessons were authored
       that way; only genuinely new *goal vocabulary* needed code, which is the
-      same rule the techno arc has always had
+      same rule the techno arc has always had. Stated exactly: it is a JSON file
+      plus **two** lines in `src/lessons/index.ts`, an import and an array entry,
+      and no edit anywhere else. The contract now sweeps the lessons directory
+      and fails on any JSON file no arc registers, which is the failure that rule
+      actually invites — a lesson written and shipped that nobody can reach
 
 ## What this slice decided
 
@@ -257,12 +261,62 @@ to move the lesson onto a transient that happened to be detected; that would hav
 made the lesson pass while leaving the curated source a poor thing to learn
 chopping on, which is the one job it has.
 
-**A note on the suite.** One full-suite run failed in `App region editor > cuts
-two regions from one source onto two pads` on a `waitFor` timeout — a test this
-slice does not touch. Four subsequent full runs and the file in isolation all
-passed. It reads as the same pre-existing timing flake under parallel load
-recorded in issue 07 rather than a regression, but it is written down rather than
-dismissed.
+**A note on the suite.** Across eight full-suite runs, two failed — each on a
+different test in the `App region editor` family (`cuts two regions from one
+source onto two pads`, `is a modal over an inert deck`), each on a `waitFor`
+timeout, none in a test this slice touches, and the file passes in isolation
+every time. It is the same pre-existing flake under parallel load recorded in
+issue 07 rather than a regression, but it is written down rather than dismissed.
+
+## What review changed
+
+**The capstone did not assert what its own copy claimed.** "Build Your Own Kit"
+opened "Everything at once, out of your own material" while its goal was a bare
+`padAssigned { min: 3 }` — three chops of the *shipped* break would have
+completed it. The obvious fix, qualifying that goal with `origin: "user"`, was
+wrong: pads 1 and 2 hold curated chops from lessons 2–4, so it would have forced
+the learner to destroy earlier work, breaking the rule that every lesson is a
+piece to add and never one to undo. The capstone now carries **both** — three
+pads for a kit, and at least one of them cut from the learner's own audio — which
+is additive and says exactly what the intro says. The contract's near-miss had to
+learn the same distinction: emptying the last assigned pad no longer breaks an
+origin-qualified goal unless the pad it empties is one of the learner's.
+
+**"Fit the Break" told the user 16 steps and accepted 8.** Fitting two bars into
+half a bar is quadruple speed and sounds like nothing; the goal now asks for the
+16 the copy names.
+
+**The break's duration is no longer transcribed by hand.** It was copied from the
+generator's console output into `CURATED_SAMPLE_SOURCE`, and the lesson parser
+validates every region window against it — so a regenerated break of a different
+length would have left the shipped lessons pointing into audio that was no longer
+there, *while the parser went on passing*, because it would have been checking
+the stale number itself. The generator now emits `src/model/curatedBreak.json`
+alongside the audio and the constant imports it, which removes the failure rather
+than testing around it.
+
+**A lesson file that is never registered is now a failing test.** The AC is
+"JSON and one registration line"; mechanically it is an import and an array
+entry, both in `src/lessons/index.ts`. The failure that invites is the quiet one
+— a lesson authored, reviewed and shipped but reachable by nobody — so the
+contract now sweeps the directory and asserts every JSON file is in an arc.
+
+## A cost this slice accepts knowingly
+
+Retiring the old shipped perc source costs a returning user the *re-editability*
+of any chop they cut from it. Review flagged this against story 66, "my existing
+saved project… so that upgrading costs me nothing", and it is worth answering
+rather than waving away.
+
+Keeping the entry in the bank would be worse, not better. A shipped source's
+bytes are never written to the sample store — `sourceBlob` fetches them from the
+one curated URL — so a retained `curated-warehouse-perc` would look re-editable
+and then fail with "could not be opened for editing" when opened. The pad's
+*slice* is what makes sound, and that survives untouched: the pad keeps its name,
+its tune, its fit, its programming, and its sound. What it loses is the ability
+to re-chop a quarter-second one-shot, and it says so plainly in the state the
+model already carries for exactly this. Verified on a real v9 document in the
+browser.
 
 ## Testing decisions
 

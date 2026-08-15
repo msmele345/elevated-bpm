@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import curatedBreak from './curatedBreak.json'
 import {
   CURATED_SAMPLE_SOURCE,
   SHIPPED_SOURCES,
@@ -368,5 +369,18 @@ describe('the shipped sources', () => {
 
   it('never installs the curated source twice', () => {
     expect(withShippedSources([CURATED_SAMPLE_SOURCE])).toEqual([CURATED_SAMPLE_SOURCE])
+  })
+})
+
+describe('the shipped break asset', () => {
+  it('takes its measured shape from the generator rather than from a hand-copied number', () => {
+    // The generator writes the audio and this manifest together, so the two
+    // cannot drift. A window past the end of the real file would otherwise be
+    // validated against a stale duration and pass.
+    expect(CURATED_SAMPLE_SOURCE.duration).toBe(curatedBreak.durationSeconds)
+    expect(CURATED_SAMPLE_SOURCE.channels).toBe(curatedBreak.channels)
+    // Two bars at its own tempo — what "fit the break to the grid" relies on.
+    const bars = (CURATED_SAMPLE_SOURCE.duration * curatedBreak.bpm) / 60 / 4
+    expect(bars).toBeCloseTo(curatedBreak.bars, 3)
   })
 })

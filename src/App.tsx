@@ -147,13 +147,13 @@ engine.setStoredSourceLoader(loadSource)
 const NO_AUDIO: AvailableAudio = { slices: new Set(), sources: new Set() }
 
 /**
- * The lesson a document is standing on, read back out of the document itself.
+ * The lesson a document is standing on, resolved from the document alone.
  *
- * The navigation handlers resolve this inside their updater rather than closing
- * over it, so they never change identity — a fresh closure is a changed prop,
- * and these are handed to memoized panels.
+ * The navigation handlers call this inside their updater rather than closing
+ * over the value, so they never change identity — a fresh closure is a changed
+ * prop, and these are handed to memoized panels.
  */
-function whereTheUserStands(state: ProjectState): Lesson {
+function activeLessonOf(state: ProjectState): Lesson {
   const arc = arcById(state.activeArcId)
   return activeArcLesson(arc.lessons, state.lessonProgress, activeLessonIdFor(state, arc.id))
 }
@@ -998,7 +998,7 @@ export default function App() {
   const handleDismissLesson = useCallback(() => {
     setProject((p) => {
       const arc = arcById(p.activeArcId)
-      const lessonId = whereTheUserStands(p).id
+      const lessonId = activeLessonOf(p).id
       const next = updateLessonProgress(p, lessonId, { dismissed: true })
       if (!next.lessonProgress[lessonId]?.completed) return next
       // Putting away a finished lesson moves the deck on to the next unearned
@@ -1023,7 +1023,7 @@ export default function App() {
   }, [])
 
   const handleResumeLesson = useCallback(() => {
-    setProject((p) => enterLesson(p, arcById(p.activeArcId).id, whereTheUserStands(p).id))
+    setProject((p) => enterLesson(p, arcById(p.activeArcId).id, activeLessonOf(p).id))
   }, [])
 
   const removeShareFromAddress = () => {

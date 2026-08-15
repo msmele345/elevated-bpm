@@ -1,3 +1,4 @@
+import curatedBreak from './curatedBreak.json'
 import { claimsInstrumentKeys } from './instrumentKeys'
 import { clampParam, type ParamSpec } from './knob'
 import { sliceKey } from './slice'
@@ -61,15 +62,19 @@ export function isPadLaneId(value: unknown): value is PadLaneId {
  * say "start your chop on the snare" and mean something musical by it — a
  * region-window goal is only specific because the app knows this file.
  *
- * The duration is the generator's own output and must be updated with it; the
- * lesson parser rejects any window that falls outside it.
+ * Its measured shape is *imported* from what the generator emitted alongside
+ * the audio rather than copied out of the console. The lesson parser validates
+ * every region window against this duration, so a hand-transcribed number that
+ * drifted from the file would leave the shipped lessons pointing into audio
+ * that is no longer there — and the parser would go on passing, because it
+ * would be checking the stale number itself.
  */
 export const CURATED_SAMPLE_SOURCE: SampleSource = {
   id: 'curated-basement-break',
   name: 'Basement Break',
   origin: 'shipped',
-  duration: 3.692313,
-  channels: 1,
+  duration: curatedBreak.durationSeconds,
+  channels: curatedBreak.channels,
 }
 
 /**

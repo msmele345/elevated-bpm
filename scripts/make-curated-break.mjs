@@ -129,6 +129,26 @@ header.writeUInt32LE(data.length, 40)
 
 writeFileSync('public/samples/break-909.wav', Buffer.concat([header, data]))
 
+// The measured shape of what was just written, emitted rather than printed for
+// transcription. The lesson parser validates every region window against this
+// duration, so a hand-copied number that drifted from the file would leave the
+// shipped lessons pointing into audio that is no longer there — while the
+// parser went on passing, because it would be checking the stale number itself.
+writeFileSync(
+  'src/model/curatedBreak.json',
+  `${JSON.stringify(
+    {
+      durationSeconds: Number((FRAMES / SAMPLE_RATE).toFixed(6)),
+      sampleRate: SAMPLE_RATE,
+      channels: 1,
+      bpm: BPM,
+      bars: BARS,
+    },
+    null,
+    2,
+  )}\n`,
+)
+
 const onsets = [...new Set(VOICES.flatMap((voice) => voice.steps))].sort((a, b) => a - b)
 console.log(`frames ${FRAMES}  duration ${(FRAMES / SAMPLE_RATE).toFixed(6)} s  ${BPM} BPM`)
 console.log(`seconds per step ${SECONDS_PER_STEP.toFixed(6)}`)

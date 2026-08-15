@@ -19,6 +19,7 @@ import {
   arcCompletion,
   arcEntries,
   detectLessonCompletion,
+  goalContextFor,
   lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './model/arc'
@@ -32,10 +33,12 @@ import {
   spotlightsTarget,
   spotlitLaneIds,
   spotlitNoteLaneIds,
+  spotlitPadIds,
   spotlitParamIds,
 } from './model/lesson'
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
+  activeLessonIdFor,
   activePattern,
   addSource,
   assignSourceToSamplerPad,
@@ -48,6 +51,7 @@ import {
   relinkSamplerPad,
   removeSource,
   resizeActivePatternNote,
+  selectArc,
   setBassParamValue,
   setFxParamValue,
   setMasterParamValue,
@@ -59,16 +63,21 @@ import {
   toggleLaneSolo,
   transposeActivePatternNote,
   updateLessonProgress,
+  type ProjectState,
 } from './model/projectState'
 import {
   createShareUrl,
   projectWithSharedBeat,
   readSharedBeat,
+  sharedAudioNotice,
   SHARE_QUERY_PARAM,
 } from './model/share'
+import { createBundle, padsNeedingAudio, readBundle } from './model/bundle'
 import {
   openingRegionForSource,
   padsUsingSource,
+  namedPad,
+  PAD_LANES,
   type AvailableAudio,
   type SampleRegion,
   type SampleSource,
@@ -78,6 +87,7 @@ import { sliceKey, type Slice } from './model/slice'
 import type { AnalysisAudio } from './audio/engine'
 import { clampRegionToSource } from './model/region'
 import { RegionEditor } from './components/RegionEditor'
+import type { Lesson } from './model/lesson'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
@@ -102,12 +112,13 @@ import { loadProjectState, saveProjectState } from './storage/projectStore'
 import {
   collectUnreferencedAudio,
   deleteSource,
+  loadSlicesFor,
   loadSource,
   loadStoredAudio,
   saveSliceWithinQuota,
   saveSourceWithinQuota,
 } from './storage/sampleStore'
-import { ARC } from './lessons'
+import { ALL_LESSONS, ARCS, arcById } from './lessons'
 
 // Long enough to coalesce a burst of step taps into one IndexedDB write,
 // short enough that a save has almost always landed before a refresh.
@@ -134,6 +145,18 @@ engine.setStoredSourceLoader(loadSource)
 
 /** Nothing has been read from storage yet; every pad reads as silent until it has. */
 const NO_AUDIO: AvailableAudio = { slices: new Set(), sources: new Set() }
+
+/**
+ * The lesson a document is standing on, resolved from the document alone.
+ *
+ * The navigation handlers call this inside their updater rather than closing
+ * over the value, so they never change identity — a fresh closure is a changed
+ * prop, and these are handed to memoized panels.
+ */
+function activeLessonOf(state: ProjectState): Lesson {
+  const arc = arcById(state.activeArcId)
+  return activeArcLesson(arc.lessons, state.lessonProgress, activeLessonIdFor(state, arc.id))
+}
 
 export default function App() {
   // ProjectState is the single source of truth: pattern edits, transport
@@ -184,11 +207,16 @@ export default function App() {
   const micSessionRef = useRef<MicrophoneSession | null>(null)
   const [outgoingShareError, setOutgoingShareError] = useState<string | null>(null)
   const [isSharing, setIsSharing] = useState(false)
+  // Assembling a bundle reads every pad's audio back out of storage, so unlike
+  // a link it is not instant and the action says so while it runs.
+  const [isBundling, setIsBundling] = useState(false)
   const [sharedUrl, setSharedUrl] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
-  // A session-only graduation overlay: it appears on the transition into an
-  // earned capstone, never just because an already-complete project reloaded.
-  const [finaleVisible, setFinaleVisible] = useState(false)
+  // A session-only graduation overlay, holding *which* track is being
+  // celebrated so its own copy can be shown. It appears on the transition into
+  // an earned capstone, never just because an already-complete project
+  // reloaded.
+  const [finaleArcId, setFinaleArcId] = useState<string | null>(null)
   /**
    * The open chopping surface, or nothing. It holds the analysis decode, which
    * is why closing the editor is the moment that memory is given back — and
@@ -239,17 +267,35 @@ export default function App() {
   const samplerRef = useRef(samplerSettings)
   samplerRef.current = samplerSettings
 
-  // Where the user is on the arc: their own selection if they stepped off the
-  // path, otherwise the first lesson still unearned.
-  const activeLesson = activeArcLesson(ARC, project.lessonProgress, project.activeLessonId)
-  // Memoized because the arc is a fresh array every time it is built, and a
-  // fresh array is a changed prop: without this the fourteen arc pads would
-  // rebuild on every knob move.
-  const arcPath = useMemo(
-    () => arcEntries(ARC, project.lessonProgress, activeLesson.id),
-    [project.lessonProgress, activeLesson.id],
+  // Which curriculum track is on screen, and where the user stands on it:
+  // their own selection if they stepped off the path, otherwise the first
+  // lesson of *that track* still unearned. The other track's place is untouched
+  // by any of this — that is the whole of switching without losing your place.
+  const activeArc = arcById(project.activeArcId)
+  const activeLesson = activeArcLesson(
+    activeArc.lessons,
+    project.lessonProgress,
+    activeLessonIdFor(project, activeArc.id),
   )
-  const arcDone = arcCompletion(ARC, project.lessonProgress)
+  // Memoized because the arc is a fresh array every time it is built, and a
+  // fresh array is a changed prop: without this the arc pads would rebuild on
+  // every knob move.
+  const arcPath = useMemo(
+    () => arcEntries(activeArc.lessons, project.lessonProgress, activeLesson.id),
+    [activeArc, project.lessonProgress, activeLesson.id],
+  )
+  const arcDone = arcCompletion(activeArc.lessons, project.lessonProgress)
+  // Every track and how far along it the user is — what the selector renders.
+  const tracks = useMemo(
+    () =>
+      ARCS.map((arc) => ({
+        id: arc.id,
+        title: arc.title,
+        blurb: arc.blurb,
+        ...arcCompletion(arc.lessons, project.lessonProgress),
+      })),
+    [project.lessonProgress],
+  )
   const here = arcPath.find((entry) => entry.current)!
 
   const lessonProgress = project.lessonProgress[activeLesson.id]
@@ -273,8 +319,13 @@ export default function App() {
     () => (spotlitResting ? [] : spotlitParamIds(activeLesson)),
     [spotlitResting, activeLesson],
   )
+  const spotlitPads = useMemo(
+    () => (spotlitResting ? [] : spotlitPadIds(activeLesson)),
+    [spotlitResting, activeLesson],
+  )
   const spotlitTarget = (target: string) =>
     !spotlitResting && spotlightsTarget(activeLesson, target)
+  const spotlitSources = spotlitTarget('sampler:sources')
 
   usePlayhead(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
@@ -295,12 +346,9 @@ export default function App() {
       const next =
         incoming.status === 'ready' ? projectWithSharedBeat(opening, incoming.project) : opening
       if (incoming.status === 'ready') {
-        inheritedLessonsRef.current = lessonsAlreadyMet(ARC, {
-          pattern: activePattern(next),
-          motion: NO_PARAM_MOTION,
-          bpm: next.transport.bpm,
-          chord: NO_CHORD_PLAY,
-        })
+        // Every registered track, not only the techno one: a beat can arrive
+        // carrying sampling work as readily as it carries a kick pattern.
+        inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
       }
       try {
         // Orphans are collected against the user's *own* document, never the
@@ -309,11 +357,9 @@ export default function App() {
         // This is the one moment a referencing document is authoritative, which
         // is why the sweep lives here and not at write time.
         await collectUnreferencedAudio(referencedAudio(opening))
-        const stored = await loadStoredAudio(next)
         if (cancelled) return
         // Slices only, and no decode: this is the whole startup budget.
-        for (const [padId, slice] of stored.padSlices) engine.registerSlice(padId, slice)
-        setAudio(stored.available)
+        await openAudioFor(next)
       } catch {
         // A storage problem is never a broken app. The deck opens with its
         // pads reading as silent, and every one of them offers a relink.
@@ -375,12 +421,15 @@ export default function App() {
   // document, so undoing the work later doesn't revoke it and the earned
   // lesson survives a reload.
   useEffect(() => {
-    const completion = detectLessonCompletion(ARC, activeLesson, lessonCompleted, {
-      pattern,
-      motion: paramMotion,
-      bpm,
-      chord: chordPlay,
-    })
+    const completion = detectLessonCompletion(
+      activeArc.lessons,
+      activeLesson,
+      lessonCompleted,
+      // The whole document, so a goal about the sampler reads the sampler: one
+      // builder, because a caller that quietly left half the deck out would
+      // make assertions unmeetable rather than fail loudly.
+      goalContextFor(project, { motion: paramMotion, chord: chordPlay }),
+    )
     if (!completion.justCompleted) {
       // The goal is not met right now, so whatever the shared beat brought
       // with it is gone: from here the lesson is the user's to earn.
@@ -390,8 +439,8 @@ export default function App() {
     // Met, but only because the beat arrived that way — hold the credit.
     if (inheritedLessonsRef.current.has(activeLesson.id)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
-    if (completion.showFinale) setFinaleVisible(true)
-  }, [pattern, paramMotion, bpm, chordPlay, activeLesson, lessonCompleted])
+    if (completion.showFinale) setFinaleArcId(activeArc.id)
+  }, [project, paramMotion, chordPlay, activeArc, activeLesson, lessonCompleted])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -523,10 +572,18 @@ export default function App() {
    * rather than ids, because a pad is the thing the user can act on.
    */
   const keepAudio = useCallback(
-    async (write: {
-      source?: { id: string; bytes: Blob }
-      slice?: { key: string; value: Slice; padName: string }
-    }) => {
+    async (
+      write: {
+        source?: { id: string; bytes: Blob }
+        slice?: { key: string; value: Slice; padName: string }
+      },
+      /**
+       * A shared beat being previewed may not spend the recipient's own audio
+       * to make room for itself. Eviction is not undoable, and backing out of a
+       * preview has to be free.
+       */
+      { mayEvictSources = true }: { mayEvictSources?: boolean } = {},
+    ) => {
       const evicted: string[] = []
       const unsaved: string[] = []
       try {
@@ -544,7 +601,9 @@ export default function App() {
           }
         }
         if (write.slice) {
-          const outcome = await saveSliceWithinQuota(write.slice.key, write.slice.value)
+          const outcome = await saveSliceWithinQuota(write.slice.key, write.slice.value, {
+            mayEvictSources,
+          })
           evicted.push(...outcome.evicted)
           if (outcome.status === 'saved') {
             const key = write.slice.key
@@ -582,6 +641,45 @@ export default function App() {
   )
 
   const handleDismissStorageNotice = useCallback(() => setStorageNotice(null), [])
+
+  /**
+   * Point the engine at exactly the audio a set of pads owns — and at nothing
+   * else.
+   *
+   * Registering is not enough by itself, because a *slice* — not a region — is
+   * what decides whether a pad sounds. A deck that **swaps** documents rather
+   * than editing one therefore has to take audio away as well as give it:
+   * opening a shared beat and backing out of one are both that swap, and
+   * without the clear a pad the incoming beat leaves empty goes on playing
+   * whatever the outgoing one had put there.
+   *
+   * The audio arrives as an argument rather than being fetched, because the
+   * three callers get it from three places: startup and restore read storage,
+   * and a bundle carries its own.
+   */
+  const soundPads = useCallback((padSlices: Iterable<[PadLaneId, Slice]>) => {
+    const owned = new Map(padSlices)
+    for (const pad of PAD_LANES) {
+      const slice = owned.get(pad.id)
+      if (slice) engine.registerSlice(pad.id, slice)
+      else engine.clearSlice(pad.id)
+    }
+  }, [])
+
+  /** Put one stored document's audio on the deck: startup, and backing out. */
+  const openAudioFor = useCallback(
+    async (state: ProjectState) => {
+      try {
+        const stored = await loadStoredAudio(state)
+        soundPads(stored.padSlices)
+        setAudio(stored.available)
+      } catch {
+        // A storage problem is never a broken app — here it costs the pads
+        // whatever they were already sounding, and nothing else.
+      }
+    },
+    [soundPads],
+  )
 
   /**
    * Point a pad at a source. The audio has to be rendered before the document
@@ -899,25 +997,33 @@ export default function App() {
   // updater rather than closed over, so they never change identity either.
   const handleDismissLesson = useCallback(() => {
     setProject((p) => {
-      const lessonId = activeArcLesson(ARC, p.lessonProgress, p.activeLessonId).id
+      const arc = arcById(p.activeArcId)
+      const lessonId = activeLessonOf(p).id
       const next = updateLessonProgress(p, lessonId, { dismissed: true })
       if (!next.lessonProgress[lessonId]?.completed) return next
       // Putting away a finished lesson moves the deck on to the next unearned
-      // one — the celebration is never cut short, and the path keeps its
-      // momentum. With the arc finished there is nowhere to move on to.
-      const following = nextUnfinishedLessonId(ARC, next.lessonProgress, lessonId)
-      return following ? enterLesson(next, following) : next
+      // one on *this* track — the celebration is never cut short, and the path
+      // keeps its momentum. With the arc finished there is nowhere to move on to.
+      const following = nextUnfinishedLessonId(arc.lessons, next.lessonProgress, lessonId)
+      return following ? enterLesson(next, arc.id, following) : next
     })
   }, [])
 
   const handleSelectLesson = useCallback((lessonId: string) => {
-    setProject((p) => enterLesson(p, lessonId))
+    setProject((p) => enterLesson(p, arcById(p.activeArcId).id, lessonId))
+  }, [])
+
+  /**
+   * Bring the other track on screen. Pure marker movement: neither track's
+   * place moves, and nothing about the beat, the patches or the pads is
+   * touched — the transport does not even notice.
+   */
+  const handleSelectArc = useCallback((arcId: string) => {
+    setProject((p) => selectArc(p, arcId))
   }, [])
 
   const handleResumeLesson = useCallback(() => {
-    setProject((p) =>
-      enterLesson(p, activeArcLesson(ARC, p.lessonProgress, p.activeLessonId).id),
-    )
+    setProject((p) => enterLesson(p, arcById(p.activeArcId).id, activeLessonOf(p).id))
   }, [])
 
   const removeShareFromAddress = () => {
@@ -950,6 +1056,109 @@ export default function App() {
     }
   }
 
+  /**
+   * Write a bundle: the same payload a link carries, plus the audio a link
+   * cannot. Assembly rather than processing — the slices were rendered and
+   * persisted when the chops were committed.
+   */
+  const handleExportBundle = async () => {
+    setIsBundling(true)
+    setOutgoingShareError(null)
+    try {
+      const needed = padsNeedingAudio(project.instrumentSettings.sampler)
+      const bundle = await createBundle(
+        project,
+        await loadSlicesFor(needed.map(({ key }) => key)),
+      )
+      if (bundle.status === 'error') {
+        // A pad silent here would be silent there, so this is a file this very
+        // build would refuse to open. Better to say so than to write it.
+        setOutgoingShareError(bundle.message)
+        return
+      }
+      const href = URL.createObjectURL(bundle.blob)
+      const link = document.createElement('a')
+      link.href = href
+      link.download = bundle.fileName
+      link.click()
+      // The handle owns a megabyte of audio, so it is given back — but only
+      // once the browser has had the click, which it takes synchronously.
+      window.setTimeout(() => URL.revokeObjectURL(href), 0)
+    } catch {
+      setOutgoingShareError(
+        'A bundle could not be written in this browser. Your project is still safe.',
+      )
+    } finally {
+      setIsBundling(false)
+    }
+  }
+
+  /**
+   * Open a bundle: the same preview-and-confirm a link gets, because trying
+   * someone else's beat must never cost you your own.
+   *
+   * The audio is registered before the document moves, so a pad never claims a
+   * sound it cannot make — and it is written to storage the way an upload's is,
+   * which is what lets a kept beat survive a reload. A preview that is backed
+   * out of leaves that audio referenced by nothing, and the sweep at next load
+   * is what collects it.
+   */
+  const handleOpenBundle = async (file: File) => {
+    setIncomingShareError(null)
+    setOutgoingShareError(null)
+    let opened
+    try {
+      opened = await readBundle(await file.arrayBuffer())
+    } catch {
+      setIncomingShareError(
+        'That bundle could not be read from disk. Your saved project is safe.',
+      )
+      return
+    }
+    if (opened.status === 'error') {
+      setIncomingShareError(opened.message)
+      return
+    }
+
+    // Whose project to give back on "Back to my project": the one already held
+    // if a beat is being previewed, so opening a second bundle cannot lose it.
+    const recipientProject = sharePreview?.recipientProject ?? project
+    const next = projectWithSharedBeat(recipientProject, opened.project)
+    const carried = opened.slices
+    const needed = padsNeedingAudio(next.instrumentSettings.sampler)
+    soundPads(
+      needed.flatMap(({ padId, key }) => {
+        const slice = carried.get(key)
+        return slice ? [[padId, slice] as [PadLaneId, Slice]] : []
+      }),
+    )
+    // Goals describe what the *user* did, so a beat that arrives already built
+    // is inherited rather than earned — exactly as it is through a link.
+    // A bundle carries real audio, so without this a recipient would arrive
+    // with "build your own kit" already earned — the most obviously unearned
+    // completion the product could hand out.
+    inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+    setSharePreview({ recipientProject })
+    setProject(next)
+    engine.setBpm(next.transport.bpm)
+    setAudio((held) => ({
+      ...held,
+      slices: new Set([...held.slices, ...carried.keys()]),
+    }))
+    for (const { padId, key } of needed) {
+      const slice = carried.get(key)
+      if (!slice) continue
+      await keepAudio(
+        {
+          slice: { key, value: slice, padName: namedPad(next.instrumentSettings.sampler, padId) },
+        },
+        // Someone else's beat may not cost the recipient their own sounds to
+        // make room for itself — not while they can still hand it back.
+        { mayEvictSources: false },
+      )
+    }
+  }
+
   const handleKeepSharedBeat = async () => {
     try {
       await saveProjectState(project)
@@ -972,6 +1181,10 @@ export default function App() {
     inheritedLessonsRef.current = new Set()
     setSharePreview(null)
     removeShareFromAddress()
+    // A bundle put audio on the pads, so giving the document back is only half
+    // of it: the sound has to go back too, or the sender's chop keeps playing
+    // under the recipient's own beat.
+    void openAudioFor(sharePreview.recipientProject)
   }
 
   const handleDismissIncomingError = () => {
@@ -981,7 +1194,7 @@ export default function App() {
 
   // Stable because the modal owns a window listener while mounted; changing
   // this callback would tear that listener down and refocus its button.
-  const handleCloseFinale = useCallback(() => setFinaleVisible(false), [])
+  const handleCloseFinale = useCallback(() => setFinaleArcId(null), [])
 
   return (
     <>
@@ -1003,8 +1216,8 @@ export default function App() {
         ref={deckRef}
         // Both overlays are real modals: while one is open the deck behind is
         // unreachable, which is what scopes their keys and their focus.
-        inert={finaleVisible || editor !== null}
-        aria-hidden={finaleVisible || editor !== null || undefined}
+        inert={finaleArcId !== null || editor !== null}
+        aria-hidden={finaleArcId !== null || editor !== null || undefined}
       >
       <SkipLinks />
 
@@ -1020,9 +1233,15 @@ export default function App() {
         errorMessage={incomingShareError ?? outgoingShareError}
         shareReady={hydrated}
         isSharing={isSharing}
+        isBundling={isBundling}
         sharedUrl={sharedUrl}
         copied={shareCopied}
+        // Counted from the pads that landed silent, so a bundle — which carries
+        // its audio — says nothing, and a link says exactly what it cost.
+        degradedNotice={sharePreview ? sharedAudioNotice(project, audio) : null}
         onShare={handleShare}
+        onExportBundle={handleExportBundle}
+        onOpenBundle={handleOpenBundle}
         onKeep={handleKeepSharedBeat}
         onRestore={handleRestoreOwnProject}
         onDismissError={() => {
@@ -1035,9 +1254,12 @@ export default function App() {
       />
 
       <LessonArc
+        tracks={tracks}
+        activeArcId={activeArc.id}
         entries={arcPath}
         completed={arcDone.completed}
         total={arcDone.total}
+        onSelectArc={handleSelectArc}
         onSelect={handleSelectLesson}
       />
 
@@ -1151,6 +1373,9 @@ export default function App() {
         audio={audio}
         mixer={project.mixer}
         soloing={soloing}
+        spotlitPads={spotlitPads}
+        spotlitParams={spotlitParams}
+        spotlitSources={spotlitSources}
         intakeError={intakeError}
         storageNotice={storageNotice}
         sourceToDelete={sourceToDelete}
@@ -1211,7 +1436,9 @@ export default function App() {
           onClose={handleCloseEditor}
         />
       )}
-      {finaleVisible && <FinaleMoment onClose={handleCloseFinale} />}
+      {finaleArcId !== null && (
+        <FinaleMoment finale={arcById(finaleArcId).finale} onClose={handleCloseFinale} />
+      )}
     </>
   )
 }

@@ -90,14 +90,15 @@ Mixer surface: per-track volume/mute/solo plus a couple of macro knobs
   is declarative assertions, e.g.
   `{ type: "stepsActive", lane: "kick", steps: [0,4,8,12] }` or
   `{ type: "paramSwept", instrument: "bass", param: "cutoff", whilePlaying: true }`.
-- **Arc** — an ordered list of lesson IDs.
+- **Arc** — an ordered list of lesson IDs, plus what its track is called and
+  what its graduation says. Shipped in v2.0 as two: the techno Arc and the
+  Sampling Arc.
 
 ## Deferred (explicitly out of v1)
 
 | Feature | Target |
 |---|---|
 | Song mode (chain patterns into an arrangement) | v2 |
-| Multiple curriculum topic tracks (sound design, genre history…) | v2 |
 | Accounts + sync (upload local ProjectState on first login) | v2 |
 | Web MIDI hardware input | v1.x |
 | FX sends (delay/reverb — dub techno lesson material) | v1.x |

@@ -26,6 +26,13 @@ export interface SampleBuffer {
 export interface SliceRegistry {
   set(padId: PadLaneId, buffer: SampleBuffer): void
   get(padId: PadLaneId): SampleBuffer | undefined
+  /**
+   * Take a pad's audio away. The registry — not the document — is what decides
+   * whether a pad sounds, so a deck that swaps one document for another must be
+   * able to make a pad silent again, or a bundle preview leaves the recipient's
+   * own sound playing underneath the sender's programming.
+   */
+  clear(padId: PadLaneId): void
 }
 
 export function createSliceRegistry(): SliceRegistry {
@@ -37,6 +44,10 @@ export function createSliceRegistry(): SliceRegistry {
 
     get(padId) {
       return slices.get(padId)
+    },
+
+    clear(padId) {
+      slices.delete(padId)
     },
   }
 }

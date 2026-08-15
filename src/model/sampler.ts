@@ -1,3 +1,4 @@
+import curatedBreak from './curatedBreak.json'
 import { claimsInstrumentKeys } from './instrumentKeys'
 import { clampParam, type ParamSpec } from './knob'
 import { sliceKey } from './slice'
@@ -53,15 +54,54 @@ export function isPadLaneId(value: unknown): value is PadLaneId {
 }
 
 /**
- * The tracer's known one-shot. It deliberately reuses the shipped perc asset;
- * the source is metadata in the document and the audio registry owns its URL.
+ * The break the Sampling Arc is taught against.
+ *
+ * It is generated rather than sourced (`scripts/make-curated-break.mjs`) so
+ * that every transient in it is a number this repo can point at: two bars at
+ * 130 BPM, backbeats on the quarters between them. That is what lets a lesson
+ * say "start your chop on the snare" and mean something musical by it — a
+ * region-window goal is only specific because the app knows this file.
+ *
+ * Its measured shape is *imported* from what the generator emitted alongside
+ * the audio rather than copied out of the console. The lesson parser validates
+ * every region window against this duration, so a hand-transcribed number that
+ * drifted from the file would leave the shipped lessons pointing into audio
+ * that is no longer there — and the parser would go on passing, because it
+ * would be checking the stale number itself.
  */
 export const CURATED_SAMPLE_SOURCE: SampleSource = {
-  id: 'curated-warehouse-perc',
-  name: 'Warehouse Perc',
+  id: 'curated-basement-break',
+  name: 'Basement Break',
   origin: 'shipped',
-  duration: 0.25,
-  channels: 1,
+  duration: curatedBreak.durationSeconds,
+  channels: curatedBreak.channels,
+}
+
+/**
+ * Every source the app installs itself. A registry rather than a constant
+ * because it is what the lesson parser resolves a region-window goal's source
+ * against: a shipped source is the only one whose duration is knowable when a
+ * lesson is parsed, which is what makes an out-of-range window a loud failure
+ * rather than an unwinnable lesson.
+ */
+export const SHIPPED_SOURCES: readonly SampleSource[] = [CURATED_SAMPLE_SOURCE]
+
+export function shippedSource(id: string): SampleSource | undefined {
+  return SHIPPED_SOURCES.find((source) => source.id === id)
+}
+
+/**
+ * Install the shipped sources into a saved bank, retiring any the app no longer
+ * ships.
+ *
+ * A shipped source is the app's to change and a user's own is not, so only the
+ * former is ever dropped. A pad left pointing at a retired one keeps its region
+ * and therefore its slice: it goes on sounding and loses only re-editability,
+ * which is exactly the `sourceMissing` state the model already carries.
+ */
+export function withShippedSources(sources: readonly SampleSource[]): SampleSource[] {
+  const mine = sources.filter((source) => source.origin !== 'shipped')
+  return [...mine, ...SHIPPED_SOURCES]
 }
 
 /**
@@ -105,6 +145,20 @@ export function padsUsingSource(
   return PAD_LANES.flatMap((pad) =>
     settings[pad.id].region?.sourceId === sourceId ? [settings[pad.id].name] : [],
   )
+}
+
+/**
+ * How a pad is named in something the user has to act on.
+ *
+ * Its own name alone is not enough: two chops cut from one break wear the same
+ * name, so "the audio for Warehouse Break and Warehouse Break is missing" names
+ * nothing. The lane is what makes it actionable — and a pad still wearing its
+ * default name needs no parenthesis repeating it back.
+ */
+export function namedPad(settings: SamplerSettings, padId: PadLaneId): string {
+  const label = PAD_LANES.find((pad) => pad.id === padId)!.label
+  const name = settings[padId].name
+  return name === label ? label : `${label} (${name})`
 }
 
 export const MIN_PAD_TUNE = -24

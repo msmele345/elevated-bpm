@@ -28,6 +28,19 @@ describe('slice registry', () => {
     expect(slices.get('pad2')).toBe(otherChop)
   })
 
+  it('gives a pad back its silence, so a previewed beat leaves nothing behind', () => {
+    // The slice — not the region — is what decides whether a pad makes sound.
+    // So a deck that swaps documents, as a bundle preview does, has to be able
+    // to take a pad's audio away again, or the previous beat's sound plays
+    // under the new one's programming.
+    const slices = createSliceRegistry()
+    slices.set('pad1', chop)
+
+    slices.clear('pad1')
+
+    expect(slices.get('pad1')).toBeUndefined()
+  })
+
   it('keeps pads apart, so two chops of one source do not collide', () => {
     const slices = createSliceRegistry()
 

@@ -83,6 +83,12 @@ interface SamplerPanelProps {
   storageNotice: { message: string; severity: 'info' | 'error' } | null
   /** A delete asked for but not yet confirmed, so the warning can name its pads. */
   sourceToDelete: string | null
+  /** Pads the active lesson is pointing at. */
+  spotlitPads: readonly PadLaneId[]
+  /** Knob ids the active lesson is pointing at — the pad Tune knobs, here. */
+  spotlitParams: readonly string[]
+  /** Whether the active lesson is pointing at the source bank. */
+  spotlitSources: boolean
   /** Fit is a fraction of the bar, so its readout moves with the tempo. */
   bpm: number
   /** The one authority on whether the microphone is live. */
@@ -118,6 +124,9 @@ function SamplerInstrument({
   intakeError,
   storageNotice,
   sourceToDelete,
+  spotlitPads,
+  spotlitParams,
+  spotlitSources,
   bpm,
   recording,
   onStartRecording,
@@ -247,7 +256,7 @@ function SamplerInstrument({
     >
       <PanelTitle sectionId={DECK_SECTION_IDS.sampler} name="Sampler" model="4-PAD SAMPLER · SP-04" />
 
-      <div className="sampler-intake">
+      <div className="sampler-intake" data-spotlit={spotlitSources || undefined}>
         <label className="sampler-load">
           <span className="sampler-load-label">Load audio file</span>
           {/* Deliberately unfiltered: the browser is the authority on what it
@@ -407,6 +416,7 @@ function SamplerInstrument({
             <div
               className="sampler-pad-strip"
               key={pad.id}
+              data-spotlit={spotlitPads.includes(pad.id) || undefined}
               data-drop-active={dropTarget === pad.id || undefined}
               onDragOver={handleDragOver(pad.id)}
               onDragLeave={() => setDropTarget(null)}
@@ -421,6 +431,7 @@ function SamplerInstrument({
               <Knob
                 spec={samplerParamForPad(pad.id)}
                 value={settingsForPad.tune}
+                spotlit={spotlitParams.includes(samplerParamForPad(pad.id).id)}
                 onChange={onTuneChange}
               />
               <select

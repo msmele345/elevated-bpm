@@ -7,10 +7,18 @@ import {
   spotlitParamIds,
   spotlightsTarget,
   type GoalContext,
+  type SamplerGoalContext,
 } from './lesson'
 import { toggleNoteStep, transposeNoteStep } from './note'
 import { createInitialPattern, cycleStep, toggleStep } from './pattern'
-import type { NoteLaneId, Pattern } from './types'
+import {
+  CURATED_SAMPLE_SOURCE,
+  PAD_LANES,
+  createSamplerSettings,
+  type SampleRegion,
+  type SampleSource,
+} from './sampler'
+import type { NoteLaneId, PadLaneId, Pattern } from './types'
 
 const validLesson = {
   id: 'four-on-the-floor',
@@ -433,5 +441,275 @@ describe('parseLesson — arc goal vocabulary', () => {
 
     const both = [2, 6, 10, 14].reduce((p, step) => toggleNoteStep(p, 'bass', step), kicks)
     expect(isGoalMet(lesson, { pattern: both })).toBe(true)
+  })
+})
+
+describe('isGoalMet — the sampling vocabulary', () => {
+  const pattern = createInitialPattern()
+
+  function sampler(overrides: Partial<SamplerGoalContext> = {}): SamplerGoalContext {
+    return { pads: createSamplerSettings(), sources: [CURATED_SAMPLE_SOURCE], ...overrides }
+  }
+
+  const myUpload: SampleSource = {
+    id: 'mine',
+    name: 'My Break',
+    origin: 'upload',
+    duration: 4,
+    channels: 2,
+  }
+
+  function goalFor(goal: unknown) {
+    return parseLesson({ ...validLesson, goal: [goal] })
+  }
+
+  describe('sourceLoaded', () => {
+    const lesson = goalFor({ type: 'sourceLoaded', origin: 'user', min: 1 })
+
+    it('is not met by the source the app installed itself', () => {
+      // The opening deck ships the curated source so a first chop is one click
+      // away — it must never also hand the learner the first lesson.
+      expect(isGoalMet(lesson, { pattern, sampler: sampler() })).toBe(false)
+    })
+
+    it('is met once the learner has brought a sound in themselves', () => {
+      expect(
+        isGoalMet(lesson, {
+          pattern,
+          sampler: sampler({ sources: [CURATED_SAMPLE_SOURCE, myUpload] }),
+        }),
+      ).toBe(true)
+    })
+
+    it('counts a recording as a sound brought in, and a named origin only itself', () => {
+      const take: SampleSource = { ...myUpload, id: 'take', origin: 'recording' }
+      expect(
+        isGoalMet(lesson, { pattern, sampler: sampler({ sources: [take] }) }),
+      ).toBe(true)
+      expect(
+        isGoalMet(goalFor({ type: 'sourceLoaded', origin: 'recording', min: 1 }), {
+          pattern,
+          sampler: sampler({ sources: [myUpload] }),
+        }),
+      ).toBe(false)
+    })
+
+    it('is not met when nothing knows about the sampler at all', () => {
+      expect(isGoalMet(lesson, { pattern })).toBe(false)
+    })
+  })
+
+  describe('regionStartsWithin', () => {
+    const lesson = goalFor({
+      type: 'regionStartsWithin',
+      pad: 'pad1',
+      source: CURATED_SAMPLE_SOURCE.id,
+      from: 0.42,
+      to: 0.51,
+    })
+
+    function padWithRegion(sourceId: string, start: number) {
+      return sampler({
+        pads: {
+          ...createSamplerSettings(),
+          pad1: {
+            region: { sourceId, start, duration: 0.3 },
+            tune: 0,
+            fit: null,
+            name: 'Pad 1',
+          },
+        },
+        sources: [CURATED_SAMPLE_SOURCE, myUpload],
+      })
+    }
+
+    it('is met by a chop that starts inside the window of the source it names', () => {
+      expect(isGoalMet(lesson, { pattern, sampler: padWithRegion(CURATED_SAMPLE_SOURCE.id, 0.4615) }))
+        .toBe(true)
+    })
+
+    it('is not met by the same window cut from a different source', () => {
+      // A window alone is a false positive waiting to happen: a learner who
+      // chops their own break near the same offset would otherwise complete a
+      // lesson about a file they never opened.
+      expect(isGoalMet(lesson, { pattern, sampler: padWithRegion(myUpload.id, 0.4615) })).toBe(
+        false,
+      )
+    })
+
+    it('is not met by a chop outside the window, or by an empty pad', () => {
+      expect(isGoalMet(lesson, { pattern, sampler: padWithRegion(CURATED_SAMPLE_SOURCE.id, 0.9) }))
+        .toBe(false)
+      expect(isGoalMet(lesson, { pattern, sampler: sampler() })).toBe(false)
+    })
+  })
+
+  describe('regionShorterThan, fitTargetSet, padTuned', () => {
+    function pad1(region: SampleRegion | null, tune = 0, fit: number | null = null) {
+      return sampler({
+        pads: { ...createSamplerSettings(), pad1: { region, tune, fit, name: 'Pad 1' } },
+      })
+    }
+    const chop: SampleRegion = { sourceId: CURATED_SAMPLE_SOURCE.id, start: 0.46, duration: 0.3 }
+
+    it('recognizes a chop trimmed under the length the lesson asks for', () => {
+      const lesson = goalFor({ type: 'regionShorterThan', pad: 'pad1', seconds: 0.4 })
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop) })).toBe(true)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1({ ...chop, duration: 1.2 }) })).toBe(false)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(null) })).toBe(false)
+    })
+
+    it('needs a fit target on a pad that actually holds a chop', () => {
+      const lesson = goalFor({ type: 'fitTargetSet', pad: 'pad1', minSteps: 8 })
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, 0, 16) })).toBe(true)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, 0, 4) })).toBe(false)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, 0, null) })).toBe(false)
+      // Declaring a fit for a pad with nothing on it is not fitting anything.
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(null, 0, 16) })).toBe(false)
+    })
+
+    it('reads tune as distance from neutral, in either direction', () => {
+      const lesson = goalFor({ type: 'padTuned', pad: 'pad1', minSemitones: 5 })
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, 7) })).toBe(true)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, -7) })).toBe(true)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, 3) })).toBe(false)
+      expect(isGoalMet(lesson, { pattern, sampler: pad1(chop, 0) })).toBe(false)
+    })
+  })
+
+  describe('padAssigned and padStepsPlaced', () => {
+    function padsFrom(sourceIds: string[]) {
+      const pads = createSamplerSettings()
+      sourceIds.forEach((sourceId, index) => {
+        const padId = PAD_LANES[index].id
+        pads[padId] = {
+          ...pads[padId],
+          region: { sourceId, start: 0, duration: 0.4 },
+        }
+      })
+      return pads
+    }
+
+    it('counts pads that hold a chop', () => {
+      const lesson = goalFor({ type: 'padAssigned', min: 3 })
+      const three = [CURATED_SAMPLE_SOURCE.id, myUpload.id, myUpload.id]
+      expect(
+        isGoalMet(lesson, {
+          pattern,
+          sampler: sampler({ pads: padsFrom(three), sources: [CURATED_SAMPLE_SOURCE, myUpload] }),
+        }),
+      ).toBe(true)
+      expect(
+        isGoalMet(lesson, { pattern, sampler: sampler({ pads: padsFrom(three.slice(0, 2)) }) }),
+      ).toBe(false)
+    })
+
+    it('counts only pads cut from the learner’s own audio when the goal says so', () => {
+      const lesson = goalFor({ type: 'padAssigned', min: 2, origin: 'user' })
+      const context = (ids: string[]) => ({
+        pattern,
+        sampler: sampler({ pads: padsFrom(ids), sources: [CURATED_SAMPLE_SOURCE, myUpload] }),
+      })
+      expect(isGoalMet(lesson, context([myUpload.id, myUpload.id]))).toBe(true)
+      // Two pads, but one of them is the app's own sound.
+      expect(isGoalMet(lesson, context([CURATED_SAMPLE_SOURCE.id, myUpload.id]))).toBe(false)
+    })
+
+    it('counts pad steps switched on across the whole sampler', () => {
+      const lesson = goalFor({ type: 'padStepsPlaced', min: 4 })
+      const programmed = ['pad1', 'pad1', 'pad2', 'pad3'].reduce(
+        (built, padId, index) => toggleStep(built, padId as PadLaneId, index * 4),
+        pattern,
+      )
+      expect(isGoalMet(lesson, { pattern: programmed, sampler: sampler() })).toBe(true)
+      expect(
+        isGoalMet(lesson, { pattern: toggleStep(pattern, 'pad1', 0), sampler: sampler() }),
+      ).toBe(false)
+    })
+  })
+})
+
+describe('parseLesson — the sampling goal vocabulary', () => {
+  function withGoal(goal: unknown) {
+    return () => parseLesson({ ...validLesson, goal: [goal] })
+  }
+
+  it('rejects a goal naming a pad the deck does not have', () => {
+    expect(withGoal({ type: 'regionShorterThan', pad: 'pad9', seconds: 0.4 })).toThrow(/pad9/)
+    expect(withGoal({ type: 'fitTargetSet', pad: 'kick', minSteps: 4 })).toThrow(/kick/)
+    expect(withGoal({ type: 'padTuned', pad: '', minSemitones: 5 })).toThrow(/pad/i)
+  })
+
+  it('rejects a region window naming a source the app does not ship', () => {
+    // Only a shipped source has a duration knowable when a lesson is parsed, so
+    // it is the only thing a window can be checked against.
+    expect(
+      withGoal({
+        type: 'regionStartsWithin',
+        pad: 'pad1',
+        source: 'a-file-the-learner-brought',
+        from: 0.1,
+        to: 0.2,
+      }),
+    ).toThrow(/a-file-the-learner-brought/)
+  })
+
+  it('rejects a window that falls outside the source’s duration, or runs backwards', () => {
+    const window = (from: number, to: number) =>
+      withGoal({
+        type: 'regionStartsWithin',
+        pad: 'pad1',
+        source: CURATED_SAMPLE_SOURCE.id,
+        from,
+        to,
+      })
+    expect(window(-0.1, 0.5)).toThrow(/window/i)
+    expect(window(0.5, CURATED_SAMPLE_SOURCE.duration + 1)).toThrow(/window/i)
+    expect(window(0.9, 0.4)).toThrow(/window/i)
+  })
+
+  it('rejects a "load a sound" goal the shipped source would satisfy on its own', () => {
+    expect(withGoal({ type: 'sourceLoaded', origin: 'shipped', min: 1 })).toThrow(/origin/)
+    expect(withGoal({ type: 'sourceLoaded', origin: 'user', min: 0 })).toThrow(/min/)
+  })
+
+  it('rejects counts and lengths no sampler could reach', () => {
+    expect(withGoal({ type: 'padAssigned', min: 5 })).toThrow(/min/)
+    expect(withGoal({ type: 'padAssigned', min: 0 })).toThrow(/min/)
+    expect(withGoal({ type: 'fitTargetSet', pad: 'pad1', minSteps: 17 })).toThrow(/minSteps/)
+    expect(withGoal({ type: 'padTuned', pad: 'pad1', minSemitones: 40 })).toThrow(/minSemitones/)
+    expect(withGoal({ type: 'padTuned', pad: 'pad1', minSemitones: 0 })).toThrow(/minSemitones/)
+    expect(withGoal({ type: 'regionShorterThan', pad: 'pad1', seconds: 0 })).toThrow(/seconds/)
+    expect(withGoal({ type: 'padStepsPlaced', min: 65 })).toThrow(/min/)
+  })
+
+  it('parses every sampling goal it accepts', () => {
+    const lesson = parseLesson({
+      ...validLesson,
+      goal: [
+        { type: 'sourceLoaded', origin: 'user', min: 1 },
+        { type: 'padAssigned', min: 3, origin: 'user' },
+        {
+          type: 'regionStartsWithin',
+          pad: 'pad1',
+          source: CURATED_SAMPLE_SOURCE.id,
+          from: 0.42,
+          to: 0.51,
+        },
+        { type: 'regionShorterThan', pad: 'pad1', seconds: 0.4 },
+        { type: 'fitTargetSet', pad: 'pad2', minSteps: 8 },
+        { type: 'padTuned', pad: 'pad1', minSemitones: 5 },
+        { type: 'padStepsPlaced', min: 4 },
+      ],
+    })
+    expect(lesson.goal.map((goal) => goal.type)).toEqual([
+      'sourceLoaded',
+      'padAssigned',
+      'regionStartsWithin',
+      'regionShorterThan',
+      'fitTargetSet',
+      'padTuned',
+      'padStepsPlaced',
+    ])
   })
 })

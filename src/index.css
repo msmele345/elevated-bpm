@@ -405,7 +405,36 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.share-action + .share-action {
+  margin-top: 9px;
+}
+
+.share-bundle-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The one line the product says about passing someone else's audio on, and the
+   one line it says about what a link cannot carry. */
+.share-hint {
+  flex-basis: 100%;
+  margin: 3px 0 0;
+  text-align: right;
+  color: var(--ink-dim);
+  font-size: 0.6rem;
+  line-height: 1.5;
+}
+
+.share-notice .share-degraded {
+  margin-top: 6px;
+  padding-left: 9px;
+  border-left: 2px solid var(--quad-1);
+  color: var(--ink);
 }
 
 .share-action-label {
@@ -1682,10 +1711,23 @@ body::before {
   color: var(--quad-2);
 }
 
+/* And the sampler: a pad strip or the intake block, ringed the same way, so a
+   sampling lesson points with the same gesture a rhythm one does. */
+.sampler-pad-strip[data-spotlit],
+.sampler-intake[data-spotlit] {
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 55%, transparent),
+    0 0 22px color-mix(in srgb, var(--quad-2) 22%, transparent);
+  animation: spotlight-breathe 2.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .step-row.is-spotlit,
   .transport-tempo.is-spotlit,
-  .stab-keyboard.is-spotlit {
+  .stab-keyboard.is-spotlit,
+  .sampler-pad-strip[data-spotlit],
+  .sampler-intake[data-spotlit] {
     animation: none;
   }
 }
@@ -1729,6 +1771,74 @@ body::before {
 .arc-count-done {
   color: var(--go);
   font-weight: 600;
+}
+
+/* A label that only assistive tech reads. Same clipping rule as the skip
+   links: never display:none, or the control it names loses its name. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── Track selector ────────────────────────────────────────────────
+   Two paths through the deck, as a pair of raised tabs cut from the
+   same steel as every other control. The one on screen is ringed the
+   way the current arc stop is, so "where I am" reads the same at both
+   scales. */
+.arc-tracks {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 2px;
+}
+
+.arc-track {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 6px 11px;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--silkscreen);
+  font-family: var(--font-display);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.arc-track:active {
+  box-shadow: var(--key-pressed);
+}
+
+.arc-track:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.arc-track[data-current] {
+  color: var(--quad-2);
+  box-shadow:
+    var(--key-raised),
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 80%, transparent),
+    0 0 14px color-mix(in srgb, var(--quad-2) 32%, transparent);
+}
+
+.arc-track-count {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+
+.arc-track[data-current] .arc-track-count {
+  color: var(--go);
 }
 
 .arc-meter {
@@ -1866,7 +1976,8 @@ body::before {
 
 /* The label is the button; the input sits invisibly over it so it keeps its
    own focus and keyboard activation rather than being replaced by a proxy. */
-.sampler-load {
+.sampler-load,
+.share-bundle-open {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -1885,16 +1996,19 @@ body::before {
   cursor: pointer;
 }
 
-.sampler-load:hover {
+.sampler-load:hover,
+.share-bundle-open:hover {
   background: var(--key-face-hover);
 }
 
-.sampler-load:active {
+.sampler-load:active,
+.share-bundle-open:active {
   transform: translateY(1px);
   box-shadow: var(--key-pressed);
 }
 
-.sampler-load input[type='file'] {
+.sampler-load input[type='file'],
+.share-bundle-open input[type='file'] {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1903,9 +2017,18 @@ body::before {
   cursor: pointer;
 }
 
-.sampler-load:focus-within {
+.sampler-load:focus-within,
+.share-bundle-open:focus-within {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* Matched to .share-button rather than to .sampler-load, because those two sit
+   side by side and a two-pixel difference in one key face reads as a mistake. */
+.share-bundle-open {
+  padding: 7px 12px;
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
 }
 
 .sampler-intake-hint {

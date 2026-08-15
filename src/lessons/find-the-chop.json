@@ -1,0 +1,15 @@
+{
+  "id": "find-the-chop",
+  "title": "Find the Chop",
+  "intro": "Now open the Basement Break in the editor and assign it to Pad 1. It is two bars at 130 BPM, and the first clap lands on beat 2 — about 0.46 seconds in. Drag the left edge of the region onto it, or use the bracket keys to jump straight to the detected hit. Land the start of your chop on that clap.",
+  "spotlight": ["pad:pad1"],
+  "goal": [
+    {
+      "type": "regionStartsWithin",
+      "pad": "pad1",
+      "source": "curated-basement-break",
+      "from": 0.4,
+      "to": 0.53
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { indexedDB } from 'fake-indexeddb'
-import { createElement } from 'react'
+import { createElement, memo } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -26,10 +26,10 @@ vi.mock('./components/StepRow', async () => {
     './components/StepRow',
   )
   return {
-    StepRow: (props: Record<string, unknown>) => {
+    StepRow: memo((props: Record<string, unknown>) => {
       recorded.stepRow.push(props)
       return createElement(actual.StepRow as never, props as never)
-    },
+    }),
   }
 })
 
@@ -38,10 +38,10 @@ vi.mock('./components/NoteRow', async () => {
     './components/NoteRow',
   )
   return {
-    NoteRow: (props: Record<string, unknown>) => {
+    NoteRow: memo((props: Record<string, unknown>) => {
       recorded.noteRow.push(props)
       return createElement(actual.NoteRow as never, props as never)
-    },
+    }),
   }
 })
 
@@ -69,6 +69,7 @@ vi.mock('./audio/engine', async () => {
     registerSampleSource: () => undefined,
     setStoredSourceLoader: () => undefined,
     registerSlice: () => undefined,
+    clearSlice: () => undefined,
     getSoundingStabNotes: () => [],
     getSoundingPadIds: () => [],
     getSpectrum: () => null,
@@ -86,10 +87,10 @@ vi.mock('./components/BassPanel', async () => {
     './components/BassPanel',
   )
   return {
-    BassPanel: (props: Record<string, unknown>) => {
+    BassPanel: memo((props: Record<string, unknown>) => {
       recorded.panel.push({ name: 'BassPanel', props })
       return createElement(actual.BassPanel as never, props as never)
-    },
+    }),
   }
 })
 
@@ -98,10 +99,10 @@ vi.mock('./components/StabKeyboard', async () => {
     './components/StabKeyboard',
   )
   return {
-    StabKeyboard: (props: Record<string, unknown>) => {
+    StabKeyboard: memo((props: Record<string, unknown>) => {
       recorded.panel.push({ name: 'StabKeyboard', props })
       return createElement(actual.StabKeyboard as never, props as never)
-    },
+    }),
   }
 })
 
@@ -110,10 +111,10 @@ vi.mock('./components/SamplerPanel', async () => {
     './components/SamplerPanel',
   )
   return {
-    SamplerPanel: (props: Record<string, unknown>) => {
+    SamplerPanel: memo((props: Record<string, unknown>) => {
       recorded.panel.push({ name: 'SamplerPanel', props })
       return createElement(actual.SamplerPanel as never, props as never)
-    },
+    }),
   }
 })
 
@@ -124,6 +125,19 @@ type Records = Record<string, unknown>[]
 
 function laneId(props: Record<string, unknown>): string {
   return (props.lane as { id: string }).id
+}
+
+async function renderReadyDeck() {
+  render(createElement(App))
+  await waitFor(
+    () =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    // fake-indexeddb is normally effectively instant, but a shared CI runner
+    // can take longer than Testing Library's one-second default.
+    { timeout: 5_000 },
+  )
 }
 
 /**
@@ -180,12 +194,7 @@ afterEach(() => {
 
 describe('deck render cost', () => {
   it('leaves every drum and note lane on identical props when a master knob moves mid-playback', async () => {
-    render(createElement(App))
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    )
+    await renderReadyDeck()
     fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
     await screen.findByRole('button', { name: /^Stop$/ })
 
@@ -210,12 +219,7 @@ describe('deck render cost', () => {
     // The FX knobs are new props flowing through App onto the Master strip.
     // A send dragged over a running loop must not rebuild the instrument it is
     // sending — that is the dropped frame the deck is not allowed to have.
-    render(createElement(App))
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    )
+    await renderReadyDeck()
     fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
     await screen.findByRole('button', { name: /^Stop$/ })
 
@@ -246,12 +250,7 @@ describe('deck render cost', () => {
     // tempo — which puts BPM into the sampler panel's props for the first
     // time. The tempo fader is dragged, so that new coupling must stop at the
     // panel shell and never reach a lane, a pad or a knob.
-    render(createElement(App))
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    )
+    await renderReadyDeck()
     fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
     await screen.findByRole('button', { name: /^Stop$/ })
 
@@ -276,12 +275,7 @@ describe('deck render cost', () => {
   })
 
   it('leaves the other lanes on identical props when one lane is edited', async () => {
-    render(createElement(App))
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    )
+    await renderReadyDeck()
 
     const mark = recorded.stepRow.length
     fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
@@ -295,12 +289,7 @@ describe('deck render cost', () => {
   })
 
   it('changes only one pad lane when that pad is programmed', async () => {
-    render(createElement(App))
-    await waitFor(() =>
-      expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
-      ).toBe(false),
-    )
+    await renderReadyDeck()
 
     const mark = recorded.stepRow.length
     fireEvent.click(screen.getByRole('button', { name: 'Pad 3 step 7' }))

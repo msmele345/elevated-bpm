@@ -38,6 +38,7 @@ import {
   relinkPadToSource,
   setPadFit,
   setPadTune,
+  withShippedSources,
   type SampleRegion,
   type SampleSource,
   type SamplerParamId,
@@ -57,9 +58,20 @@ import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 // v2 grew the pattern to the full kit; v3 added the per-lane mute/solo mixer;
 // v4 added bass; v5 the sequenced stab note lane; v6 remembers which lesson of
 // the arc the user is on; v7 added the master-bus macros (filter, drive);
-// v8 added the shared FX bus and its per-instrument send levels; v9 adds the
-// sampler's source metadata, pad lanes and pad settings.
-export const PROJECT_STATE_VERSION = 9
+// v8 added the shared FX bus and its per-instrument send levels; v9 added the
+// sampler's source metadata, pad lanes and pad settings; v10 makes the
+// curriculum multi-track — one lesson pointer per arc, plus the arc on screen.
+export const PROJECT_STATE_VERSION = 10
+
+/**
+ * The arc a document that predates the multi-track curriculum was on.
+ *
+ * v9 had one path and one pointer, so that pointer can only ever have meant
+ * this arc — which is what makes the v9 → v10 migration a lift rather than a
+ * guess. The document names arcs by id and knows nothing else about them; the
+ * curriculum registry is what resolves one.
+ */
+export const DEFAULT_ARC_ID = 'techno'
 
 /** Per-lesson progress; keyed by lesson id in the document. */
 export interface LessonProgress {
@@ -90,11 +102,18 @@ export interface ProjectState {
   prefs: Record<string, unknown>
   /** Per-lane mute/solo. Absent lanes are audible and un-soloed. */
   mixer: Mixer
+  /** Which curriculum track is on screen. */
+  activeArcId: string
   /**
-   * The lesson of the arc the user stepped into, or null to follow the arc's
-   * own order. Persisted so a reload resumes where they were on the path.
+   * Where the user stands on **each** arc: the lesson they stepped into, or
+   * absent to follow that arc's own order.
+   *
+   * One pointer per arc rather than one overall, because a single pointer
+   * cannot hold two places — switching to sampling and back would leave it
+   * naming a sampling lesson, which the techno arc would fail to find, and the
+   * user's rung would be silently gone. Persisted, so a reload resumes both.
    */
-  activeLessonId: string | null
+  activeLessonIds: Record<string, string | null>
 }
 
 export function createInitialProjectState(): ProjectState {
@@ -114,7 +133,8 @@ export function createInitialProjectState(): ProjectState {
     lessonProgress: {},
     prefs: {},
     mixer: {},
-    activeLessonId: null,
+    activeArcId: DEFAULT_ARC_ID,
+    activeLessonIds: {},
   }
 }
 
@@ -398,23 +418,50 @@ export function updateLessonProgress(
   }
 }
 
-/**
- * Immutably step onto a lesson of the arc (or back onto its path with null).
- * Navigation only ever moves the marker: the pattern, the patch, the transport
- * and earned progress all come through untouched, so entering or leaving a
- * lesson can never cost the user their sandbox.
- */
-export function selectLesson(state: ProjectState, lessonId: string | null): ProjectState {
-  return { ...state, activeLessonId: lessonId }
+/** Where the user stands on one arc, or null to follow that arc's own order. */
+export function activeLessonIdFor(state: ProjectState, arcId: string): string | null {
+  return state.activeLessonIds[arcId] ?? null
 }
 
 /**
- * Step into a lesson from the arc: select it and reopen its panel. Completion
- * already earned stays earned — a lesson can be revisited to re-read it
- * without the celebration being taken back.
+ * Immutably step onto a lesson of one arc (or back onto its path with null).
+ * Navigation only ever moves that arc's marker: the pattern, the patch, the
+ * transport, the sampler and earned progress all come through untouched, so
+ * entering or leaving a lesson can never cost the user their sandbox — and the
+ * other arc's marker is left exactly where they parked it.
  */
-export function enterLesson(state: ProjectState, lessonId: string): ProjectState {
-  return selectLesson(updateLessonProgress(state, lessonId, { dismissed: false }), lessonId)
+export function selectLesson(
+  state: ProjectState,
+  arcId: string,
+  lessonId: string | null,
+): ProjectState {
+  return { ...state, activeLessonIds: { ...state.activeLessonIds, [arcId]: lessonId } }
+}
+
+/**
+ * Immutably bring one curriculum track on screen. Pure marker movement like
+ * lesson selection — and it deliberately does not touch either arc's pointer,
+ * which is the whole of "switch paths without losing my place in either".
+ */
+export function selectArc(state: ProjectState, arcId: string): ProjectState {
+  return { ...state, activeArcId: arcId }
+}
+
+/**
+ * Step into a lesson from an arc: bring that track on screen, select the
+ * lesson and reopen its panel. Completion already earned stays earned — a
+ * lesson can be revisited to re-read it without the celebration being taken
+ * back.
+ */
+export function enterLesson(
+  state: ProjectState,
+  arcId: string,
+  lessonId: string,
+): ProjectState {
+  return selectArc(
+    selectLesson(updateLessonProgress(state, lessonId, { dismissed: false }), arcId, lessonId),
+    arcId,
+  )
 }
 
 const AUDIBLE: LaneMix = { muted: false, soloed: false }
@@ -470,7 +517,9 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
     case 7:
       return migrateProjectState(migrateV7ToV8(doc as ProjectStateV7))
     case 8:
-      return migrateV8ToV9(doc as ProjectStateV8)
+      return migrateProjectState(migrateV8ToV9(doc as ProjectStateV8))
+    case 9:
+      return migrateV9ToV10(doc as ProjectStateV9)
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:
@@ -478,10 +527,15 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
   }
 }
 
-/** Fields shared by every document version, before the version-specific bits. */
+/**
+ * The one lesson pointer every document before v10 carried, and the fields
+ * shared by every version before the version-specific bits.
+ */
+type SingleArcPointer = { activeLessonId: string | null }
+
 type ProjectStateBase = Omit<
   ProjectState,
-  'version' | 'mixer' | 'instrumentSettings' | 'activeLessonId' | 'sources'
+  'version' | 'mixer' | 'instrumentSettings' | 'activeArcId' | 'activeLessonIds' | 'sources'
 > & {
   instrumentSettings: Record<string, unknown>
 }
@@ -507,20 +561,27 @@ interface InstrumentSettingsPreV7 {
   bass: BassSettings
 }
 
-/** v4 added the bass lane and synth patch, but no stab lane yet. */
-type ProjectStateV4 = Omit<
+/** Every version up to v9 carried one arc's worth of state, hence one pointer. */
+type SingleArcProjectState = Omit<
   ProjectState,
-  'version' | 'activeLessonId' | 'instrumentSettings' | 'sources'
-> & { version: 4; instrumentSettings: InstrumentSettingsPreV7 }
+  'version' | 'instrumentSettings' | 'sources' | 'activeArcId' | 'activeLessonIds'
+> &
+  SingleArcPointer
+
+/** v4 added the bass lane and synth patch, but no stab lane yet. */
+type ProjectStateV4 = Omit<SingleArcProjectState, 'activeLessonId'> & {
+  version: 4
+  instrumentSettings: InstrumentSettingsPreV7
+}
 
 /** v5 had every instrument, but the arc was a fixed order with no place to be on it. */
-type ProjectStateV5 = Omit<
-  ProjectState,
-  'version' | 'activeLessonId' | 'instrumentSettings' | 'sources'
-> & { version: 5; instrumentSettings: InstrumentSettingsPreV7 }
+type ProjectStateV5 = Omit<SingleArcProjectState, 'activeLessonId'> & {
+  version: 5
+  instrumentSettings: InstrumentSettingsPreV7
+}
 
 /** v6 knew where the user was on the arc, but the main out had no macros yet. */
-type ProjectStateV6 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sources'> & {
+type ProjectStateV6 = SingleArcProjectState & {
   version: 6
   instrumentSettings: InstrumentSettingsPreV7
 }
@@ -529,16 +590,23 @@ type ProjectStateV6 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sou
 type InstrumentSettingsPreV8 = InstrumentSettingsPreV7 & { master: MasterSettings }
 
 /** v7 had the master macros, but no send bus behind them. */
-type ProjectStateV7 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sources'> & {
+type ProjectStateV7 = SingleArcProjectState & {
   version: 7
   instrumentSettings: InstrumentSettingsPreV8
 }
 
 /** v8 had the complete FX patch, but no sampler document fields yet. */
 type InstrumentSettingsPreV9 = Omit<InstrumentSettings, 'sampler'>
-type ProjectStateV8 = Omit<ProjectState, 'version' | 'instrumentSettings' | 'sources'> & {
+type ProjectStateV8 = SingleArcProjectState & {
   version: 8
   instrumentSettings: InstrumentSettingsPreV9
+}
+
+/** v9 had the whole sampler, but one curriculum path and so one pointer. */
+type ProjectStateV9 = SingleArcProjectState & {
+  version: 9
+  instrumentSettings: InstrumentSettings
+  sources: SampleSource[]
 }
 
 function migrateV0ToV1(doc: object): ProjectStateV1 {
@@ -617,7 +685,7 @@ function migrateV7ToV8(doc: ProjectStateV7): ProjectStateV8 {
   }
 }
 
-function migrateV8ToV9(doc: ProjectStateV8): ProjectState {
+function migrateV8ToV9(doc: ProjectStateV8): ProjectStateV9 {
   return {
     ...doc,
     version: 9,
@@ -630,5 +698,23 @@ function migrateV8ToV9(doc: ProjectStateV8): ProjectState {
         (doc.instrumentSettings as unknown as Record<string, unknown>).sampler,
       ),
     },
+  }
+}
+
+function migrateV9ToV10(doc: ProjectStateV9): ProjectState {
+  const { activeLessonId, ...rest } = doc
+  return {
+    ...rest,
+    version: 10,
+    // The one pointer v9 had could only ever have meant the techno arc, so it
+    // lifts into that slot: a returning user resumes on exactly the rung they
+    // were on, and the sampling arc starts on its own path.
+    activeArcId: DEFAULT_ARC_ID,
+    // A document naming no lesson carries no key: "follow the path" is the
+    // absence of a pointer, and a fresh document says it the same way.
+    activeLessonIds: activeLessonId ? { [DEFAULT_ARC_ID]: activeLessonId } : {},
+    // The curated source became a break in this slice. Only shipped sources are
+    // ever retired — the user's own bank is theirs.
+    sources: withShippedSources(doc.sources ?? []),
   }
 }

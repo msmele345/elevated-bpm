@@ -1711,10 +1711,23 @@ body::before {
   color: var(--quad-2);
 }
 
+/* And the sampler: a pad strip or the intake block, ringed the same way, so a
+   sampling lesson points with the same gesture a rhythm one does. */
+.sampler-pad-strip[data-spotlit],
+.sampler-intake[data-spotlit] {
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 55%, transparent),
+    0 0 22px color-mix(in srgb, var(--quad-2) 22%, transparent);
+  animation: spotlight-breathe 2.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .step-row.is-spotlit,
   .transport-tempo.is-spotlit,
-  .stab-keyboard.is-spotlit {
+  .stab-keyboard.is-spotlit,
+  .sampler-pad-strip[data-spotlit],
+  .sampler-intake[data-spotlit] {
     animation: none;
   }
 }
@@ -1758,6 +1771,74 @@ body::before {
 .arc-count-done {
   color: var(--go);
   font-weight: 600;
+}
+
+/* A label that only assistive tech reads. Same clipping rule as the skip
+   links: never display:none, or the control it names loses its name. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── Track selector ────────────────────────────────────────────────
+   Two paths through the deck, as a pair of raised tabs cut from the
+   same steel as every other control. The one on screen is ringed the
+   way the current arc stop is, so "where I am" reads the same at both
+   scales. */
+.arc-tracks {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 2px;
+}
+
+.arc-track {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 6px 11px;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--silkscreen);
+  font-family: var(--font-display);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.arc-track:active {
+  box-shadow: var(--key-pressed);
+}
+
+.arc-track:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.arc-track[data-current] {
+  color: var(--quad-2);
+  box-shadow:
+    var(--key-raised),
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 80%, transparent),
+    0 0 14px color-mix(in srgb, var(--quad-2) 32%, transparent);
+}
+
+.arc-track-count {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+
+.arc-track[data-current] .arc-track-count {
+  color: var(--go);
 }
 
 .arc-meter {

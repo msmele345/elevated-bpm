@@ -1,5 +1,6 @@
 import {
   activePattern,
+  DEFAULT_ARC_ID,
   migrateProjectState,
   PROJECT_STATE_VERSION,
   type InstrumentSettings,
@@ -57,9 +58,14 @@ export const UNSUPPORTED_VERSION_MESSAGE =
  */
 export function recipientOwnedBlanks(): Pick<
   ProjectState,
-  'lessonProgress' | 'prefs' | 'activeLessonId'
+  'lessonProgress' | 'prefs' | 'activeArcId' | 'activeLessonIds'
 > {
-  return { lessonProgress: {}, prefs: {}, activeLessonId: null }
+  return {
+    lessonProgress: {},
+    prefs: {},
+    activeArcId: DEFAULT_ARC_ID,
+    activeLessonIds: {},
+  }
 }
 
 /** The document a payload carries: the active pattern and everything shaping it. */
@@ -323,7 +329,9 @@ export function isSharedProject(value: unknown): value is ProjectState {
     isRecord(value.prefs) &&
     Object.keys(value.prefs).length === 0 &&
     isMixer(value.mixer) &&
-    value.activeLessonId === null
+    value.activeArcId === DEFAULT_ARC_ID &&
+    isRecord(value.activeLessonIds) &&
+    Object.keys(value.activeLessonIds).length === 0
   )
 }
 

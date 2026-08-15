@@ -20,4 +20,4 @@ export const KIT_SAMPLES: Record<DrumLaneId, string> = {
  * source's id, and a pad reaches it only by holding a region into that source —
  * the same way a pad will reach an uploaded one.
  */
-export const CURATED_SAMPLE_URL = '/samples/perc-909.wav'
+export const CURATED_SAMPLE_URL = '/samples/break-909.wav'

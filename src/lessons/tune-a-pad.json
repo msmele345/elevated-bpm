@@ -1,0 +1,7 @@
+{
+  "id": "tune-a-pad",
+  "title": "Tune a Pad",
+  "intro": "A sampled hit rarely sits with the kit at the pitch it arrived at. Take Pad 1's Tune knob and move it at least five semitones away from centre — up to make the clap tighter and brighter, down to make it heavier. Speed and pitch move together here; there is no processing hiding the tradeoff.",
+  "spotlight": ["knob:pad1Tune"],
+  "goal": [{ "type": "padTuned", "pad": "pad1", "minSemitones": 5 }]
+}

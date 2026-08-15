@@ -283,7 +283,7 @@ describe('App audio intake', () => {
     // It is a source now: named after its file and listed with the shipped one.
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
     expect(await within(sourceList).findByText('Warehouse Break')).toBeTruthy()
-    expect(within(sourceList).getByText('Warehouse Perc')).toBeTruthy()
+    expect(within(sourceList).getByText('Basement Break')).toBeTruthy()
     // Its bytes are kept under the id the document will store, so the source
     // can be chopped later; nothing is decoded again until it is.
     expect(engineSpies.registerSourceBytes).toHaveBeenCalledWith('upload-1', expect.anything())
@@ -684,14 +684,14 @@ describe('App sampler workflow', () => {
     await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
 
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
-    expect(within(sourceList).getByText('Warehouse Perc')).toBeTruthy()
+    expect(within(sourceList).getByText('Basement Break')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: CURATED_SAMPLE_SOURCE.id },
     })
     // Assignment renders the pad's slice before the document moves, so the pad
     // takes the name only once it can actually make the sound.
     expect(
-      await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Perc' }),
+      await screen.findByRole('button', { name: 'Play Pad 1 — Basement Break' }),
     ).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Pad 1 step 1' }))
@@ -1183,7 +1183,7 @@ describe('App beat bundles', () => {
 })
 
 /** Open the shipped source in the editor and wait for the dialog. */
-async function openChopEditor(name = 'Chop Warehouse Perc'): Promise<HTMLElement> {
+async function openChopEditor(name = 'Chop Basement Break'): Promise<HTMLElement> {
   fireEvent.click(screen.getByRole('button', { name }))
   return screen.findByRole('dialog')
 }
@@ -1215,7 +1215,7 @@ describe('App region editor', () => {
       'pad3',
       expect.objectContaining({ sourceId: CURATED_SAMPLE_SOURCE.id }),
     )
-    expect(screen.getByRole('button', { name: 'Play Pad 3 — Warehouse Perc' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Play Pad 3 — Basement Break' })).toBeTruthy()
   })
 
   it('reopens a pad on the edges it already has, so a move is a correction', async () => {
@@ -1320,16 +1320,17 @@ describe('App region editor', () => {
     fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: CURATED_SAMPLE_SOURCE.id },
     })
-    await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Perc' })
+    await screen.findByRole('button', { name: 'Play Pad 1 — Basement Break' })
 
-    fireEvent.change(screen.getByLabelText('Pad 1 fit to steps'), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText('Pad 1 fit to steps'), { target: { value: '16' } })
 
-    // The curated one-shot is 0.25 s; two 16ths at 130 BPM is 0.2308 s, so it
-    // runs a little fast — and its pitch goes up with it, as pitching a record
-    // does. There is no time-stretching anywhere in this feature.
+    // The curated break is two bars at 130 BPM; sixteen steps at 130 BPM is one
+    // bar. Squeezing two bars into one is exactly double speed — and its pitch
+    // goes up an octave with it, as pitching a record does. There is no
+    // time-stretching anywhere in this feature.
     const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
-    expect(settings.pad1.fit).toBe(2)
-    expect(screen.getByText('108 % speed, +1.4 st')).toBeTruthy()
+    expect(settings.pad1.fit).toBe(16)
+    expect(screen.getByText('200 % speed, +12.0 st')).toBeTruthy()
   })
 })
 
@@ -1342,7 +1343,9 @@ describe('App sample storage', () => {
   it('brings a chop back exactly as it was left, with nothing decoded on the way in', async () => {
     await hydratedDeck()
     chooseFile(audioFile('Warehouse Break.wav'))
-    fireEvent.change(await screen.findByLabelText('Pad 1 sound source'), {
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    await within(sourceList).findByText('Warehouse Break')
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: 'upload-1' },
     })
     await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' })
@@ -1372,7 +1375,9 @@ describe('App sample storage', () => {
   it('keeps no audio in the saved document, however much is loaded', async () => {
     await hydratedDeck()
     chooseFile(audioFile('Warehouse Break.wav'))
-    fireEvent.change(await screen.findByLabelText('Pad 1 sound source'), {
+    const sourceList = screen.getByRole('group', { name: 'Sample sources' })
+    await within(sourceList).findByText('Warehouse Break')
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
       target: { value: 'upload-1' },
     })
     await screen.findByRole('button', { name: 'Play Pad 1 — Warehouse Break' })
@@ -1598,5 +1603,173 @@ describe('App storage durability', () => {
     } finally {
       IDBObjectStore.prototype.put = put
     }
+  })
+})
+
+describe('App curriculum tracks', () => {
+  /** The track selector's own control, by the name a screen reader hears. */
+  function track(name: 'Techno' | 'Sampling'): HTMLElement {
+    return screen.getByRole('button', { name: new RegExp(`^${name} track`) })
+  }
+
+  function switchTo(name: 'Techno' | 'Sampling'): void {
+    fireEvent.click(track(name))
+  }
+
+  /** The lesson the panel is currently showing, by its position line. */
+  function standingOn(): string {
+    return screen.getByRole('button', { name: /^Lesson \d+/, current: 'step' }).getAttribute(
+      'aria-label',
+    )!
+  }
+
+  it('shows both paths with progress on each, and switches between them', async () => {
+    await hydratedDeck()
+
+    expect(track('Techno').getAttribute('aria-label')).toContain('0 of 14 complete')
+    expect(track('Sampling').getAttribute('aria-label')).toContain('0 of 6 complete')
+    expect(track('Techno').getAttribute('aria-pressed')).toBe('true')
+
+    switchTo('Sampling')
+
+    expect(track('Sampling').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('6')
+    expect(standingOn()).toContain('Load a Sound')
+  })
+
+  it('keeps each track’s place, in the session and across a reload', async () => {
+    await hydratedDeck()
+
+    // Step off the path on each track, then leave and come back to both.
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 9:/ }))
+    expect(standingOn()).toContain('Sweep the Filter')
+    switchTo('Sampling')
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 4:/ }))
+    expect(standingOn()).toContain('Fit the Break')
+
+    switchTo('Techno')
+    // With one pointer this is where the place would be silently gone: the
+    // techno arc would fail to find a sampling lesson and fall through to
+    // "first unfinished".
+    expect(standingOn()).toContain('Sweep the Filter')
+    switchTo('Sampling')
+    expect(standingOn()).toContain('Fit the Break')
+
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    cleanup()
+    await hydratedDeck()
+
+    expect(track('Sampling').getAttribute('aria-pressed')).toBe('true')
+    expect(standingOn()).toContain('Fit the Break')
+    switchTo('Techno')
+    expect(standingOn()).toContain('Sweep the Filter')
+  })
+
+  it('leaves the sandbox byte-identical — switching tracks is not an edit', async () => {
+    await hydratedDeck()
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+    fireEvent.change(screen.getByRole('slider', { name: 'Tempo in beats per minute' }), {
+      target: { value: '138' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+    const patternBefore = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const samplerBefore = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
+    engineSpies.setBpm.mockClear()
+    engineSpies.stop.mockClear()
+
+    switchTo('Sampling')
+    switchTo('Techno')
+    switchTo('Sampling')
+
+    // Same objects, not merely equal ones: navigation hands the deck's own
+    // state straight back rather than rebuilding it.
+    expect(engineSpies.setPattern.mock.calls.at(-1)![0]).toBe(patternBefore)
+    expect(engineSpies.setSamplerSettings.mock.calls.at(-1)![0]).toBe(samplerBefore)
+    expect(
+      (screen.getByRole('slider', { name: 'Tempo in beats per minute' }) as HTMLInputElement)
+        .value,
+    ).toBe('138')
+    // The loop never noticed.
+    expect(engineSpies.stop).not.toHaveBeenCalled()
+    expect(engineSpies.setBpm).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy()
+  })
+
+  /** A sender who has loaded audio of their own and chopped it onto a pad. */
+  function senderWithOwnSound(): { project: ProjectState; chop: SampleRegion } {
+    const source = {
+      id: 'upload-sender',
+      name: 'Sender Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    const chop: SampleRegion = { sourceId: 'upload-sender', start: 0, duration: 1 }
+    return {
+      project: commitRegionToSamplerPad(
+        addSource(createInitialProjectState(), source),
+        'pad1',
+        chop,
+      ),
+      chop,
+    }
+  }
+
+  it('never credits a link’s recipient with the sampling work it arrived with', async () => {
+    // A link drops the audio but still carries the source metadata and the
+    // pad's region, so it can arrive with "load a sound" already met.
+    await saveProjectState(createInitialProjectState())
+    const shareUrl = await createShareUrl(senderWithOwnSound().project, window.location.href)
+    window.history.replaceState(null, '', new URL(shareUrl).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    switchTo('Sampling')
+
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    expect(track('Sampling').getAttribute('aria-label')).toContain('0 of 6 complete')
+  })
+
+  it('never credits a bundle’s recipient with the sampling work it arrived with', async () => {
+    // A bundle carries real audio, so this is the most obviously unearned
+    // completion the product could hand out: the sender's own uploaded source
+    // arrives in the document and would otherwise earn "load a sound".
+    const { project: sender, chop } = senderWithOwnSound()
+    const bundle = await createBundle(sender, new Map([[sliceKey(chop), sliceFake()]]))
+    if (bundle.status !== 'ready') throw new Error('Expected a bundle fixture')
+
+    await saveProjectState(createInitialProjectState())
+    await hydratedDeck()
+    fireEvent.change(screen.getByLabelText('Open a bundle'), {
+      target: { files: [new File([bundle.blob], bundle.fileName)] },
+    })
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    switchTo('Sampling')
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    expect(track('Sampling').getAttribute('aria-label')).toContain('0 of 6 complete')
+
+    // And it becomes earnable the moment the inherited goal stops being met and
+    // the recipient does the work themselves.
+    fireEvent.click(screen.getByRole('button', { name: 'Keep this beat' }))
+    await waitFor(() => expect(screen.queryByText('Shared beat preview')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Sender Break' }))
+    fireEvent.click(
+      within(await screen.findByRole('alert')).getByRole('button', { name: 'Delete anyway' }),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0'),
+    )
+
+    chooseFile(audioFile('My Own Break.wav'))
+
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 450))
   })
 })

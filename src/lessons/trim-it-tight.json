@@ -1,0 +1,16 @@
+{
+  "id": "trim-it-tight",
+  "title": "Trim It Tight",
+  "intro": "A chop that runs on drags the whole loop with it. Reopen Pad 1 and pull the right edge back in until you have the clap and nothing after it — under four tenths of a second. Press Enter to audition as you go: judge it by ear, not by the picture. Keep the start where you put it.",
+  "spotlight": ["pad:pad1"],
+  "goal": [
+    {
+      "type": "regionStartsWithin",
+      "pad": "pad1",
+      "source": "curated-basement-break",
+      "from": 0.4,
+      "to": 0.53
+    },
+    { "type": "regionShorterThan", "pad": "pad1", "seconds": 0.4 }
+  ]
+}

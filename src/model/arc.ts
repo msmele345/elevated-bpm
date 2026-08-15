@@ -1,5 +1,7 @@
+import { NO_CHORD_PLAY, type ChordPlay } from './chordPlay'
 import { isGoalMet, type GoalContext, type Lesson } from './lesson'
-import type { LessonProgress } from './projectState'
+import { NO_PARAM_MOTION, type ParamMotion } from './paramMotion'
+import { activePattern, type LessonProgress, type ProjectState } from './projectState'
 
 /**
  * An Arc is an ordered list of lessons (see plans/elevated-bpm-v1.md). These
@@ -11,6 +13,38 @@ import type { LessonProgress } from './projectState'
  */
 
 export type LessonProgressMap = Record<string, LessonProgress>
+
+/**
+ * What the user has *done* this session, as opposed to what the document
+ * holds. Knob motion and live playing are claims about the session and are
+ * never persisted, so they arrive alongside the document rather than in it.
+ */
+export interface SessionObservations {
+  motion?: ParamMotion
+  chord?: ChordPlay
+}
+
+/**
+ * Everything a goal is evaluated against, assembled in one place.
+ *
+ * There is one builder because there are several callers — the live deck, an
+ * arriving shared link, an opened bundle — and a caller that forgot to pass
+ * part of the document would not fail loudly: it would quietly make some
+ * assertions unmeetable and, worse, make an arriving beat look unbuilt and so
+ * earn its recipient lessons they never did.
+ */
+export function goalContextFor(
+  state: ProjectState,
+  session: SessionObservations = {},
+): GoalContext {
+  return {
+    pattern: activePattern(state),
+    bpm: state.transport.bpm,
+    motion: session.motion ?? NO_PARAM_MOTION,
+    chord: session.chord ?? NO_CHORD_PLAY,
+    sampler: { pads: state.instrumentSettings.sampler, sources: state.sources },
+  }
+}
 
 /** One rung of the path as the arc UI renders it. */
 export interface ArcEntry {

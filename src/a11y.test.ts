@@ -198,7 +198,7 @@ describe('deck accessibility', () => {
 describe('region editor accessibility', () => {
   async function openEditor(): Promise<HTMLElement> {
     await renderDeck()
-    fireEvent.click(screen.getByRole('button', { name: 'Chop Warehouse Perc' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Basement Break' }))
     return screen.findByRole('dialog')
   }
 
@@ -272,8 +272,13 @@ describe('region editor accessibility', () => {
 describe('region editor focus containment', () => {
   async function openEditor(): Promise<HTMLElement> {
     await renderDeck()
-    fireEvent.click(screen.getByRole('button', { name: 'Chop Warehouse Perc' }))
-    return screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Chop Basement Break' }))
+    const dialog = await screen.findByRole('dialog')
+    // The dialog's passive effect installs the focus trap and moves focus to
+    // its first stop. Waiting for that public contract removes the race where
+    // CI can observe the markup before the effect is ready.
+    await waitFor(() => expect(document.activeElement).toBe(focusable(dialog)[0]))
+    return dialog
   }
 
   it('keeps Tab inside the dialog, wrapping at both ends', async () => {
@@ -287,11 +292,13 @@ describe('region editor focus containment', () => {
 
     last.focus()
     fireEvent.keyDown(window, { key: 'Tab' })
-    expect(document.activeElement).toBe(first)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(computeAccessibleName(document.activeElement!)).toBe('Close editor')
 
     first.focus()
     fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(last)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    expect(computeAccessibleName(document.activeElement!)).toBe('Commit to pad')
   })
 
   it('lets Tab move normally between the controls in between', async () => {

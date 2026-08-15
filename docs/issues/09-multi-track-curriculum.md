@@ -135,32 +135,188 @@ component's copy must become data-driven per arc rather than hardcoded.
 
 ## Acceptance criteria
 
-- [ ] Both curriculum paths are visible with progress on each, and the user can
-      switch between them
-- [ ] Switching arcs and switching back returns the user to exactly the lesson
-      they were on in each — verified across a reload as well as in-session
-- [ ] `ProjectState` v10 carries a per-arc lesson pointer and the active arc id;
+- [x] Both curriculum paths are visible with progress on each, and the user can
+      switch between them — `ARCS` (`src/lessons/index.ts`) is the registry every
+      consumer reads; `LessonArc` renders it as a pair of raised tabs cut from
+      the same steel as a step button, each carrying its own earned count and
+      `aria-pressed`, ringed where the user is standing the way the current arc
+      stop is. Verified in-browser: "Techno 0/14" and "Sampling 0/6" on a wiped
+      deck, the meter's `aria-valuemax` following the chosen track
+- [x] Switching arcs and switching back returns the user to exactly the lesson
+      they were on in each — verified across a reload as well as in-session —
+      `activeLessonIds` is a map, so the pointers cannot overwrite each other.
+      In-browser: parked on techno 9 and sampling 4, switched back and forth, both
+      unmoved; then parked on techno 9 and sampling 3, reloaded, and the deck came
+      back on Sampling 3 with techno still holding 9. Also at the model seam
+      (`projectState.test.ts`) and the mounted deck (`App.test.ts`)
+- [x] `ProjectState` v10 carries a per-arc lesson pointer and the active arc id;
       the v9 → v10 migration lifts the existing scalar into the techno arc,
-      keeping earned lessons and the user's rung
-- [ ] Six sampling lessons exist covering loading, finding a chop, trimming,
+      keeping earned lessons and the user's rung — proven on a **real** v9
+      document rather than only a synthetic one: a v9 doc was written into the
+      browser's own IndexedDB naming `filter-sweep`, holding one earned lesson,
+      BPM 126 and a pad chopped from the retired shipped perc source. It came back
+      on Lesson 9, 1/14 earned, 126 BPM, sampling on its own path — and that pad
+      kept its name and its 3.0 st tune while reading "Original cleared", the
+      modelled `sourceMissing` state. Housekeeping is never audible
+- [x] Six sampling lessons exist covering loading, finding a chop, trimming,
       fitting to the grid, tuning, and building a kit, ordered as one arc
-- [ ] The opening deck — curated source pre-installed, pads empty — satisfies **no
-      lesson in either arc**, enforced by the shipped-lessons contract
-- [ ] "Load a sound" is satisfied by a user-added source and **not** by the
-      pre-installed one
-- [ ] A region-window goal names its source, and a region cut from a different
-      source in the same window does not satisfy it
-- [ ] The lesson parser rejects a goal naming a pad that does not exist, a source
-      that does not exist, or a window outside that source's duration
-- [ ] Every sampling lesson auto-detects completion with no false positives or
-      negatives, proven by breaking each assertion in turn
-- [ ] A shared link or an imported bundle that arrives with sampling work already
+- [x] The opening deck — curated source pre-installed, pads empty — satisfies **no
+      lesson in either arc**, enforced by the shipped-lessons contract — the
+      contract now iterates `ARCS` and builds its opening context from
+      `createDemoProjectState()` through the same `goalContextFor` the deck uses,
+      so it cannot drift from what a first-time user actually finds
+- [x] "Load a sound" is satisfied by a user-added source and **not** by the
+      pre-installed one — the goal carries an `origin`, and the parser refuses
+      `origin: "shipped"` outright rather than accepting it and letting it be
+      wrong at runtime. In-browser: assigning the curated break to a pad left the
+      lesson unearned; a real file through the picker earned it
+- [x] A region-window goal names its source, and a region cut from a different
+      source in the same window does not satisfy it — verified in-browser as the
+      techno arc's AC1 was: the learner's own upload trimmed to start at 0.500 s,
+      inside the lesson's [0.40, 0.53] window, did **not** complete "Find the
+      Chop"; the same window cut from the Basement Break did
+- [x] The lesson parser rejects a goal naming a pad that does not exist, a source
+      that does not exist, or a window outside that source's duration — plus a
+      window that runs backwards, an unreachable count, a fit target past 16
+      steps, a tune of zero semitones, and a chop length past `MAX_SLICE_SECONDS`
+      (`lesson.test.ts`)
+- [x] Every sampling lesson auto-detects completion with no false positives or
+      negatives, proven by breaking each assertion in turn — the generalized
+      contract synthesizes a known-good context per lesson from its own JSON and
+      then breaks each assertion one at a time, across both tracks. Three of the
+      negatives were also driven through the real UI: a 0.69 s trim did not earn
+      "Trim It Tight" (0.23 s did), a 2.9 st nudge did not earn "Tune a Pad"
+      (6.7 st did), and two assigned pads did not earn the capstone (three did)
+- [x] A shared link or an imported bundle that arrives with sampling work already
       done does not earn those lessons; they become earnable once the goal stops
-      being met and is built again
-- [ ] Arc navigation and arc switching leave the sandbox untouched — same pattern,
-      same patch, same pads, transport still running
-- [ ] Adding a lesson to either arc requires editing JSON and one registration
-      line, with no other code change
+      being met and is built again — `lessonsAlreadyMet` now sweeps `ALL_LESSONS`,
+      and both inheritance sites build their context through `goalContextFor`, so
+      neither can silently omit the sampler. Both carriers are covered at the
+      mounted deck, including the recovery half: delete the sender's source, load
+      your own, and the lesson is earned
+- [x] Arc navigation and arc switching leave the sandbox untouched — same pattern,
+      same patch, same pads, transport still running — asserted by reference at
+      the model seam and measured in-browser under a running loop: eight switches
+      left the tempo, the pads, the pad steps, the drum steps and the Tune value
+      byte-identical, and the playhead advanced through eight distinct steps
+      without the clock stalling once
+- [x] Adding a lesson to either arc requires editing JSON and one registration
+      line, with no other code change — the six sampling lessons were authored
+      that way; only genuinely new *goal vocabulary* needed code, which is the
+      same rule the techno arc has always had. Stated exactly: it is a JSON file
+      plus **two** lines in `src/lessons/index.ts`, an import and an array entry,
+      and no edit anywhere else. The contract now sweeps the lessons directory
+      and fails on any JSON file no arc registers, which is the failure that rule
+      actually invites — a lesson written and shipped that nobody can reach
+
+## What this slice decided
+
+**The Sampling Arc gets an ending, deliberately the smaller of the two.** The
+issue asked for this to be decided here and stated. Finishing a track with
+nothing at the end reads as an unfinished feature, but the techno arc is the
+product's spine and its graduation has to stay the biggest moment on the deck.
+So `FinaleMoment`'s copy became per-arc data (`ArcFinale`), and `scale` is the
+only thing the two endings really differ on: the techno plate keeps its full bar
+of sixteen lights and "You made techno"; the sampling one is a compact eight-light
+plate — "Sampling track complete · SP-04 certified", "You built your own kit".
+Verified in-browser: the capstone raised the compact dialog over an inert deck
+with its close control focused, and it never claims the other track's words.
+
+**The curated source graduated from a 0.25 s perc one-shot to a generated
+two-bar break.** "Find the chop", "trim it tight" and "fit a break to the grid"
+cannot mean anything musical against a quarter of a second, and the spec's whole
+justification for source-qualified windows is that a goal can "mean something
+musical by it". The break is *generated*
+(`scripts/make-curated-break.mjs`) from the 909 one-shots the deck already ships,
+which is what makes every transient a number this repo can point at rather than
+something measured off a waveform. Its duration is the generator's own output and
+is what the parser validates windows against.
+
+Retiring the old shipped source is handled rather than ignored: `withShippedSources`
+drops shipped sources the app no longer has and keeps the user's own untouched, so
+a pad still pointing at the perc keeps its region, keeps its slice, and goes on
+sounding — losing only re-editability.
+
+## Defect found during the in-browser pass: the lesson recommended a key that did not work
+
+The unit tests could not have caught this, because the decoder is injected and
+onset detection was never run over the real file.
+
+"Find the Chop" tells the learner to "use the bracket keys to jump straight to
+the detected hit". Driving that in the browser, the detector reported **seven**
+onsets and the bracket key jumped from 0.000 s to 0.688 s — straight past the
+clap at 0.46 s the lesson asserts. The lesson was still winnable by dragging, but
+its own instruction led away from the answer, with nothing on screen to explain
+why.
+
+The cause was in the generated break, not the detector. `detectOnsets` reads the
+*rise* between frames — deliberately, so it is indifferent to how loud a source
+was mastered — and the 909 kick rings for over a second, so the clap landed
+inside its tail and never cleared the threshold.
+
+The fix was to give every voice in the generator the decay a sampled break would
+already have. Detected onsets went from 7 to 13, including **0.459 s** — one
+bracket press from the start and squarely inside the window. The alternative was
+to move the lesson onto a transient that happened to be detected; that would have
+made the lesson pass while leaving the curated source a poor thing to learn
+chopping on, which is the one job it has.
+
+**A note on the suite.** Across eight full-suite runs, two failed — each on a
+different test in the `App region editor` family (`cuts two regions from one
+source onto two pads`, `is a modal over an inert deck`), each on a `waitFor`
+timeout, none in a test this slice touches, and the file passes in isolation
+every time. It is the same pre-existing flake under parallel load recorded in
+issue 07 rather than a regression, but it is written down rather than dismissed.
+
+## What review changed
+
+**The capstone did not assert what its own copy claimed.** "Build Your Own Kit"
+opened "Everything at once, out of your own material" while its goal was a bare
+`padAssigned { min: 3 }` — three chops of the *shipped* break would have
+completed it. The obvious fix, qualifying that goal with `origin: "user"`, was
+wrong: pads 1 and 2 hold curated chops from lessons 2–4, so it would have forced
+the learner to destroy earlier work, breaking the rule that every lesson is a
+piece to add and never one to undo. The capstone now carries **both** — three
+pads for a kit, and at least one of them cut from the learner's own audio — which
+is additive and says exactly what the intro says. The contract's near-miss had to
+learn the same distinction: emptying the last assigned pad no longer breaks an
+origin-qualified goal unless the pad it empties is one of the learner's.
+
+**"Fit the Break" told the user 16 steps and accepted 8.** Fitting two bars into
+half a bar is quadruple speed and sounds like nothing; the goal now asks for the
+16 the copy names.
+
+**The break's duration is no longer transcribed by hand.** It was copied from the
+generator's console output into `CURATED_SAMPLE_SOURCE`, and the lesson parser
+validates every region window against it — so a regenerated break of a different
+length would have left the shipped lessons pointing into audio that was no longer
+there, *while the parser went on passing*, because it would have been checking
+the stale number itself. The generator now emits `src/model/curatedBreak.json`
+alongside the audio and the constant imports it, which removes the failure rather
+than testing around it.
+
+**A lesson file that is never registered is now a failing test.** The AC is
+"JSON and one registration line"; mechanically it is an import and an array
+entry, both in `src/lessons/index.ts`. The failure that invites is the quiet one
+— a lesson authored, reviewed and shipped but reachable by nobody — so the
+contract now sweeps the directory and asserts every JSON file is in an arc.
+
+## A cost this slice accepts knowingly
+
+Retiring the old shipped perc source costs a returning user the *re-editability*
+of any chop they cut from it. Review flagged this against story 66, "my existing
+saved project… so that upgrading costs me nothing", and it is worth answering
+rather than waving away.
+
+Keeping the entry in the bank would be worse, not better. A shipped source's
+bytes are never written to the sample store — `sourceBlob` fetches them from the
+one curated URL — so a retained `curated-warehouse-perc` would look re-editable
+and then fail with "could not be opened for editing" when opened. The pad's
+*slice* is what makes sound, and that survives untouched: the pad keeps its name,
+its tune, its fit, its programming, and its sound. What it loses is the ability
+to re-chop a quarter-second one-shot, and it says so plainly in the state the
+model already carries for exactly this. Verified on a real v9 document in the
+browser.
 
 ## Testing decisions
 

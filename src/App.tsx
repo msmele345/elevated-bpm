@@ -1115,6 +1115,18 @@ export default function App() {
     [selectMidiDevice],
   )
 
+  /**
+   * Reached from the unmount cleanup below, which must not depend on it.
+   * `runMidi` is stable today, but a dependency added to any of the four
+   * handlers would make it change identity — and a cleanup that depended on it
+   * would then close the ports mid-session with nothing to reopen them, taking
+   * MIDI out silently. The ref makes "only on unmount" true by construction.
+   */
+  const runMidiRef = useRef(runMidi)
+  useEffect(() => {
+    runMidiRef.current = runMidi
+  }, [runMidi])
+
   // Close the ports when the deck goes away, releasing anything still held.
   // Deliberately not tied to blur or visibility the way computer keys are: a
   // physical key stays down when the tab loses focus, and its note-off is
@@ -1122,11 +1134,11 @@ export default function App() {
   useEffect(
     () => () => {
       const held = selectedDeviceRef.current
-      if (held !== null) runMidi(midiRouterRef.current.releaseDevice(held))
+      if (held !== null) runMidiRef.current(midiRouterRef.current.releaseDevice(held))
       midiSessionRef.current?.close()
       midiSessionRef.current = null
     },
-    [runMidi],
+    [],
   )
 
   // Which lesson these act on is read back out of the document inside the

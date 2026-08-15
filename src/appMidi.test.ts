@@ -392,6 +392,32 @@ describe('devices', () => {
     await waitFor(() => expect(midiStatus().textContent).toMatch(/No MIDI controllers found/))
   })
 
+  it('keeps listening across re-renders and lets the ports go only on unmount', async () => {
+    // The ports must outlive every edit the user makes. Closing them early
+    // would take MIDI out with nothing to reopen it, and nothing on screen
+    // would say so — the deck would simply stop answering the controller.
+    const view = render(createElement(App))
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Connect MIDI controller' }))
+    await screen.findByLabelText('MIDI device')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 5' }))
+    expect(midi.control.closed).toBe(0)
+    noteOn('keys', 60)
+    expect(engineSpies.attackStabNote).toHaveBeenCalled()
+
+    view.unmount()
+
+    expect(midi.control.closed).toBe(1)
+    // …and a note still held when the deck went away is let go of.
+    expect(engineSpies.releaseStabNote).toHaveBeenCalledWith('midi:keys:60')
+  })
+
   it('says so when access is refused, and keeps the deck working', async () => {
     midi.control.refusal = new Error('NotAllowedError')
     await renderDeck()

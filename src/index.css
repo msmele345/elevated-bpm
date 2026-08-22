@@ -284,6 +284,13 @@ body::before {
   position: relative;
   z-index: 2;
   width: min(920px, 100%);
+  /* The deck centres itself rather than trusting the page grid to do it.
+     `body` centres by `place-items`, which sizes #root to its max-content —
+     so one unwrapped line of prose anywhere inside the deck (the sampler's
+     intake hint measures ~1486px on one line) widens #root past 920px, and
+     the centring has nothing left to centre with. Owning the margins keeps
+     the deck on the middle of the screen whatever a panel's copy measures. */
+  margin-inline: auto;
   /* one rhythm for the whole stack: header, strips, and instrument panels
      all sit the same distance apart instead of carrying private margins */
   display: flex;
@@ -297,11 +304,17 @@ body::before {
 .deck::after {
   content: '';
   position: absolute;
-  inset: 6% -8% -12%;
+  /* Sideways the spill stops at the deck's own edge. It used to reach 8%
+     wider, which was invisible — the gradient is already transparent well
+     inside that — but scrollable: once the deck is centred, a box hanging
+     past its right edge puts a horizontal scrollbar on a page that fits.
+     The radius carries the 8% instead (58% of a 116%-wide box = 67% of
+     this one), so the light lands in exactly the same place. */
+  inset: 6% 0 -12%;
   z-index: -1;
   pointer-events: none;
   background: radial-gradient(
-    58% 56% at 50% 60%,
+    67% 56% at 50% 60%,
     color-mix(in srgb, var(--quad-0) 24%, transparent) 0%,
     transparent 72%
   );

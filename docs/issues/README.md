@@ -135,3 +135,5 @@ and 2 had no persistence at all until Phase 3):
 
 Both are called out in their own files so they are not mistaken for bugs, and
 both are closed by EB2-06. Do not ship v2.0 with either still open.
+
+## Note on EB2-10 - the work is done on a branch feat/10-web-midi-input. This will not be merged to develop/main until a real midi device can be connected and the feature can be re-tested with the phyical device. 

@@ -213,8 +213,16 @@ h1 {
 
 .stack {
   display: grid;
+  /* grid items default to min-width: auto, so a wide card (the 16-step
+     sequence) would push the column past its track and slide under the
+     support rail. Let the track win and make the card scroll instead. */
+  min-width: 0;
   gap: 1rem;
   align-content: start;
+}
+
+.stack > * {
+  min-width: 0;
 }
 
 .card {

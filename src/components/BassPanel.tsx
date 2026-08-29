@@ -65,8 +65,8 @@ function BassInstrument({
         ))}
       </div>
       <p className="panel-hint">
-        Tap a bass step to place a note · ↑↓ transposes (shift for octaves) · ←→ sets its
-        length · knobs drag or take arrow keys
+        Tap an empty bass step to place and focus a note · ↑↓ transposes (shift for octaves) ·
+        ←→ sets its length · tap a lit note to clear it
       </p>
     </section>
   )

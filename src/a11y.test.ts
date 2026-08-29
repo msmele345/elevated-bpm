@@ -98,6 +98,11 @@ async function renderDeck(): Promise<HTMLElement> {
     expect((screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled).toBe(
       false,
     ),
+    // Hydration reads IndexedDB and runs beside the other DOM suites in CI.
+    // Keep this synchronization contract aligned with renderReadyDeck(): the
+    // default one-second Testing Library budget is shorter than that work can
+    // take on a constrained runner.
+    { timeout: 5_000 },
   )
   return screen.getByRole('main')
 }

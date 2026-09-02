@@ -1,4 +1,4 @@
-import { memo, type KeyboardEvent } from 'react'
+import { memo, type KeyboardEvent, type PointerEvent } from 'react'
 import { midiToNoteName } from '../model/note'
 import type { NoteLane, NoteLaneId } from '../model/types'
 
@@ -12,6 +12,10 @@ interface NoteRowProps {
 }
 
 const OCTAVE = 12
+
+function focusNoteStep(event: PointerEvent<HTMLButtonElement>) {
+  event.currentTarget.focus()
+}
 
 /**
  * A melodic note lane: 16 steps that carry a pitch and a length instead of an
@@ -69,6 +73,7 @@ function NoteRowLane({
                 ? `${lane.label} step ${i + 1}, ${midiToNoteName(step.pitch)}, ${step.length} step${step.length === 1 ? '' : 's'} long`
                 : `${lane.label} step ${i + 1}, empty`
             }
+            onPointerDown={focusNoteStep}
             onClick={() => onToggleStep(lane.id, i)}
             onKeyDown={(event) => handleKeyDown(event, i)}
           >

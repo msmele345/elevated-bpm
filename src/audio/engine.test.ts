@@ -7,6 +7,8 @@ import {
   createSamplerSettings,
 } from '../model/sampler'
 import { createInitialPattern, cycleStep } from '../model/pattern'
+import { midiToFrequency, resizeNoteStep, toggleNoteStep } from '../model/note'
+import { ACCENT_GAIN, UNACCENTED_GAIN } from './stepResolution'
 
 const tone = vi.hoisted(() => {
   let resolveLoaded!: () => void
@@ -26,6 +28,8 @@ const tone = vi.hoisted(() => {
     loadedPromise,
     resolveLoaded: () => resolveLoaded(),
     repeatCallbacks: [] as Array<(time: number) => void>,
+    synths: [] as Array<{ triggerAttackRelease: ReturnType<typeof vi.fn> }>,
+    polySynths: [] as Array<{ triggerAttackRelease: ReturnType<typeof vi.fn> }>,
   }
 })
 
@@ -40,7 +44,10 @@ vi.mock('tone', () => {
   }
 
   class Node {
-    connect() {
+    /** Where this node was last connected, so a test can find a player's gain. */
+    destination: unknown = null
+    connect(destination?: unknown) {
+      this.destination = destination
       return this
     }
     toDestination() {
@@ -93,6 +100,10 @@ vi.mock('tone', () => {
   class Synth extends Node {
     envelope = { decay: 0 }
     triggerAttackRelease = vi.fn()
+    constructor() {
+      super()
+      tone.synths.push(this)
+    }
   }
 
   class PolySynth extends Node {
@@ -100,6 +111,10 @@ vi.mock('tone', () => {
     triggerRelease = vi.fn()
     triggerAttackRelease = vi.fn()
     dispose = vi.fn()
+    constructor() {
+      super()
+      tone.polySynths.push(this)
+    }
   }
 
   class Analyser extends Node {
@@ -487,5 +502,47 @@ describe('auditioning a region', () => {
     engine.auditionRegion({ sourceId: 'some-other-source', start: 0, duration: 1 })
 
     expect(player.start.mock.calls.length).toBe(startsBefore)
+  })
+})
+
+describe('the sequencer step callback', () => {
+  it('applies one resolved 16th as given: chokes, drum starts at their gains, bass and stab notes', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    // Step 3 (index 2): an accented kick, a closed hat choking a same-step open
+    // hat, a two-step bass note and a stab — every kind of sound in one 16th.
+    let pattern = cycleStep(cycleStep(createInitialPattern(), 'kick', 2), 'kick', 2)
+    pattern = cycleStep(pattern, 'closedHat', 2)
+    pattern = cycleStep(pattern, 'openHat', 2)
+    pattern = resizeNoteStep(toggleNoteStep(pattern, 'bass', 2), 'bass', 2, 1)
+    pattern = toggleNoteStep(pattern, 'stab', 2)
+    engine.setPattern(pattern)
+    engine.setMixer({})
+    await engine.play()
+
+    const [kick, , closedHat, openHat] = tone.players
+    const gainOf = (player: (typeof tone.players)[number]) =>
+      (player as unknown as { destination: { gain: { setValueAtTime: ReturnType<typeof vi.fn> } } })
+        .destination.gain
+    const bass = tone.synths[0]
+    const stab = tone.polySynths.at(-1)!
+    for (const mock of [kick.start, closedHat.start, openHat.start, openHat.stop]) mock.mockClear()
+    gainOf(kick).setValueAtTime.mockClear()
+    bass.triggerAttackRelease.mockClear()
+    stab.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(2 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](50)
+
+    const step = 15 / 130
+    expect(openHat.stop.mock.calls).toEqual([[50]])
+    expect(openHat.start).not.toHaveBeenCalled()
+    expect(kick.start.mock.calls).toEqual([[50]])
+    expect(gainOf(kick).setValueAtTime.mock.calls).toEqual([[ACCENT_GAIN, 50]])
+    expect(closedHat.start.mock.calls).toEqual([[50]])
+    expect(gainOf(closedHat).setValueAtTime).toHaveBeenLastCalledWith(UNACCENTED_GAIN, 50)
+    expect(bass.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(36), 2 * step, 50]])
+    expect(stab.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(60), step, 50, 0.72]])
+    engine.stop()
   })
 })

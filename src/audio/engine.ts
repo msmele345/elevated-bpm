@@ -13,7 +13,7 @@ import {
   type MasterSettings,
 } from '../model/master'
 import { laneIsAudible, type Mixer } from '../model/mixer'
-import { midiToFrequency, noteEventsAtStep } from '../model/note'
+import { midiToFrequency } from '../model/note'
 import { SCOPE_SPEC } from '../model/scope'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -42,7 +42,7 @@ import {
   type RenderableAudio,
   type Slice,
 } from '../model/slice'
-import { voiceStep } from './hits'
+import { resolveStep } from './stepResolution'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
 import { decodeForAnalysis, decodeForRender } from './sampleDecoder'
@@ -751,9 +751,13 @@ export async function play(): Promise<void> {
       const ticks = transport.getTicksAtTime(time)
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
       if (!currentPattern || !voices) return
-      // Resolve the 16th through the mixer and choke groups: muted/soloed
-      // lanes are filtered out and a firing closed hat cuts the open hat.
-      const { starts, chokes } = voiceStep(currentPattern, stepIndex, currentMixer)
+      // Step resolution decides everything that sounds on this 16th; the
+      // callback only applies it to the voices.
+      const { starts, chokes, notes } = resolveStep({
+        pattern: currentPattern,
+        mixer: currentMixer,
+        stepIndex,
+      })
       // Cut ringing choked voices first so a same-time restart isn't clipped.
       for (const laneId of chokes) {
         voices[laneId].player.stop(time)
@@ -773,7 +777,7 @@ export async function play(): Promise<void> {
       // Bass uses its monophonic voice. Programmed stabs use a separate
       // polyphonic pool from live input so same-pitch releases cannot steal a
       // held live key.
-      for (const note of noteEventsAtStep(currentPattern, stepIndex)) {
+      for (const note of notes) {
         const duration = note.lengthSteps * secondsPer16th()
         if (note.laneId === 'bass' && bass) {
           bass.synth.triggerAttackRelease(note.frequency, duration, time)

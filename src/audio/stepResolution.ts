@@ -31,7 +31,7 @@ const CHOKES: Partial<Record<LaneId, LaneId>> = {
 }
 
 /** What the resolver reads to decide one 16th. An object, so it can grow. */
-export interface StepInput {
+export interface StepResolutionInput {
   pattern: Pattern
   mixer: Mixer
   stepIndex: number
@@ -55,7 +55,7 @@ export interface StepResolution {
  * open hat behaves like real 909 hardware under the closed hat. Note lanes do
  * not consult the mixer yet.
  */
-export function resolveStep({ pattern, mixer, stepIndex }: StepInput): StepResolution {
+export function resolveStep({ pattern, mixer, stepIndex }: StepResolutionInput): StepResolution {
   const hits = hitsAtStep(pattern, stepIndex, mixer)
   const firing = new Set(hits.map((hit) => hit.laneId))
   const chokes: LaneId[] = []

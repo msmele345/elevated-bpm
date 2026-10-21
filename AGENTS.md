@@ -14,12 +14,13 @@ See @CONCEPT.md
 See @plans/elevated-bpm-v1.md
 
 ## Agent Orientation
-- Source of truth order: `plans/elevated-bpm-v1.md` for current phase scope, `CONCEPT.md` for project context, `docs/PRD.md` for product intent.
+- Source of truth order: `plans/elevated-bpm-v1.md` for current phase scope, `CONCEPT.md` for project context, `docs/PRD.md` for product intent, `GLOSSARY.md` for what each domain term means.
 - Keep phase work scoped to the named acceptance criteria. Do not implement later-phase matrix cells or UI behavior unless the AC explicitly requires it.
 
 ## Cadences to follow:
 1. TDD on any new feature code or bug fixes. Use Test Driven Development whenever possible. See the /tdd skill.
 2. Red green refactor. Reference the /tdd skill and follow it
+3. Keep `GLOSSARY.md` current. Read it before naming a type, a UI label, or a term in a spec or issue, and use the word it gives. When your change introduces, renames, or redefines a domain term, update `GLOSSARY.md` in the same change, following the maintenance rules at the top of that file. When a `[v3 spec]` (or later) term ships, drop its tag and correct the definition to match what was built. This is the "project glossary" the `/to-spec` skill tells you to use, and it is the file that the `domain-modeling`, `grill-with-docs` and `tdd` skills in `.claude/skills/` call `CONTEXT.md`. Read and update `GLOSSARY.md` there too; don't create a separate `CONTEXT.md`.
 
 # Git Strategy and Instructions
 - Create feature branches off of develop for each new feature or task. Name branches using the format `feat/short-description` (e.g., `feat/spotify-integration`).

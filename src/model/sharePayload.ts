@@ -21,7 +21,7 @@ import {
   type SamplerSettings,
 } from './sampler'
 import { STEP_COUNT, type Pattern } from './types'
-import { MAX_BPM, MIN_BPM } from './transport'
+import { MAX_BPM, MAX_SWING, MIN_BPM, MIN_SWING } from './transport'
 
 /**
  * What a shared beat *is*, independent of how it travels.
@@ -322,6 +322,9 @@ export function isSharedProject(value: unknown): value is ProjectState {
     isFiniteNumber(value.transport.bpm) &&
     value.transport.bpm >= MIN_BPM &&
     value.transport.bpm <= MAX_BPM &&
+    isFiniteNumber(value.transport.swing) &&
+    value.transport.swing >= MIN_SWING &&
+    value.transport.swing <= MAX_SWING &&
     isInstrumentSettings(value.instrumentSettings) &&
     isSources(value.sources) &&
     isRecord(value.lessonProgress) &&

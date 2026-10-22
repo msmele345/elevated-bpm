@@ -10,6 +10,7 @@ import {
 } from '../model/note'
 import { createInitialPattern, cycleStep } from '../model/pattern'
 import type { Mixer } from '../model/mixer'
+import { secondsPerStep, type TransportSettings } from '../model/transport'
 import type { Pattern } from '../model/types'
 import { ACCENT_GAIN, UNACCENTED_GAIN, resolveStep } from './stepResolution'
 
@@ -24,9 +25,17 @@ function program(
   }, pattern)
 }
 
+/** A straight transport at the deck's default tempo. */
+const STRAIGHT: TransportSettings = { bpm: 130, swing: 0.5 }
+
 /** Resolve one 16th the way the transport callback does. */
-function resolveAt(pattern: Pattern, stepIndex: number, mixer: Mixer = {}) {
-  return resolveStep({ pattern, mixer, stepIndex })
+function resolveAt(
+  pattern: Pattern,
+  stepIndex: number,
+  mixer: Mixer = {},
+  transport: TransportSettings = STRAIGHT,
+) {
+  return resolveStep({ pattern, mixer, transport, stepIndex })
 }
 
 /** Just the drum/pad starts of one resolved 16th. */
@@ -178,7 +187,7 @@ describe('resolveStep — note events', () => {
       8,
     )
 
-    expect(resolveStep({ pattern: bassAndStab, mixer: {}, stepIndex: 8 }).notes).toEqual([
+    expect(resolveStep({ pattern: bassAndStab, mixer: {}, transport: STRAIGHT, stepIndex: 8 }).notes).toEqual([
       {
         laneId: 'bass',
         midi: DEFAULT_PITCH,
@@ -208,13 +217,14 @@ describe('resolveStep — one 16th, every sound', () => {
     pattern = resizeNoteStep(toggleNoteStep(pattern, 'bass', 4), 'bass', 4, 1)
     pattern = transposeNoteStep(toggleNoteStep(pattern, 'stab', 4), 'stab', 4, 4)
 
-    expect(resolveStep({ pattern, mixer: {}, stepIndex: 4 })).toEqual({
+    expect(resolveStep({ pattern, mixer: {}, transport: STRAIGHT, stepIndex: 4 })).toEqual({
       starts: [
         { laneId: 'kick', gain: ACCENT_GAIN },
         { laneId: 'closedHat', gain: UNACCENTED_GAIN },
         { laneId: 'perc', gain: UNACCENTED_GAIN },
       ],
       chokes: ['openHat'],
+      swingOffset: 0,
       notes: [
         {
           laneId: 'bass',
@@ -233,9 +243,10 @@ describe('resolveStep — one 16th, every sound', () => {
   })
 
   it('resolves a silent step to an empty result', () => {
-    expect(resolveStep({ pattern: createInitialPattern(), mixer: {}, stepIndex: 7 })).toEqual({
+    expect(resolveStep({ pattern: createInitialPattern(), mixer: {}, transport: STRAIGHT, stepIndex: 7 })).toEqual({
       starts: [],
       chokes: [],
+      swingOffset: 0,
       notes: [],
     })
   })
@@ -249,9 +260,97 @@ describe('resolveStep — one 16th, every sound', () => {
     const result = resolveStep({
       pattern,
       mixer: { kick: { muted: false, soloed: true } },
+      transport: STRAIGHT,
       stepIndex: 0,
     })
     expect(result.starts.map((hit) => hit.laneId)).toEqual(['kick'])
     expect(result.notes.map((note) => note.laneId)).toEqual(['bass', 'stab'])
+  })
+})
+
+describe('resolveStep — swing', () => {
+  const step = secondsPerStep(130)
+
+  it('leaves every 16th on the grid when straight', () => {
+    for (let stepIndex = 0; stepIndex < 16; stepIndex += 1) {
+      expect(resolveAt(createInitialPattern(), stepIndex).swingOffset).toBe(0)
+    }
+  })
+
+  it('delays only the odd 16ths, by (swing − 0.5) × 2 × one step, at 66% and 75%', () => {
+    for (const swing of [0.66, 0.75]) {
+      for (let stepIndex = 0; stepIndex < 16; stepIndex += 1) {
+        const { swingOffset } = resolveAt(createInitialPattern(), stepIndex, {}, { bpm: 130, swing })
+        if (stepIndex % 2 === 0) expect(swingOffset).toBe(0)
+        else expect(swingOffset).toBeCloseTo((swing - 0.5) * 2 * step, 12)
+      }
+    }
+    // 66% is (almost) the triplet position, 75% the dotted one.
+    expect(resolveAt(createInitialPattern(), 1, {}, { bpm: 130, swing: 0.66 }).swingOffset).toBeCloseTo(
+      0.32 * step,
+      12,
+    )
+    expect(resolveAt(createInitialPattern(), 1, {}, { bpm: 130, swing: 0.75 }).swingOffset).toBeCloseTo(
+      0.5 * step,
+      12,
+    )
+  })
+
+  it('never shifts the step index: each 16th sounds its own programming at 50, 66 and 75%', () => {
+    // A different sound on each of three neighbouring 16ths, so a step that
+    // resolved as its neighbour would be heard as the wrong instrument.
+    let pattern = program(createInitialPattern(), [
+      ['kick', 1],
+      ['closedHat', 2],
+      ['snare', 3],
+      ['pad2', 15],
+      ['perc', 0],
+    ])
+    pattern = toggleNoteStep(toggleNoteStep(pattern, 'bass', 1), 'stab', 3)
+
+    for (const swing of [0.5, 0.66, 0.75]) {
+      const transport = { bpm: 130, swing }
+      expect(resolveAt(pattern, 1, {}, transport).starts.map((hit) => hit.laneId)).toEqual(['kick'])
+      expect(resolveAt(pattern, 1, {}, transport).notes.map((note) => note.laneId)).toEqual(['bass'])
+      expect(resolveAt(pattern, 2, {}, transport).starts.map((hit) => hit.laneId)).toEqual([
+        'closedHat',
+      ])
+      expect(resolveAt(pattern, 2, {}, transport).notes).toEqual([])
+      expect(resolveAt(pattern, 3, {}, transport).starts.map((hit) => hit.laneId)).toEqual(['snare'])
+      expect(resolveAt(pattern, 3, {}, transport).notes.map((note) => note.laneId)).toEqual(['stab'])
+      // The last 16th of the bar is odd too, and must not wrap into step 1.
+      expect(resolveAt(pattern, 15, {}, transport).starts.map((hit) => hit.laneId)).toEqual(['pad2'])
+      expect(resolveAt(pattern, 0, {}, transport).starts.map((hit) => hit.laneId)).toEqual(['perc'])
+    }
+  })
+
+  it('swings a whole odd 16th as one — its drums, pads, chokes, bass and stab share the offset', () => {
+    let pattern = program(createInitialPattern(), [
+      ['closedHat', 5, true],
+      ['openHat', 5],
+      ['pad1', 5],
+    ])
+    pattern = toggleNoteStep(toggleNoteStep(pattern, 'bass', 5), 'stab', 5)
+
+    const swung = resolveAt(pattern, 5, {}, { bpm: 130, swing: 0.75 })
+    const straight = resolveAt(pattern, 5)
+
+    // Swing changes when the 16th lands, never what is on it.
+    expect({ ...swung, swingOffset: 0 }).toEqual(straight)
+    expect(swung.swingOffset).toBeCloseTo(0.5 * step, 12)
+  })
+
+  it('keeps note lengths in whole steps, measured from the delayed start', () => {
+    const pattern = resizeNoteStep(toggleNoteStep(createInitialPattern(), 'bass', 3), 'bass', 3, 2)
+
+    const [note] = resolveAt(pattern, 3, {}, { bpm: 130, swing: 0.75 }).notes
+    expect(note.lengthSteps).toBe(3)
+  })
+
+  it('reads the tempo it is given, so the offset follows BPM', () => {
+    expect(resolveAt(createInitialPattern(), 7, {}, { bpm: 90, swing: 0.75 }).swingOffset).toBeCloseTo(
+      0.5 * secondsPerStep(90),
+      12,
+    )
   })
 })

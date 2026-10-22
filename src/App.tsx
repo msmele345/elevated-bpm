@@ -58,6 +58,7 @@ import {
   setSamplerPadFit,
   setSamplerParamValue,
   setTransportBpm,
+  setTransportSwing,
   toggleActivePatternNoteStep,
   toggleLaneMute,
   toggleLaneSolo,
@@ -86,6 +87,7 @@ import {
 import { sliceKey, type Slice } from './model/slice'
 import type { AnalysisAudio } from './audio/engine'
 import { clampRegionToSource } from './model/region'
+import { SWING_PARAM, swingFromPercent, type TransportParamId } from './model/transport'
 import { RegionEditor } from './components/RegionEditor'
 import type { Lesson } from './model/lesson'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
@@ -258,6 +260,7 @@ export default function App() {
   const fxSettings = project.instrumentSettings.fx
   const samplerSettings = project.instrumentSettings.sampler
   const bpm = project.transport.bpm
+  const swing = project.transport.swing
   const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
   // Mirrored so the sampler's handlers can read the current sources and pads
   // without closing over them — a fresh closure is a changed prop, and these
@@ -471,6 +474,12 @@ export default function App() {
   useEffect(() => {
     engine.setFxSettings(fxSettings)
   }, [fxSettings])
+
+  // And swing: the step callback reads it on every 16th, so a dragged knob
+  // changes the feel on the very next off-beat with no restart.
+  useEffect(() => {
+    engine.setSwing(swing)
+  }, [swing])
 
   // Pad regions and Tune values are read live at each scheduled or performed
   // hit, so edits take effect without rebuilding or restarting the transport.
@@ -949,6 +958,13 @@ export default function App() {
     engine.setBpm(next)
   }, [])
 
+  // The knob reads in percent; the Transport stores the fraction. Motion is
+  // observed in the knob's own units, like every other knob's.
+  const handleSwingChange = useCallback((id: TransportParamId, percent: number) => {
+    setProject((p) => setTransportSwing(p, swingFromPercent(percent)))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), percent, isPlayingRef.current))
+  }, [])
+
   const handleTogglePlay = useCallback(async () => {
     if (isPlayingRef.current) {
       stopTransport()
@@ -1294,10 +1310,13 @@ export default function App() {
         <TransportBar
           isPlaying={isPlaying}
           bpm={bpm}
+          swing={swing}
           spotlitTempo={spotlitTarget('transport:tempo')}
+          spotlitSwing={spotlitParams.includes(SWING_PARAM.id)}
           heldForRecording={isTransportHeld(recordingState)}
           onTogglePlay={handleTogglePlay}
           onBpmChange={handleBpmChange}
+          onSwingChange={handleSwingChange}
         />
         <div className="master-out">
           <SpectrumScope />

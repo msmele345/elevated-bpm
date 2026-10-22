@@ -26,7 +26,13 @@ import {
   type SamplerSettings,
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
-import { clampBpm, DEFAULT_BPM, secondsPerStep } from '../model/transport'
+import {
+  clampBpm,
+  clampSwing,
+  DEFAULT_BPM,
+  DEFAULT_SWING,
+  secondsPerStep,
+} from '../model/transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -63,6 +69,11 @@ export { DEFAULT_BPM, MAX_BPM, MIN_BPM } from '../model/transport'
 export const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
 let bpm = DEFAULT_BPM
+/**
+ * The Deck's swing, applied by the step callback itself. Tone's own transport
+ * swing is never touched and stays at 0 — see `swingOffsetSeconds`.
+ */
+let currentSwing = DEFAULT_SWING
 let currentPattern: Pattern | null = null
 let currentMixer: Mixer = {}
 let currentSamplerSettings: SamplerSettings = createSamplerSettings()
@@ -437,6 +448,15 @@ export function setFxSettings(next: FxSettings): void {
   fx.reverb.wet.rampTo(bus.reverbWet, 0.02)
 }
 
+/**
+ * Point the scheduler at the latest swing. Cheap; call on every edit — the step
+ * callback reads it on each 16th, so a dragged knob changes the feel on the
+ * very next off-beat with no restart.
+ */
+export function setSwing(next: number): void {
+  currentSwing = clampSwing(next)
+}
+
 export function setBpm(next: number): void {
   bpm = clampBpm(next)
   // Ramp instead of jumping so mid-playback tempo changes are click-free;
@@ -752,25 +772,32 @@ export async function play(): Promise<void> {
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
       if (!currentPattern || !voices) return
       // Step resolution decides everything that sounds on this 16th; the
-      // callback only applies it to the voices.
-      const { starts, chokes, notes } = resolveStep({
+      // callback only applies it to the voices. The tempo is the transport's
+      // live value — the one note lengths are measured in — so a swing offset
+      // and a note length agree even mid-ramp.
+      const { starts, chokes, notes, swingOffset } = resolveStep({
         pattern: currentPattern,
         mixer: currentMixer,
+        transport: { bpm: transport.bpm.value, swing: currentSwing },
         stepIndex,
       })
+      // Every sequenced sound on this 16th lands at the same, possibly swung,
+      // moment. The step index above came from the straight grid, so swing
+      // moves *when* a step sounds and never *which* step it is.
+      const at = time + swingOffset
       // Cut ringing choked voices first so a same-time restart isn't clipped.
       for (const laneId of chokes) {
-        voices[laneId].player.stop(time)
+        voices[laneId].player.stop(at)
       }
       // All voices share the transport, so lanes stay independent and
       // sample-locked; each fires at its own accent velocity.
       for (const hit of starts) {
         if (isPadLaneId(hit.laneId)) {
-          triggerPlayablePad(hit.laneId, hit.gain, time, Tone.immediate(), 'sequenced')
+          triggerPlayablePad(hit.laneId, hit.gain, at, Tone.immediate(), 'sequenced')
         } else {
           const voice = voices[hit.laneId]
-          voice.gain.gain.setValueAtTime(hit.gain, time)
-          voice.player.start(time)
+          voice.gain.gain.setValueAtTime(hit.gain, at)
+          voice.player.start(at)
         }
       }
       // Every note lane resolves from this same scheduled 16th as the drums.
@@ -780,11 +807,11 @@ export async function play(): Promise<void> {
       for (const note of notes) {
         const duration = note.lengthSteps * secondsPer16th()
         if (note.laneId === 'bass' && bass) {
-          bass.synth.triggerAttackRelease(note.frequency, duration, time)
+          bass.synth.triggerAttackRelease(note.frequency, duration, at)
         }
         if (note.laneId === 'stab' && stab) {
-          stab.triggerSequenced(note.frequency, duration, time, 0.72)
-          stabSoundingNotes.schedule(note.midi, time, time + duration)
+          stab.triggerSequenced(note.frequency, duration, at, 0.72)
+          stabSoundingNotes.schedule(note.midi, at, at + duration)
         }
       }
     }, '16n')

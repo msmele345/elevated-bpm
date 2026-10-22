@@ -1,24 +1,35 @@
 import { memo } from 'react'
 import { MAX_BPM, MIN_BPM } from '../audio/engine'
+import { SWING_PARAM, swingToPercent, type TransportParamId } from '../model/transport'
+import { Knob } from './Knob'
 
 interface TransportBarProps {
   isPlaying: boolean
   bpm: number
+  /** The Transport's swing, as the stored 0.50–0.75 fraction. */
+  swing: number
   /** The active lesson is pointing at the tempo fader. */
   spotlitTempo?: boolean
+  /** The active lesson is pointing at the Swing knob. */
+  spotlitSwing?: boolean
   /** The loop is not offered while the microphone is open. */
   heldForRecording?: boolean
   onTogglePlay: () => void
   onBpmChange: (bpm: number) => void
+  /** Called with the knob's own reading, in percent — the Transport stores the fraction. */
+  onSwingChange: (id: TransportParamId, percent: number) => void
 }
 
 function Transport({
   isPlaying,
   bpm,
+  swing,
   spotlitTempo = false,
+  spotlitSwing = false,
   heldForRecording = false,
   onTogglePlay,
   onBpmChange,
+  onSwingChange,
 }: TransportBarProps) {
   return (
     <div className="transport">
@@ -52,6 +63,13 @@ function Transport({
         <span className="transport-bpm-value">{bpm}</span>
         <span className="transport-bpm-unit">BPM</span>
       </div>
+      {/* Swing sits beside tempo: the two together are the groove's clock. */}
+      <Knob
+        spec={SWING_PARAM}
+        value={swingToPercent(swing)}
+        spotlit={spotlitSwing}
+        onChange={onSwingChange}
+      />
     </div>
   )
 }

@@ -4,13 +4,19 @@ import {
   arcCompletion,
   arcEntries,
   detectLessonCompletion,
+  goalContextFor,
   isFinalArcLesson,
   lessonsAlreadyMet,
   nextUnfinishedLessonId,
 } from './arc'
 import { parseLesson, type Lesson } from './lesson'
 import { createInitialPattern, toggleStep } from './pattern'
-import type { LessonProgress } from './projectState'
+import {
+  createInitialProjectState,
+  setTransportBpm,
+  setTransportSwing,
+  type LessonProgress,
+} from './projectState'
 
 function lesson(id: string): Lesson {
   return parseLesson({
@@ -157,5 +163,14 @@ describe('detectLessonCompletion', () => {
       justCompleted: false,
       showFinale: false,
     })
+  })
+})
+
+describe('goalContextFor', () => {
+  it('hands goals the transport as the document holds it — tempo and swing', () => {
+    const state = setTransportSwing(setTransportBpm(createInitialProjectState(), 126), 0.62)
+    const context = goalContextFor(state)
+    expect(context.bpm).toBe(126)
+    expect(context.swing).toBe(0.62)
   })
 })

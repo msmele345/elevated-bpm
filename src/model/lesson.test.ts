@@ -353,6 +353,37 @@ describe('isGoalMet — bpmInRange', () => {
   })
 })
 
+describe('isGoalMet — swingInRange', () => {
+  const lesson = parseLesson({
+    ...validLesson,
+    id: 'shuffle',
+    spotlight: ['knob:swing'],
+    goal: [{ type: 'swingInRange', min: 56, max: 66 }],
+  })
+  const pattern = createInitialPattern()
+
+  it('is met inside the range, inclusive of its ends', () => {
+    expect(isGoalMet(lesson, { pattern, swing: 0.6 })).toBe(true)
+    expect(isGoalMet(lesson, { pattern, swing: 0.56 })).toBe(true)
+    expect(isGoalMet(lesson, { pattern, swing: 0.66 })).toBe(true)
+  })
+
+  it('judges the whole percentage the Swing knob reads out, so what the learner sees is what counts', () => {
+    // 55.51% reads "56 %" and 66.49% reads "66 %": both inside.
+    expect(isGoalMet(lesson, { pattern, swing: 0.5551 })).toBe(true)
+    expect(isGoalMet(lesson, { pattern, swing: 0.6649 })).toBe(true)
+    // 55.4% reads "55 %" and 66.6% reads "67 %": both outside.
+    expect(isGoalMet(lesson, { pattern, swing: 0.554 })).toBe(false)
+    expect(isGoalMet(lesson, { pattern, swing: 0.666 })).toBe(false)
+  })
+
+  it('is not met outside it, or when no swing is supplied', () => {
+    expect(isGoalMet(lesson, { pattern, swing: 0.5 })).toBe(false)
+    expect(isGoalMet(lesson, { pattern, swing: 0.75 })).toBe(false)
+    expect(isGoalMet(lesson, { pattern })).toBe(false)
+  })
+})
+
 describe('isGoalMet — chordPlayed', () => {
   const lesson = parseLesson({
     ...validLesson,
@@ -402,6 +433,30 @@ describe('parseLesson — arc goal vocabulary', () => {
     expect(withGoal({ type: 'bpmInRange', min: 20, max: 140 })).toThrow(/bpm/i)
     expect(withGoal({ type: 'bpmInRange', min: 140, max: 260 })).toThrow(/bpm/i)
     expect(withGoal({ type: 'bpmInRange', min: 145, max: 138 })).toThrow(/bpm/i)
+  })
+
+  it('rejects a swing goal outside 50–75% or inverted', () => {
+    expect(withGoal({ type: 'swingInRange', min: 40, max: 60 })).toThrow(/swing/i)
+    expect(withGoal({ type: 'swingInRange', min: 60, max: 80 })).toThrow(/swing/i)
+    expect(withGoal({ type: 'swingInRange', min: 66, max: 56 })).toThrow(/swing/i)
+    // Percent, not the stored fraction: a lesson author writes what the knob reads.
+    expect(withGoal({ type: 'swingInRange', min: 0.56, max: 0.66 })).toThrow(/swing/i)
+    expect(withGoal({ type: 'swingInRange', min: '56', max: 66 })).toThrow(/swing/i)
+    expect(withGoal({ type: 'swingInRange', max: 66 })).toThrow(/swing/i)
+  })
+
+  it('accepts a swing goal anywhere on the knob, ends included', () => {
+    expect(parseLesson({ ...validLesson, goal: [{ type: 'swingInRange', min: 50, max: 75 }] }).goal).toEqual([
+      { type: 'swingInRange', min: 50, max: 75 },
+    ])
+    expect(parseLesson({ ...validLesson, goal: [{ type: 'swingInRange', min: 62, max: 62 }] }).goal).toEqual([
+      { type: 'swingInRange', min: 62, max: 62 },
+    ])
+  })
+
+  it('lets a lesson spotlight the Swing knob', () => {
+    const lesson = parseLesson({ ...validLesson, spotlight: ['knob:swing'] })
+    expect(spotlitParamIds(lesson)).toEqual(['swing'])
   })
 
   it('rejects a sweep for a knob the deck does not have', () => {

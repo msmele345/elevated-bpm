@@ -29,7 +29,10 @@ const tone = vi.hoisted(() => {
     resolveLoaded: () => resolveLoaded(),
     repeatCallbacks: [] as Array<(time: number) => void>,
     synths: [] as Array<{ triggerAttackRelease: ReturnType<typeof vi.fn> }>,
-    polySynths: [] as Array<{ triggerAttackRelease: ReturnType<typeof vi.fn> }>,
+    polySynths: [] as Array<{
+      triggerAttack: ReturnType<typeof vi.fn>
+      triggerAttackRelease: ReturnType<typeof vi.fn>
+    }>,
   }
 })
 
@@ -149,6 +152,8 @@ vi.mock('tone', () => {
   const transport = {
     PPQ: 192,
     bpm: new AudioParam(),
+    /** Tone's own transport swing, which the Deck must leave at 0. */
+    swing: 0,
     state: 'stopped',
     ticks: 0,
     scheduleRepeat: vi.fn((callback: (time: number) => void) => {
@@ -544,5 +549,133 @@ describe('the sequencer step callback', () => {
     expect(bass.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(36), 2 * step, 50]])
     expect(stab.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(60), step, 50, 0.72]])
     engine.stop()
+  })
+})
+
+describe('swing', () => {
+  /** The gain node a kit player fires through, where accent velocity is set. */
+  const gainOf = (player: (typeof tone.players)[number]) =>
+    (player as unknown as { destination: { gain: { setValueAtTime: ReturnType<typeof vi.fn> } } })
+      .destination.gain
+
+  it('lands every sequenced voice on an odd 16th late by the swing offset, with Tone’s swing left at 0', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    // Step 2 (index 1), an odd 16th: an accented kick, a closed hat choking
+    // the open hat, a pad, a bass note and a stab — every sequenced voice.
+    let pattern = cycleStep(cycleStep(createInitialPattern(), 'kick', 1), 'kick', 1)
+    pattern = cycleStep(pattern, 'closedHat', 1)
+    pattern = cycleStep(pattern, 'openHat', 1)
+    pattern = cycleStep(pattern, 'pad1', 1)
+    pattern = toggleNoteStep(toggleNoteStep(pattern, 'bass', 1), 'stab', 1)
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+    )
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
+    engine.setPattern(pattern)
+    engine.setMixer({})
+    engine.setSwing(0.75)
+    await engine.play()
+
+    const [kick, , closedHat, openHat, , pad1] = tone.players
+    const bass = tone.synths[0]
+    const stab = tone.polySynths.at(-1)!
+    for (const mock of [kick.start, closedHat.start, openHat.stop, pad1.start]) mock.mockClear()
+    gainOf(kick).setValueAtTime.mockClear()
+    bass.triggerAttackRelease.mockClear()
+    stab.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(1 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](50)
+
+    const step = 15 / 130
+    // 75% is dotted: the off-beat lands half a 16th late.
+    const late = 50 + 0.5 * step
+    expect(openHat.stop.mock.calls).toEqual([[late]])
+    expect(kick.start.mock.calls).toEqual([[late]])
+    expect(gainOf(kick).setValueAtTime.mock.calls).toEqual([[ACCENT_GAIN, late]])
+    expect(closedHat.start.mock.calls).toEqual([[late]])
+    expect(pad1.start.mock.calls).toEqual([[late]])
+    // Note lengths stay whole steps, measured from the delayed start.
+    expect(bass.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(36), step, late]])
+    expect(stab.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(60), step, late, 0.72]])
+    // The Deck swings; Tone's transport never does.
+    expect(Tone.getTransport().swing).toBe(0)
+    engine.stop()
+    engine.setSwing(0.5)
+  })
+
+  it('leaves an even 16th on the grid at any swing', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    let pattern = cycleStep(createInitialPattern(), 'kick', 4)
+    pattern = toggleNoteStep(pattern, 'bass', 4)
+    engine.setPattern(pattern)
+    engine.setMixer({})
+    engine.setSwing(0.75)
+    await engine.play()
+
+    const kick = tone.players[0]
+    const bass = tone.synths[0]
+    kick.start.mockClear()
+    bass.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(4 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](60)
+
+    expect(kick.start.mock.calls).toEqual([[60]])
+    expect(bass.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(36), 15 / 130, 60]])
+    engine.stop()
+    engine.setSwing(0.5)
+  })
+
+  it('reads swing live, so a knob moved mid-loop is heard on the next odd 16th', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    engine.setPattern(cycleStep(createInitialPattern(), 'kick', 3))
+    engine.setMixer({})
+    engine.setSwing(0.5)
+    await engine.play()
+
+    const kick = tone.players[0]
+    kick.start.mockClear()
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(3 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](70)
+    engine.setSwing(0.66)
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(19 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](80)
+
+    expect(kick.start.mock.calls[0]).toEqual([70])
+    expect(kick.start.mock.calls[1][0]).toBeCloseTo(80 + 0.32 * (15 / 130), 12)
+    engine.stop()
+    engine.setSwing(0.5)
+  })
+
+  it('never offsets live stab keys or pad hits', async () => {
+    const engine = await import('./engine')
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+    )
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
+    engine.setMixer({})
+    engine.setSwing(0.75)
+
+    const pad1 = tone.players[5]
+    const liveStab = tone.polySynths[0]
+    pad1.start.mockClear()
+    liveStab.triggerAttack.mockClear()
+
+    engine.attackPad('pointer:swing', 'pad1')
+    engine.attackStabNote('computer:KeyA', 60)
+    await flushPromises()
+
+    // Tone.immediate() in the mock is 10: live input sounds exactly then. (A
+    // live pad hit also replays the pad's still-pending sequenced hits after
+    // it, which is the pad voice's own rebuild — not part of this claim.)
+    expect(pad1.start.mock.calls[0]).toEqual([10])
+    expect(liveStab.triggerAttack.mock.calls).toEqual([[midiToFrequency(60), 10, 0.82]])
+    engine.releasePad('pointer:swing')
+    engine.releaseStabNote('computer:KeyA')
+    engine.setSwing(0.5)
   })
 })

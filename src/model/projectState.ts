@@ -45,7 +45,13 @@ import {
   type SamplerSettings,
 } from './sampler'
 import { sliceKey } from './slice'
-import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
+import {
+  clampBpm,
+  clampSwing,
+  DEFAULT_BPM,
+  DEFAULT_SWING,
+  type TransportSettings,
+} from './transport'
 import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 
 /**
@@ -60,8 +66,9 @@ import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 // the arc the user is on; v7 added the master-bus macros (filter, drive);
 // v8 added the shared FX bus and its per-instrument send levels; v9 added the
 // sampler's source metadata, pad lanes and pad settings; v10 makes the
-// curriculum multi-track — one lesson pointer per arc, plus the arc on screen.
-export const PROJECT_STATE_VERSION = 10
+// curriculum multi-track — one lesson pointer per arc, plus the arc on screen;
+// v11 adds swing to the transport.
+export const PROJECT_STATE_VERSION = 11
 
 /**
  * The arc a document that predates the multi-track curriculum was on.
@@ -122,7 +129,7 @@ export function createInitialProjectState(): ProjectState {
     version: PROJECT_STATE_VERSION,
     patterns: [pattern],
     activePatternId: pattern.id,
-    transport: { bpm: DEFAULT_BPM },
+    transport: { bpm: DEFAULT_BPM, swing: DEFAULT_SWING },
     instrumentSettings: {
       bass: DEFAULT_BASS_SETTINGS,
       master: DEFAULT_MASTER_SETTINGS,
@@ -403,6 +410,11 @@ export function setTransportBpm(state: ProjectState, bpm: number): ProjectState 
   return { ...state, transport: { ...state.transport, bpm: clampBpm(bpm) } }
 }
 
+/** Immutably set the transport swing, clamped to 50–75%. */
+export function setTransportSwing(state: ProjectState, swing: number): ProjectState {
+  return { ...state, transport: { ...state.transport, swing: clampSwing(swing) } }
+}
+
 const EMPTY_PROGRESS: LessonProgress = { completed: false, dismissed: false }
 
 /** Immutably merge partial progress for one lesson. */
@@ -519,7 +531,9 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
     case 8:
       return migrateProjectState(migrateV8ToV9(doc as ProjectStateV8))
     case 9:
-      return migrateV9ToV10(doc as ProjectStateV9)
+      return migrateProjectState(migrateV9ToV10(doc as ProjectStateV9))
+    case 10:
+      return migrateV10ToV11(doc as ProjectStateV10)
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:
@@ -533,10 +547,20 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
  */
 type SingleArcPointer = { activeLessonId: string | null }
 
+/** Every document before v11 kept a tempo and nothing else on the transport. */
+type TransportPreV11 = { bpm: number }
+
 type ProjectStateBase = Omit<
   ProjectState,
-  'version' | 'mixer' | 'instrumentSettings' | 'activeArcId' | 'activeLessonIds' | 'sources'
+  | 'version'
+  | 'transport'
+  | 'mixer'
+  | 'instrumentSettings'
+  | 'activeArcId'
+  | 'activeLessonIds'
+  | 'sources'
 > & {
+  transport: TransportPreV11
   instrumentSettings: Record<string, unknown>
 }
 
@@ -564,9 +588,9 @@ interface InstrumentSettingsPreV7 {
 /** Every version up to v9 carried one arc's worth of state, hence one pointer. */
 type SingleArcProjectState = Omit<
   ProjectState,
-  'version' | 'instrumentSettings' | 'sources' | 'activeArcId' | 'activeLessonIds'
+  'version' | 'transport' | 'instrumentSettings' | 'sources' | 'activeArcId' | 'activeLessonIds'
 > &
-  SingleArcPointer
+  SingleArcPointer & { transport: TransportPreV11 }
 
 /** v4 added the bass lane and synth patch, but no stab lane yet. */
 type ProjectStateV4 = Omit<SingleArcProjectState, 'activeLessonId'> & {
@@ -607,6 +631,12 @@ type ProjectStateV9 = SingleArcProjectState & {
   version: 9
   instrumentSettings: InstrumentSettings
   sources: SampleSource[]
+}
+
+/** v10 had the multi-track curriculum, but every 16th sat dead on the grid. */
+type ProjectStateV10 = Omit<ProjectState, 'version' | 'transport'> & {
+  version: 10
+  transport: TransportPreV11
 }
 
 function migrateV0ToV1(doc: object): ProjectStateV1 {
@@ -701,7 +731,7 @@ function migrateV8ToV9(doc: ProjectStateV8): ProjectStateV9 {
   }
 }
 
-function migrateV9ToV10(doc: ProjectStateV9): ProjectState {
+function migrateV9ToV10(doc: ProjectStateV9): ProjectStateV10 {
   const { activeLessonId, ...rest } = doc
   return {
     ...rest,
@@ -716,5 +746,15 @@ function migrateV9ToV10(doc: ProjectStateV9): ProjectState {
     // The curated source became a break in this slice. Only shipped sources are
     // ever retired — the user's own bank is theirs.
     sources: withShippedSources(doc.sources ?? []),
+  }
+}
+
+function migrateV10ToV11(doc: ProjectStateV10): ProjectState {
+  return {
+    ...doc,
+    version: 11,
+    // Straight, because that is what every v10 beat played: an upgraded
+    // document has to sound exactly the way its owner left it.
+    transport: { bpm: doc.transport.bpm, swing: DEFAULT_SWING },
   }
 }

@@ -9,7 +9,7 @@ import {
   createSamplerSettings,
   samplerParamForPad,
 } from './sampler'
-import { DEFAULT_BPM } from './transport'
+import { DEFAULT_BPM, DEFAULT_SWING } from './transport'
 import {
   DEFAULT_ARC_ID,
   activeLessonIdFor,
@@ -32,6 +32,7 @@ import {
   setMasterParamValue,
   setSamplerParamValue,
   setTransportBpm,
+  setTransportSwing,
   cycleActivePatternStep,
   enterLesson,
   selectLesson,
@@ -49,6 +50,7 @@ describe('createInitialProjectState', () => {
     expect(state.patterns).toHaveLength(1)
     expect(state.activePatternId).toBe(state.patterns[0].id)
     expect(state.transport.bpm).toBe(DEFAULT_BPM)
+    expect(state.transport.swing).toBe(DEFAULT_SWING)
     expect(state.lessonProgress).toEqual({})
     expect(state.instrumentSettings).toEqual({
       bass: DEFAULT_BASS_SETTINGS,
@@ -453,6 +455,31 @@ describe('setFxParamValue', () => {
   })
 })
 
+describe('setTransportSwing', () => {
+  it('stores swing on the Transport, clamped to 50–75%, without touching anything else', () => {
+    const state = setTransportBpm(createInitialProjectState(), 124)
+    const shuffled = setTransportSwing(state, 0.62)
+
+    expect(shuffled.transport).toEqual({ bpm: 124, swing: 0.62 })
+    expect(shuffled.instrumentSettings).toBe(state.instrumentSettings)
+    expect(activePattern(shuffled)).toBe(activePattern(state))
+    expect(state.transport.swing).toBe(DEFAULT_SWING)
+
+    expect(setTransportSwing(state, 0.9).transport.swing).toBe(0.75)
+    expect(setTransportSwing(state, 0.1).transport.swing).toBe(0.5)
+    expect(setTransportSwing(state, Number.NaN).transport.swing).toBe(DEFAULT_SWING)
+  })
+
+  it('keeps its swing when the tempo moves, and its tempo when swing moves', () => {
+    const shuffled = setTransportSwing(createInitialProjectState(), 0.66)
+    expect(setTransportBpm(shuffled, 140).transport).toEqual({ bpm: 140, swing: 0.66 })
+    expect(setTransportSwing(setTransportBpm(shuffled, 140), 0.54).transport).toEqual({
+      bpm: 140,
+      swing: 0.54,
+    })
+  })
+})
+
 describe('mixer', () => {
   it('starts with an empty mixer — every lane audible', () => {
     expect(createInitialProjectState().mixer).toEqual({})
@@ -528,7 +555,7 @@ describe('migrateProjectState', () => {
       version: PROJECT_STATE_VERSION,
       patterns: [pattern],
       activePatternId: pattern.id,
-      transport: { bpm: 125 },
+      transport: { bpm: 125, swing: DEFAULT_SWING },
       instrumentSettings: {
         bass: DEFAULT_BASS_SETTINGS,
         master: DEFAULT_MASTER_SETTINGS,
@@ -542,6 +569,37 @@ describe('migrateProjectState', () => {
       activeArcId: DEFAULT_ARC_ID,
       activeLessonIds: {},
     })
+  })
+
+  it('lifts a v10 document to straight swing, and it plays exactly as before', () => {
+    // v10 had no swing, so every 16th sat on the grid: 50% is the only value
+    // that keeps an upgraded beat sounding the way its owner left it.
+    const current = updateLessonProgress(
+      setTransportBpm(cycleActivePatternStep(createInitialProjectState(), 'kick', 4), 126),
+      'four-on-the-floor',
+      { completed: true, dismissed: true },
+    )
+    const v10 = JSON.parse(JSON.stringify({ ...current, version: 10 })) as Record<string, unknown>
+    v10.transport = { bpm: 126 }
+
+    const migrated = migrateProjectState(v10)!
+
+    expect(migrated).toEqual({ ...current, transport: { bpm: 126, swing: 0.5 } })
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+  })
+
+  it('opens a v10 document at straight swing, whatever stray swing field it carries', () => {
+    const v10 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 10 }),
+    ) as Record<string, unknown>
+    v10.transport = { bpm: 130, swing: 'heavy' }
+
+    expect(migrateProjectState(v10)!.transport).toEqual({ bpm: 130, swing: DEFAULT_SWING })
+  })
+
+  it('carries swing through a save and reload of the current version', () => {
+    const shuffled = setTransportSwing(createInitialProjectState(), 0.58)
+    expect(migrateProjectState(JSON.parse(JSON.stringify(shuffled)))!.transport.swing).toBe(0.58)
   })
 
   it('lifts a v9 document’s single lesson pointer into the techno track', () => {

@@ -3,7 +3,7 @@
 > Track: v3.0 · Slice 1 of 15
 > Blocked by: EB3-00
 > Blocks: EB3-02 (schema chain), EB3-03b, EB3-10 (`swingInRange`)
-> Branch: `feat/swing`
+> Branch: `feat/acid-groove-01-swing`
 > Schema: **v11**
 > Spec stories: 1–10 (Swing); `swingInRange` from "Lesson vocabulary and progress"
 
@@ -60,22 +60,70 @@ strip. That is expected.
 
 ## Acceptance criteria
 
-- [ ] A Swing knob beside tempo reads 50%–75% and works by drag and keyboard
-      (arrows, Page keys, Home/End) like every other knob
-- [ ] Odd 16ths of every sequenced voice are delayed by the specified offset;
+- [x] A Swing knob beside tempo reads 50%–75% and works by drag and keyboard
+      (arrows, Page keys, Home/End) like every other knob — `SWING_PARAM`
+      (`src/model/transport.ts`) is a standard `Knob` spec in percent (50–75,
+      readout "54 %"), rendered by `TransportBar` beside the BPM readout; the
+      Transport stores the fraction and the two meet only through
+      `swingToPercent`/`swingFromPercent`. It joins `DECK_PARAMS` via
+      `TRANSPORT_PARAMS`, so `knob:swing` spotlights it and its motion is
+      observed like any knob's. Mounted test (`App.test.ts`, "App swing"):
+      Home/End/PageUp/ArrowUp move it and drive `engine.setSwing`
+- [x] Odd 16ths of every sequenced voice are delayed by the specified offset;
       even 16ths are untouched; the step index is never shifted, including at
-      75% — proven at the step-resolution seam at 50/66/75%
-- [ ] Live stab keys and pad hits are never offset
-- [ ] Sweeping swing while playing changes the feel immediately, with no stalls
-- [ ] v10 documents migrate to v11 at 0.50 and sound identical; swing persists
-      across reload
-- [ ] Swing round-trips through share links and bundles; out-of-range swing is
-      rejected; a v10 link opens at 50%
-- [ ] `swingInRange` parses, rejects bad ranges, and evaluates against the live
-      swing value
-- [ ] In-browser: at 130 BPM, measured off-beat delay matches the formula at 66%
-      and 75% within 1 ms across two loops; bass stays locked to the kick
-- [ ] `GLOSSARY.md` updated
+      75% — proven at the step-resolution seam at 50/66/75% —
+      `swingOffsetSeconds` is the one formula; `resolveStep` takes the
+      Transport and returns `swingOffset` (seconds) for the 16th. Seam tests
+      cover all 16 steps at 66/75%, zero at 50%, and distinct sounds on
+      neighbouring steps 0–3 and 15 resolving as themselves at 50/66/75%. The
+      engine adds the offset to chokes, drum starts and gains, pads, bass and
+      stab (mocked-Tone tests: odd step at 75% lands `time + 0.5 × step`, even
+      step untouched); Tone's transport swing stays 0
+- [x] Live stab keys and pad hits are never offset — they still fire at
+      `Tone.immediate()`; engine test at 75% asserts both, and in-browser three
+      live stab keys at 75% attacked at exactly the context's current time
+- [x] Sweeping swing while playing changes the feel immediately, with no
+      stalls — swing reaches the engine through a `useEffect` like the mixer and
+      patches, and the callback reads it on every 16th. In-browser, 50 arrow
+      presses over ~2 s while playing: consecutive off-beats landed 15 → 21.9 →
+      27.7 → … → 53.1 ms late, the transport stayed `started`, and its tick
+      rate never dropped (0.38–0.49 ticks/ms against 0.416 expected)
+- [x] v10 documents migrate to v11 at 0.50 and sound identical; swing persists
+      across reload — `migrateV10ToV11` adds `swing: 0.5` and changes nothing
+      else (asserted with `toEqual` on the whole document). In-browser: a 75%
+      edit autosaved as `{ version: 11, transport: { bpm: 130, swing: 0.75 } }`
+      and came back at "75 %"; a hand-written v10 document (`{ bpm: 126 }`)
+      opened at "50 %", 126 BPM, beat intact
+- [x] Swing round-trips through share links and bundles; out-of-range swing is
+      rejected; a v10 link opens at 50% — `isSharedProject` checks
+      `MIN_SWING ≤ swing ≤ MAX_SWING` for both carriers; `share.test.ts` covers
+      a 62% link round trip, a 70% bundle, a v10 link opening at
+      `{ bpm, swing: 0.5 }`, and 0.49 / 0.76 / non-number / missing rejected
+- [x] `swingInRange` parses, rejects bad ranges, and evaluates against the live
+      swing value — percent within 50–75, rejecting out-of-range, inverted,
+      fraction-valued and non-numeric ranges. It judges the whole percent the
+      knob reads (`wholeSwingPercent`), so "56 %" on screen meets 56–66 even at
+      55.51%; boundary tests pin this. `GoalContext.swing` comes from
+      `goalContextFor`; the shipped-arc contract knows how to satisfy and break it
+- [x] In-browser: at 130 BPM, measured off-beat delay matches the formula at 66%
+      and 75% within 1 ms across two loops; bass stays locked to the kick — a
+      fresh deck programmed through the UI (kick 1/5/9/13, closed hat and bass
+      on all 16), swing set from the keyboard, with the kick, closed-hat and
+      bass voices wrapped to log scheduled times. 66%: 58 off-beats over 7
+      loops all 36.9231 ms late (formula 36.923), even steps 0, max error 0 ms.
+      75% (set live with End): 18 off-beats over 2.3 loops all 57.6923 ms late
+      (formula 57.692), max error 0 ms. Every kick and hat time had a bass note
+      at the identical time; kicks stayed 461.538 ms apart; zero console errors.
+      Under swing a one-step bass note on an odd 16th releases *after* the next
+      even note's attack on the monophonic synth; Tone's next attack cancels
+      that stale release. Checked at 75% on 11 even notes: their envelope 5/20/40 ms
+      past the stale release point read 0.393/0.346/0.306 against
+      0.395/0.347/0.307 straight (still decaying toward the 0.25 sustain, never
+      released), and the oscillator's stale stop was cancelled on all 10 checked
+- [x] `GLOSSARY.md` updated — Swing and Transport lose their spec tags and
+      describe what shipped; Step resolution, Goal context, goal types, Param
+      registry, Live play, Playhead, Neutral, Demo groove and ProjectState (v11)
+      updated, with spec tags kept only on what is still unbuilt
 
 ## Testing decisions
 

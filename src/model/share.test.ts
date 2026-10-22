@@ -13,6 +13,7 @@ import {
   setMasterParamValue,
   setSamplerParamValue,
   setTransportBpm,
+  setTransportSwing,
   resizeActivePatternNote,
   toggleActivePatternNoteStep,
   toggleLaneMute,
@@ -340,6 +341,42 @@ describe('share URL', () => {
     })
   })
 
+  it('round-trips a swung beat with its swing and tempo intact', async () => {
+    const sender = setTransportSwing(setTransportBpm(createInitialProjectState(), 134), 0.62)
+
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error(`Expected a ready link, got ${shared.status}`)
+    expect(shared.project.transport).toEqual({ bpm: 134, swing: 0.62 })
+  })
+
+  it('opens a link written before swing existed at straight swing', async () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialProjectState())) as Record<string, unknown>
+    legacy.version = 10
+    legacy.transport = { bpm: 127 }
+
+    const shared = await readSharedBeat(await legacyShareUrl(10, legacy))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a v10 link to open, got ${shared.status}`)
+    expect(shared.project.transport).toEqual({ bpm: 127, swing: 0.5 })
+  })
+
+  it('rejects a payload whose swing is missing or out of range', async () => {
+    const invalid: unknown[] = [0.49, 0.76, 'heavy', null, undefined]
+
+    for (const swing of invalid) {
+      const doc = createInitialProjectState()
+      doc.transport = { bpm: doc.transport.bpm, swing } as typeof doc.transport
+      const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
   it('rejects a payload whose master macros are missing or out of range', async () => {
     const outOfRange = createInitialProjectState()
     outOfRange.instrumentSettings.master = { filter: 18_000, drive: 400 }
@@ -569,6 +606,15 @@ describe('beat bundle', () => {
     expect(opened.slices).toEqual(slices)
   })
 
+  it('carries swing so the groove arrives as it was sent', async () => {
+    const { project: sender, slices } = senderWithChops()
+
+    const opened = await readBundle(await exportedBytes(setTransportSwing(sender, 0.7), slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.transport.swing).toBe(0.7)
+  })
+
   it('names itself after the beat and blanks the recipient-owned fields a link does', async () => {
     const { project: sender, slices } = senderWithChops()
     const withProgress: ProjectState = {
@@ -656,6 +702,8 @@ describe('beat bundle', () => {
     expect(opened.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(opened.project).lanes).toEqual(activePattern(sender).lanes)
     expect(opened.project.transport.bpm).toBe(138)
+    // A version that predates swing opens straight, exactly as it played.
+    expect(opened.project.transport.swing).toBe(0.5)
     // A version that predates the sampler brings empty pads, so the bundle
     // needs no audio to be complete.
     expect(opened.project.instrumentSettings.sampler.pad1.region).toBeNull()

@@ -21,6 +21,7 @@ import {
   cycleActivePatternStep,
   setSamplerPadFit,
   setTransportBpm,
+  setTransportSwing,
   type ProjectState,
 } from './model/projectState'
 import { MAX_SOURCE_BYTES, MAX_SOURCE_SECONDS } from './model/intake'
@@ -47,6 +48,7 @@ const engineSpies = vi.hoisted(() => ({
   setFxSettings: vi.fn(),
   setSamplerSettings: vi.fn(),
   setBpm: vi.fn(),
+  setSwing: vi.fn(),
   unlockAudio: vi.fn().mockResolvedValue(undefined),
   play: vi.fn().mockResolvedValue(undefined),
   stop: vi.fn(),
@@ -1771,5 +1773,59 @@ describe('App curriculum tracks', () => {
       expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
     )
     await new Promise((resolve) => setTimeout(resolve, 450))
+  })
+})
+
+describe('App swing', () => {
+  function swingKnob(): HTMLElement {
+    return screen.getByRole('slider', { name: 'Swing' })
+  }
+
+  it('puts a Swing knob beside tempo that reads 50–75% and drives the sequencer', async () => {
+    await hydratedDeck()
+
+    const knob = swingKnob()
+    // Beside the tempo fader, in the transport.
+    expect(
+      knob.closest('.transport')?.contains(
+        screen.getByRole('slider', { name: 'Tempo in beats per minute' }),
+      ),
+    ).toBe(true)
+    expect(knob.getAttribute('aria-valuemin')).toBe('50')
+    expect(knob.getAttribute('aria-valuemax')).toBe('75')
+    expect(knob.getAttribute('aria-valuetext')).toBe('50 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.5)
+
+    fireEvent.keyDown(knob, { key: 'End' })
+    expect(knob.getAttribute('aria-valuetext')).toBe('75 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.75)
+
+    fireEvent.keyDown(knob, { key: 'Home' })
+    expect(knob.getAttribute('aria-valuetext')).toBe('50 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.5)
+
+    // Page jumps a tenth of the travel (2.5%), arrows nudge a fiftieth (0.5%).
+    fireEvent.keyDown(knob, { key: 'PageUp' })
+    expect(engineSpies.setSwing.mock.calls.at(-1)![0]).toBeCloseTo(0.525, 12)
+    fireEvent.keyDown(knob, { key: 'ArrowUp' })
+    expect(knob.getAttribute('aria-valuetext')).toBe('53 %')
+    expect(engineSpies.setSwing.mock.calls.at(-1)![0]).toBeCloseTo(0.53, 12)
+  })
+
+  it('opens a saved project at its own swing, and gives it to the sequencer', async () => {
+    await saveProjectState(setTransportSwing(createInitialProjectState(), 0.62))
+
+    await hydratedDeck()
+
+    expect(swingKnob().getAttribute('aria-valuetext')).toBe('62 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.62)
+  })
+
+  it('saves a swing move, so it survives a reload', async () => {
+    await hydratedDeck()
+
+    fireEvent.keyDown(swingKnob(), { key: 'End' })
+
+    await waitFor(async () => expect((await loadProjectState())?.transport.swing).toBe(0.75))
   })
 })

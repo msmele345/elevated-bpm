@@ -1,5 +1,6 @@
 import { audibleLaneIds, type Mixer } from '../model/mixer'
 import { NOTE_LANES, noteEventAtStep, type LaneNoteEvent } from '../model/note'
+import { swingOffsetSeconds, type TransportSettings } from '../model/transport'
 import type { LaneId, Pattern } from '../model/types'
 
 /**
@@ -34,6 +35,9 @@ const CHOKES: Partial<Record<LaneId, LaneId>> = {
 export interface StepResolutionInput {
   pattern: Pattern
   mixer: Mixer
+  /** Tempo and swing: together they decide how late an off-beat 16th lands. */
+  transport: TransportSettings
+  /** The 16th on the straight grid. Swing never changes which step this is. */
   stepIndex: number
 }
 
@@ -45,6 +49,13 @@ export interface StepResolution {
   chokes: LaneId[]
   /** Bass and stab notes starting on this step, in deck order. */
   notes: LaneNoteEvent[]
+  /**
+   * Seconds to add to the scheduled time of everything above: zero on even
+   * 16ths, and the swing delay on odd ones. One offset for the whole 16th, so
+   * every sequenced voice shuffles together and the bass never drifts off the
+   * kick. Note lengths stay in whole steps, measured from the delayed start.
+   */
+  swingOffset: number
 }
 
 /**
@@ -53,9 +64,15 @@ export interface StepResolution {
  * a choker lane fires its target is cut, silencing a still-ringing voice from
  * an earlier step and preventing a same-step target from sounding, so the
  * open hat behaves like real 909 hardware under the closed hat. Note lanes do
- * not consult the mixer yet.
+ * not consult the mixer yet. Swing moves when the 16th lands, never what is on
+ * it: the step index comes from the straight grid.
  */
-export function resolveStep({ pattern, mixer, stepIndex }: StepResolutionInput): StepResolution {
+export function resolveStep({
+  pattern,
+  mixer,
+  transport,
+  stepIndex,
+}: StepResolutionInput): StepResolution {
   const hits = hitsAtStep(pattern, stepIndex, mixer)
   const firing = new Set(hits.map((hit) => hit.laneId))
   const chokes: LaneId[] = []
@@ -67,6 +84,7 @@ export function resolveStep({ pattern, mixer, stepIndex }: StepResolutionInput):
     starts: hits.filter((hit) => !choked.has(hit.laneId)),
     chokes,
     notes: notesAtStep(pattern, stepIndex),
+    swingOffset: swingOffsetSeconds(stepIndex, transport.bpm, transport.swing),
   }
 }
 

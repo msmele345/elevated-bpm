@@ -100,8 +100,9 @@ conversations use, and exactly what each one means here. Last reviewed
   `cutoff`, `filter`, `drumSend` or `pad1Tune`. Code: `DeckParamId`.
 - **Param registry (deck param registry).** Every knob on the Deck in one
   list, so a lesson goal or spotlight can name any of them, and a mistyped one
-  fails when the lesson loads. [v3 spec] Adds `swing`, `envMod` and the level knobs.
-  Code: `DECK_PARAMS`, `isDeckParamId`.
+  fails when the lesson loads. It includes `swing`, whose value lives in the
+  Transport rather than an instrument patch. [v3 spec] Adds `envMod` and the level knobs.
+  Code: `DECK_PARAMS`, `isDeckParamId`, `TRANSPORT_PARAMS`.
 - **Room (room light).** The beat-synced club backdrop around the Deck. It is
   driven from rAF through CSS variables and never re-renders React. Code:
   `useRoomLight`.
@@ -113,7 +114,8 @@ conversations use, and exactly what each one means here. Last reviewed
   note lane. Code: `StabKeyboard`, `createStabVoices`.
 - **Transport strip** [v3 spec]. The sticky bar at the top of the Deck holding
   Play/Stop, tempo, Swing, slots A–D, Copy and Clear. It replaces the transport row
-  inside the Master strip. Code today: `TransportBar`.
+  inside the Master strip. Code today: `TransportBar`, which already holds Play, tempo
+  and Swing.
 
 ## Patterns, lanes and time
 
@@ -143,7 +145,7 @@ conversations use, and exactly what each one means here. Last reviewed
 - **Lane.** One row of 16 steps in a Pattern. There are three kinds: drum lane, pad
   lane and note lane. Founding term. The UI may say "row"; code and docs say lane.
 - **Live play.** Playing pads or keys by hand over the loop. It is performance
-  only: it never writes to the Pattern, and [v3 spec] it is never swung. Code:
+  only: it never writes to the Pattern, and it is never swung. Code:
   `PadHitOrigin` (`'live' | 'sequenced'`), `createStabNoteHolds`.
 - **Note lane.** A lane of note steps, with ids `bass` and `stab`. Code: `NoteLane`,
   `NoteLaneId`.
@@ -155,7 +157,8 @@ conversations use, and exactly what each one means here. Last reviewed
 - **Pattern.** A first-class, ID'd 16-step loop holding every lane (drum, pad
   and note). Founding term. Code: `Pattern`. [v3 spec] There is one per slot.
 - **Playhead.** The moving step highlight, animated from rAF reading the
-  transport. [v3 spec] It stays on the straight grid under swing. Code: `usePlayhead`.
+  transport. It stays on the straight grid under swing (at most half a step from
+  what is heard). Code: `usePlayhead`.
 - **Playing slot** [v3 spec]. The slot the engine is sounding. It differs from the
   selected slot only while a switch is queued, and it is driven from rAF and CSS, never
   React state.
@@ -173,20 +176,25 @@ conversations use, and exactly what each one means here. Last reviewed
 - **Step.** One 16th-note cell. There are 16 per lane (`STEP_COUNT`), and each lasts
   `secondsPerStep(bpm)`, which is 15/bpm seconds.
 - **Step resolution.** The one pure function that decides what sounds on a
-  16th. It reads the pattern, the mixer and the step index, and returns drum and
-  pad starts with their accent gains (after mute/solo), chokes, and bass and stab
-  note events (pitch and length in steps). Note lanes don't consult the mixer yet.
-  The Tone callback applies its result and decides nothing itself. [v3 spec] The
-  input grows to the Bank, Transport and bass patch, and the result gains the
-  swing offset, the playing slot, mixer-filtered note events, and per-note
-  accent, legato and gate tie. Code: `resolveStep`, `StepResolution`.
-- **Swing** [v3 spec]. The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75).
-  Every odd 16th is delayed by (swing − 0.5) × 2 × one step, so 66% is roughly a triplet feel
-  and 75% is dotted. The Deck applies this offset itself and Tone's own swing stays at 0,
-  because Tone's swing makes steps mis-index at 75%. Spotlight `knob:swing`.
-- **Transport.** BPM (60–200, default 130), [v3 spec] swing, and play state. It wraps
-  Tone's transport, the only musical clock. Play state is never persisted.
-  Founding term. Code: `TransportSettings` (today `{ bpm }` only).
+  16th. It reads the pattern, the mixer, the Transport and the step index, and
+  returns drum and pad starts with their accent gains (after mute/solo), chokes,
+  bass and stab note events (pitch and length in steps), and the swing offset in
+  seconds for that 16th. Note lanes don't consult the mixer yet. The Tone callback
+  applies its result and decides nothing itself. [v3 spec] The input grows to the
+  Bank and bass patch, and the result gains the playing slot, mixer-filtered note
+  events, and per-note accent, legato and gate tie. Code: `resolveStep`,
+  `StepResolution`.
+- **Swing.** The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75, default 0.50).
+  Every odd 16th of every sequenced voice is delayed by (swing − 0.5) × 2 × one step, so 66%
+  is roughly a triplet feel and 75% is dotted; even 16ths never move, and note lengths stay
+  whole steps measured from the delayed start. The Deck applies this offset itself and Tone's
+  own swing stays at 0, because Tone's swing makes steps mis-index at 75%. Live play is never
+  swung. The Swing knob reads whole percent ("54 %"), and `swingInRange` judges that same
+  whole percent. Spotlight `knob:swing`. Code: `TransportSettings.swing`,
+  `swingOffsetSeconds`, `SWING_PARAM`, `setTransportSwing`.
+- **Transport.** BPM (60–200, default 130), swing (50–75%, default 50%), and play
+  state. It wraps Tone's transport, the only musical clock. Play state is never
+  persisted. Founding term. Code: `TransportSettings` (`{ bpm, swing }`).
 
 ## Mixing and the audio path
 
@@ -208,7 +216,7 @@ conversations use, and exactly what each one means here. Last reviewed
   hits and live pads. [v3 spec] It applies per voice, so bass and stab (live keys included) join it.
   Code: `audibleLaneIds`, `laneIsAudible`.
 - **Neutral.** A param's resting value, at which it changes nothing: sends at 0,
-  drive at 0, master filter at 18 kHz, [v3 spec] swing 50%, Env Mod 0, Level 1. Every new
+  drive at 0, master filter at 18 kHz, swing 50%, [v3 spec] Env Mod 0, Level 1. Every new
   param must default to neutral, so an untouched Deck sounds exactly as it did
   before the param existed.
 - **Send / return.** A send is a per-instrument level into the FX bus (`drumSend`,
@@ -271,7 +279,7 @@ conversations use, and exactly what each one means here. Last reviewed
   being previewed. Code: `createAutosaver`.
 - **Demo groove.** The shipped opening pattern, in UI step numbers: the kick is empty, the clap is on
   13, the closed hats are on 3/7/11, the open hat is on 15, and the perc is on 4/6/12/14. The bass and stab are
-  empty. [v3 spec] It lives in slot A, with 50% swing. Code: `createDemoPattern`.
+  empty. It plays at 50% swing. [v3 spec] It lives in slot A. Code: `createDemoPattern`.
 - **Migration (migration chain).** Each schema bump adds one step that lifts vN
   to vN+1, adding fields with defaults that reproduce the old sound. Saved
   documents, share links and bundles all pass through the same chain. A corrupt or
@@ -283,7 +291,8 @@ conversations use, and exactly what each one means here. Last reviewed
 - **ProjectState.** The one versioned JSON document and the single source of
   truth. It holds `patterns`, `activePatternId`, `transport`, `instrumentSettings`,
   `sources` (metadata only), `lessonProgress`, `prefs`, `mixer`, `activeArcId` and
-  `activeLessonIds`. It never holds audio. It is at v10 today; [v3 spec] v11–v14 are planned. Founding
+  `activeLessonIds`. It never holds audio. It is at v11 today (v11 added swing); [v3 spec]
+  v12–v14 are planned. Founding
   term. Code: `ProjectState`, `PROJECT_STATE_VERSION`.
 - **Sample store.** A separate IndexedDB store, split into slices (precious) and
   sources (expendable). Code: `saveSlice`, `saveSource`, `loadStoredAudio`.
@@ -346,13 +355,13 @@ conversations use, and exactly what each one means here. Last reviewed
   - exact placement: `stepsActive`, `stepsAccented`, `notesActive`;
   - minimum count: `notesPlaced`, `pitchesVaried`, `padStepsPlaced`, `sourceLoaded`,
     `padAssigned`, and [v3 spec] `notesAccented` and `notesSlid`;
-  - range: `bpmInRange` and [v3 spec] `swingInRange`;
+  - range: `bpmInRange` and `swingInRange` (in percent, within 50–75);
   - observation: `paramSwept` and `chordPlayed`;
   - sampler value: `regionStartsWithin`, `regionShorterThan`, `fitTargetSet` and `padTuned`.
 
   Code: `GoalAssertion`, `isGoalMet`, `parseLesson`.
 - **Goal context.** The curated view a goal is evaluated against: pattern, bpm,
-  motion, chord, sampler, and [v3 spec] swing. It is not the whole ProjectState. Code:
+  swing, motion, chord and sampler. It is not the whole ProjectState. Code:
   `GoalContext`, `goalContextFor`.
 - **Lesson.** In-app JSON: `{ id, title, intro, spotlight[], goal[] }`. Adding
   one means a JSON file plus one line in the arc's list. Founding term. Code: `Lesson`.

@@ -37,6 +37,7 @@ vi.mock('./audio/engine', async () => {
     setFxSettings: () => undefined,
     setSamplerSettings: () => undefined,
     setBpm: () => undefined,
+    setSwing: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
     stop: () => undefined,

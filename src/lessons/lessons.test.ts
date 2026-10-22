@@ -20,7 +20,13 @@ import {
   createSamplerSettings,
   type SampleSource,
 } from '../model/sampler'
-import { DEFAULT_BPM } from '../model/transport'
+import {
+  DEFAULT_BPM,
+  DEFAULT_SWING,
+  MAX_SWING,
+  swingFromPercent,
+  swingToPercent,
+} from '../model/transport'
 import type { DrumLaneId, NoteLaneId, PadLaneId, Pattern } from '../model/types'
 import { ALL_LESSONS, ARCS, arcById } from './index'
 
@@ -174,6 +180,7 @@ function satisfyingContext(lesson: Lesson): GoalContext {
   let context: GoalContext = {
     pattern: createInitialPattern(),
     bpm: DEFAULT_BPM,
+    swing: DEFAULT_SWING,
     sampler: EMPTY_SAMPLER,
   }
 
@@ -234,6 +241,9 @@ function satisfyingContext(lesson: Lesson): GoalContext {
       }
       case 'bpmInRange':
         context = { ...context, bpm: goal.min }
+        break
+      case 'swingInRange':
+        context = { ...context, swing: swingFromPercent(goal.min) }
         break
       case 'paramSwept':
         context = {
@@ -371,6 +381,15 @@ function nearMiss(context: GoalContext, goal: GoalAssertion): GoalContext {
     }
     case 'bpmInRange':
       return { ...context, bpm: goal.min - 1 }
+    case 'swingInRange':
+      // One percent outside whichever end the knob can still reach past.
+      return {
+        ...context,
+        swing:
+          goal.max < swingToPercent(MAX_SWING)
+            ? swingFromPercent(goal.max + 1)
+            : swingFromPercent(goal.min - 1),
+      }
     case 'paramSwept':
       return {
         ...context,

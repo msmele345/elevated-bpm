@@ -17,7 +17,7 @@ import {
   type SampleSource,
   type SamplerSettings,
 } from './sampler'
-import { MAX_BPM, MIN_BPM } from './transport'
+import { MAX_BPM, MIN_BPM, SWING_PARAM, wholeSwingPercent } from './transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -87,6 +87,17 @@ export interface PitchesVariedGoal {
 /** The transport sits in a tempo range — the goal of a "find the tempo" lesson. */
 export interface BpmInRangeGoal {
   type: 'bpmInRange'
+  min: number
+  max: number
+}
+
+/**
+ * The transport's swing sits in a range — the goal of a "shuffle" lesson. In
+ * percent, as the Swing knob reads, so a lesson author writes what the learner
+ * sees.
+ */
+export interface SwingInRangeGoal {
+  type: 'swingInRange'
   min: number
   max: number
 }
@@ -189,6 +200,7 @@ export type GoalAssertion =
   | NotesPlacedGoal
   | PitchesVariedGoal
   | BpmInRangeGoal
+  | SwingInRangeGoal
   | ParamSweptGoal
   | ChordPlayedGoal
   | SourceLoadedGoal
@@ -264,6 +276,8 @@ export interface GoalContext {
   motion?: ParamMotion
   /** The transport tempo the document is set to. */
   bpm?: number
+  /** The transport swing the document is set to, as the stored 0.50–0.75 fraction. */
+  swing?: number
   /** Live keyboard playing observed this session. */
   chord?: ChordPlay
   /** The sampler's pads and the sources behind them. */
@@ -350,6 +364,11 @@ function isAssertionMet(goal: GoalAssertion, context: GoalContext): boolean {
       return new Set(notesOf(context.pattern, goal.lane).map((step) => step.pitch)).size >= goal.min
     case 'bpmInRange':
       return context.bpm !== undefined && context.bpm >= goal.min && context.bpm <= goal.max
+    case 'swingInRange': {
+      if (context.swing === undefined) return false
+      const percent = wholeSwingPercent(context.swing)
+      return percent >= goal.min && percent <= goal.max
+    }
     case 'paramSwept':
       return paramTravel(context.motion ?? NO_PARAM_MOTION, goal.param) >= goal.minTravel
     case 'chordPlayed':
@@ -535,6 +554,29 @@ function parseBpmInRangeGoal(
     fail(lessonId, `goal[${index}] bpm range must run min → max inside [${MIN_BPM}, ${MAX_BPM}]`)
   }
   return { type: 'bpmInRange', min, max }
+}
+
+function parseSwingInRangeGoal(
+  goal: Partial<SwingInRangeGoal>,
+  lessonId: string,
+  index: number,
+): SwingInRangeGoal {
+  const { min, max } = goal
+  // Percent, the knob's own units: a range written as the stored fraction
+  // (0.56) would sit below the knob and fail here rather than never complete.
+  if (
+    typeof min !== 'number' ||
+    typeof max !== 'number' ||
+    min < SWING_PARAM.min ||
+    max > SWING_PARAM.max ||
+    min > max
+  ) {
+    fail(
+      lessonId,
+      `goal[${index}] swing range must run min → max inside [${SWING_PARAM.min}, ${SWING_PARAM.max}] percent`,
+    )
+  }
+  return { type: 'swingInRange', min, max }
 }
 
 function parseChordPlayedGoal(
@@ -759,6 +801,8 @@ function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion
       return parsePitchesVariedGoal(goal, lessonId, index)
     case 'bpmInRange':
       return parseBpmInRangeGoal(goal, lessonId, index)
+    case 'swingInRange':
+      return parseSwingInRangeGoal(goal, lessonId, index)
     case 'paramSwept':
       return parseParamSweptGoal(goal, lessonId, index)
     case 'chordPlayed':

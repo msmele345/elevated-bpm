@@ -40,6 +40,7 @@ export function goalContextFor(
   return {
     pattern: activePattern(state),
     bpm: state.transport.bpm,
+    swing: state.transport.swing,
     motion: session.motion ?? NO_PARAM_MOTION,
     chord: session.chord ?? NO_CHORD_PLAY,
     sampler: { pads: state.instrumentSettings.sampler, sources: state.sources },

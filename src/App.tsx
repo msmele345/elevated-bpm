@@ -36,6 +36,15 @@ import {
   spotlitPadIds,
   spotlitParamIds,
 } from './model/lesson'
+import {
+  anySoloed,
+  levelParamForVoice,
+  voiceIsAudible,
+  voiceMix,
+  type LevelParamId,
+  type Mixer,
+  type VoiceId,
+} from './model/mixer'
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activeLessonIdFor,
@@ -59,9 +68,10 @@ import {
   setSamplerParamValue,
   setTransportBpm,
   setTransportSwing,
+  setLevelParamValue,
   toggleActivePatternNoteStep,
-  toggleLaneMute,
-  toggleLaneSolo,
+  toggleVoiceMute,
+  toggleVoiceSolo,
   transposeActivePatternNote,
   updateLessonProgress,
   type ProjectState,
@@ -261,7 +271,16 @@ export default function App() {
   const samplerSettings = project.instrumentSettings.sampler
   const bpm = project.transport.bpm
   const swing = project.transport.swing
-  const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
+  const mixer = project.mixer
+  const soloing = anySoloed(mixer)
+  // The sampler is handed only its own four strips, memoized on them, so a
+  // Level dragged on a drum lane or the bass is not a new prop for the panel.
+  const padMixer = useMemo<Mixer>(
+    () => ({ pad1: mixer.pad1, pad2: mixer.pad2, pad3: mixer.pad3, pad4: mixer.pad4 }),
+    [mixer.pad1, mixer.pad2, mixer.pad3, mixer.pad4],
+  )
+  const bassMix = voiceMix(mixer, 'bass')
+  const stabMix = voiceMix(mixer, 'stab')
   // Mirrored so the sampler's handlers can read the current sources and pads
   // without closing over them — a fresh closure is a changed prop, and these
   // are handed to a memoized panel.
@@ -451,11 +470,12 @@ export default function App() {
     engine.setPattern(pattern)
   }, [pattern])
 
-  // Same for mute/solo: the engine reads the live mixer per 16th, so toggling
-  // a lane silences or solos it on the next step with no restart.
+  // Same for the mixer: the engine reads mute/solo per 16th and per live note,
+  // so toggling a voice silences or solos it on the next step with no restart,
+  // and it ramps each channel to its Level, so a dragged knob fades.
   useEffect(() => {
-    engine.setMixer(project.mixer)
-  }, [project.mixer])
+    engine.setMixer(mixer)
+  }, [mixer])
 
   // And the bass patch: the engine ramps cutoff/resonance, so a knob dragged
   // mid-loop reshapes the sound as it moves rather than on the next note.
@@ -523,12 +543,12 @@ export default function App() {
     setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
   }, [])
 
-  const handleToggleMute = useCallback((laneId: LaneId) => {
-    setProject((p) => toggleLaneMute(p, laneId))
+  const handleToggleMute = useCallback((voiceId: VoiceId) => {
+    setProject((p) => toggleVoiceMute(p, voiceId))
   }, [])
 
-  const handleToggleSolo = useCallback((laneId: LaneId) => {
-    setProject((p) => toggleLaneSolo(p, laneId))
+  const handleToggleSolo = useCallback((voiceId: VoiceId) => {
+    setProject((p) => toggleVoiceSolo(p, voiceId))
   }, [])
 
   const handleToggleNoteStep = useCallback((laneId: NoteLaneId, stepIndex: number) => {
@@ -569,6 +589,13 @@ export default function App() {
 
   const handleSamplerParamChange = useCallback((id: SamplerParamId, value: number) => {
     setProject((p) => setSamplerParamValue(p, id, value))
+    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  }, [])
+
+  // Every Level knob is a deck param, so its motion is observed like any other
+  // knob's: a future mixing lesson can ask for a sweep in JSON alone.
+  const handleLevelChange = useCallback((id: LevelParamId, value: number) => {
+    setProject((p) => setLevelParamValue(p, id, value))
     setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
   }, [])
 
@@ -1364,21 +1391,23 @@ export default function App() {
           model="RHYTHM SECTION · DR-909"
         />
         {pattern.lanes.map((lane) => {
-          const mix = project.mixer[lane.id]
-          // With any solo engaged, a lane that is not soloed is silenced —
-          // shown dimmed so the deck reflects what is actually sounding.
-          const silenced = soloing ? !mix?.soloed : (mix?.muted ?? false)
+          const mix = voiceMix(mixer, lane.id)
           return (
             <StepRow
               key={lane.id}
               lane={lane}
               spotlit={spotlitLanes.includes(lane.id)}
-              muted={mix?.muted ?? false}
-              soloed={mix?.soloed ?? false}
-              silenced={silenced}
+              muted={mix.muted}
+              soloed={mix.soloed}
+              // Not sounding — muted, or un-soloed while another voice solos —
+              // shown dimmed so the deck reflects what is actually sounding.
+              silenced={!voiceIsAudible(lane.id, mixer)}
+              level={mix.level}
+              levelSpotlit={spotlitParams.includes(levelParamForVoice(lane.id).id)}
               onCycleStep={handleCycleStep}
               onToggleMute={handleToggleMute}
               onToggleSolo={handleToggleSolo}
+              onLevelChange={handleLevelChange}
             />
           )
         })}
@@ -1390,7 +1419,7 @@ export default function App() {
         settings={samplerSettings}
         sources={project.sources}
         audio={audio}
-        mixer={project.mixer}
+        mixer={padMixer}
         soloing={soloing}
         spotlitPads={spotlitPads}
         spotlitParams={spotlitParams}
@@ -1418,6 +1447,7 @@ export default function App() {
         onCycleStep={handleCycleStep}
         onToggleMute={handleToggleMute}
         onToggleSolo={handleToggleSolo}
+        onLevelChange={handleLevelChange}
       />
 
       <BassPanel
@@ -1429,6 +1459,13 @@ export default function App() {
         onTranspose={handleTransposeNote}
         onResize={handleResizeNote}
         onParamChange={handleBassParamChange}
+        muted={bassMix.muted}
+        soloed={bassMix.soloed}
+        silenced={!voiceIsAudible('bass', mixer)}
+        level={bassMix.level}
+        onToggleMute={handleToggleMute}
+        onToggleSolo={handleToggleSolo}
+        onLevelChange={handleLevelChange}
       />
 
       <StabKeyboard
@@ -1441,6 +1478,14 @@ export default function App() {
         onToggleStep={handleToggleNoteStep}
         onTranspose={handleTransposeNote}
         onResize={handleResizeNote}
+        muted={stabMix.muted}
+        soloed={stabMix.soloed}
+        silenced={!voiceIsAudible('stab', mixer)}
+        level={stabMix.level}
+        levelSpotlit={spotlitParams.includes(levelParamForVoice('stab').id)}
+        onToggleMute={handleToggleMute}
+        onToggleSolo={handleToggleSolo}
+        onLevelChange={handleLevelChange}
       />
     </main>
       {editor && (

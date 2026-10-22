@@ -21,6 +21,13 @@ function renderKeyboard() {
       onToggleStep: noop,
       onTranspose: noop,
       onResize: noop,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      level: 1,
+      onToggleMute: noop,
+      onToggleSolo: noop,
+      onLevelChange: noop,
     }),
   )
   return { attacks, releases }

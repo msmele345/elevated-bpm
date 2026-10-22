@@ -918,8 +918,8 @@ body::before {
   gap: 8px;
   /* Fixed, not a floor: every lane's grid must start at the same x or the step
      columns stop lining up and a beat can no longer be read down the column.
-     Sized to the longest label + its mute/solo buttons ("Closed Hat", 170px). */
-  flex: 0 0 176px;
+     Sized to the longest label + its mute/solo/Level strip ("Closed Hat"). */
+  flex: 0 0 220px;
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 0.8rem;
@@ -936,11 +936,33 @@ body::before {
   box-shadow: 0 0 8px rgba(255, 77, 51, 0.8);
 }
 
-/* mute/solo strip: small hardware-style buttons at the right of each label */
+/* mute/solo/Level strip: small hardware-style controls at the right of each
+   label, and on the bass and stab panel plates */
 .lane-mix {
   display: inline-flex;
+  align-items: center;
   gap: 4px;
   margin-left: auto;
+}
+
+/* Level: the channel-strip knob — a compact dial over its dB readout. Wide
+   enough for "−24.0 dB" so the strip never shifts as the readout changes. */
+.knob.is-small {
+  width: 48px;
+  gap: 1px;
+}
+
+.knob.is-small .knob-dial {
+  width: 26px;
+  height: 26px;
+}
+
+.knob.is-small .knob-readout {
+  font-size: 0.52rem;
+  letter-spacing: 0;
+  /* the lane label is uppercase; a unit is not — it is dB, never DB */
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .lane-mix-btn {
@@ -982,8 +1004,11 @@ body::before {
 }
 
 /* a lane that is not sounding right now dims its steps (mixer state reads at
-   a glance) while its controls stay fully interactive */
-.step-row.is-silenced .step-grid {
+   a glance) while its controls stay fully interactive; a silenced bass or stab
+   dims its lane — and the stab its keyboard, which is silent too */
+.step-row.is-silenced .step-grid,
+.panel.is-silenced .note-row .step-grid,
+.panel.is-silenced .stab-keyboard {
   opacity: 0.32;
   transition: opacity 120ms ease;
 }
@@ -2485,6 +2510,20 @@ body::before {
   font-weight: 600;
   letter-spacing: 0.24em;
   color: var(--ink-dim);
+}
+
+/* A plate carrying the instrument's mixer strip: name at the left, model and
+   strip together at the right. */
+.panel-title.has-controls {
+  align-items: center;
+}
+
+.panel-title.has-controls .panel-title-model {
+  margin-left: auto;
+}
+
+.panel-title .lane-mix {
+  margin-left: 0;
 }
 
 /* ── Live stab keyboard ───────────────────────────────────────────── */

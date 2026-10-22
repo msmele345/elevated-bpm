@@ -2,6 +2,7 @@ import { BASS_PARAMS, type BassParamId } from './bass'
 import { FX_PARAMS, type FxParamId } from './fx'
 import type { ParamSpec } from './knob'
 import { MASTER_PARAMS, type MasterParamId } from './master'
+import { LEVEL_PARAMS, type LevelParamId } from './mixer'
 import { SAMPLER_PARAMS, type SamplerParamId } from './sampler'
 import { TRANSPORT_PARAMS, type TransportParamId } from './transport'
 
@@ -24,6 +25,7 @@ export type DeckParamId =
   | FxParamId
   | SamplerParamId
   | TransportParamId
+  | LevelParamId
 
 export const DECK_PARAMS: ReadonlyArray<ParamSpec & { id: DeckParamId }> = [
   ...BASS_PARAMS,
@@ -31,6 +33,7 @@ export const DECK_PARAMS: ReadonlyArray<ParamSpec & { id: DeckParamId }> = [
   ...FX_PARAMS,
   ...SAMPLER_PARAMS,
   ...TRANSPORT_PARAMS,
+  ...LEVEL_PARAMS,
 ]
 
 /**

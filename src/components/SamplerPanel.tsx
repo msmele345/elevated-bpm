@@ -1,7 +1,13 @@
 import { memo, useEffect, useRef, useState, type DragEvent } from 'react'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { INTAKE_LIMITS_HINT } from '../model/intake'
-import type { Mixer } from '../model/mixer'
+import {
+  levelParamForVoice,
+  mixIsAudible,
+  voiceMix,
+  type LevelParamId,
+  type Mixer,
+} from '../model/mixer'
 import {
   PAD_LANES,
   formatPadRate,
@@ -77,7 +83,12 @@ interface SamplerPanelProps {
   sources: readonly SampleSource[]
   /** What survived in storage; a pad's state is derived from it. */
   audio: AvailableAudio
+  /**
+   * The pads' own mixer strips. Only the pads': a Level dragged on a drum lane
+   * must not hand this panel a new prop.
+   */
   mixer: Mixer
+  /** Whether any voice on the deck is soloed — which silences un-soloed pads. */
   soloing: boolean
   intakeError: string | null
   storageNotice: { message: string; severity: 'info' | 'error' } | null
@@ -111,6 +122,7 @@ interface SamplerPanelProps {
   onCycleStep: (laneId: LaneId, stepIndex: number) => void
   onToggleMute: (laneId: LaneId) => void
   onToggleSolo: (laneId: LaneId) => void
+  onLevelChange: (id: LevelParamId, value: number) => void
 }
 
 /** Four live pads plus four drum-shaped sequencer lanes, all on one audio clock. */
@@ -147,6 +159,7 @@ function SamplerInstrument({
   onCycleStep,
   onToggleMute,
   onToggleSolo,
+  onLevelChange,
 }: SamplerPanelProps) {
   const panelRef = useRef<HTMLElement>(null)
   const heldComputerSources = useRef(new Set<string>())
@@ -506,18 +519,20 @@ function SamplerInstrument({
 
       <div className="sampler-sequencer">
         {lanes.map((lane) => {
-          const mix = mixer[lane.id]
-          const silenced = soloing ? !mix?.soloed : (mix?.muted ?? false)
+          const mix = voiceMix(mixer, lane.id)
           return (
             <StepRow
               key={lane.id}
               lane={lane}
-              muted={mix?.muted ?? false}
-              soloed={mix?.soloed ?? false}
-              silenced={silenced}
+              muted={mix.muted}
+              soloed={mix.soloed}
+              silenced={!mixIsAudible(mix, soloing)}
               onCycleStep={onCycleStep}
+              level={mix.level}
+              levelSpotlit={spotlitParams.includes(levelParamForVoice(lane.id).id)}
               onToggleMute={onToggleMute}
               onToggleSolo={onToggleSolo}
+              onLevelChange={onLevelChange}
             />
           )
         })}

@@ -1,10 +1,12 @@
 import { memo } from 'react'
 import { BASS_PARAMS, type BassParamId, type BassSettings } from '../model/bass'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
+import { levelParamForVoice, type LevelParamId, type VoiceId } from '../model/mixer'
 import type { NoteLane, NoteLaneId } from '../model/types'
 import { Knob } from './Knob'
 import { NoteRow } from './NoteRow'
 import { PanelTitle } from './PanelTitle'
+import { VoiceMixStrip } from './VoiceMixStrip'
 
 interface BassPanelProps {
   lane: NoteLane
@@ -17,7 +19,18 @@ interface BassPanelProps {
   onTranspose: (laneId: NoteLaneId, stepIndex: number, semitones: number) => void
   onResize: (laneId: NoteLaneId, stepIndex: number, steps: number) => void
   onParamChange: (id: BassParamId, value: number) => void
+  /** The bass voice's mixer strip, in the panel header. */
+  muted: boolean
+  soloed: boolean
+  /** Not sounding right now (muted, or un-soloed while another voice solos). */
+  silenced: boolean
+  level: number
+  onToggleMute: (voiceId: VoiceId) => void
+  onToggleSolo: (voiceId: VoiceId) => void
+  onLevelChange: (id: LevelParamId, value: number) => void
 }
+
+const BASS_LEVEL = levelParamForVoice('bass')
 
 /**
  * The bass instrument's surface: the note lane on top, its filter and envelope
@@ -37,15 +50,34 @@ function BassInstrument({
   onTranspose,
   onResize,
   onParamChange,
+  muted,
+  soloed,
+  silenced,
+  level,
+  onToggleMute,
+  onToggleSolo,
+  onLevelChange,
 }: BassPanelProps) {
   return (
     <section
-      className="panel bass-panel"
+      className={silenced ? 'panel bass-panel is-silenced' : 'panel bass-panel'}
       id={DECK_SECTION_IDS.bass}
       tabIndex={-1}
       aria-labelledby={sectionTitleId(DECK_SECTION_IDS.bass)}
     >
-      <PanelTitle sectionId={DECK_SECTION_IDS.bass} name="Bass Line" model="MONO SYNTH · BL-303" />
+      <PanelTitle sectionId={DECK_SECTION_IDS.bass} name="Bass Line" model="MONO SYNTH · BL-303">
+        <VoiceMixStrip
+          voiceId="bass"
+          label={lane.label}
+          muted={muted}
+          soloed={soloed}
+          level={level}
+          levelSpotlit={spotlitParams.includes(BASS_LEVEL.id)}
+          onToggleMute={onToggleMute}
+          onToggleSolo={onToggleSolo}
+          onLevelChange={onLevelChange}
+        />
+      </PanelTitle>
       <NoteRow
         lane={lane}
         spotlit={spotlitLane}

@@ -459,6 +459,22 @@ describe('parseLesson — arc goal vocabulary', () => {
     expect(spotlitParamIds(lesson)).toEqual(['swing'])
   })
 
+  it('lets a lesson spotlight and ask for a sweep of any voice’s Level in JSON alone', () => {
+    const lesson = parseLesson({
+      ...validLesson,
+      spotlight: ['knob:closedHatLevel', 'knob:bassLevel'],
+      goal: [
+        { type: 'paramSwept', param: 'pad1Level', minTravel: 0.5 },
+        { type: 'paramSwept', param: 'stabLevel', minTravel: 0.25 },
+      ],
+    })
+    expect(spotlitParamIds(lesson)).toEqual(['closedHatLevel', 'bassLevel'])
+    expect(lesson.goal.map((goal) => (goal as { param: string }).param)).toEqual([
+      'pad1Level',
+      'stabLevel',
+    ])
+  })
+
   it('rejects a sweep for a knob the deck does not have', () => {
     expect(withGoal({ type: 'paramSwept', param: 'cuttof', minTravel: 0.5 })).toThrow(
       /cuttof/,

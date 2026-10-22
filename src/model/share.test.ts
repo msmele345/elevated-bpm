@@ -16,12 +16,15 @@ import {
   setTransportSwing,
   resizeActivePatternNote,
   toggleActivePatternNoteStep,
-  toggleLaneMute,
+  toggleVoiceMute,
+  toggleVoiceSolo,
+  setVoiceLevel,
   transposeActivePatternNote,
   type ProjectState,
 } from './projectState'
 import { DEFAULT_FX_SETTINGS } from './fx'
 import { DEFAULT_MASTER_SETTINGS } from './master'
+import { MAX_LEVEL } from './mixer'
 import { createInitialPattern, cycleStep } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -88,7 +91,7 @@ describe('share URL', () => {
     const source = setFxParamValue(
       setFxParamValue(
         setMasterParamValue(
-          toggleLaneMute(
+          toggleVoiceMute(
             setBassParamValue(
               setTransportBpm(
                 toggleActivePatternNoteStep(
@@ -151,7 +154,7 @@ describe('share URL', () => {
     source = cycleActivePatternStep(source, 'pad2', 5)
     source = cycleActivePatternStep(source, 'pad2', 5)
     source = setSamplerParamValue(source, samplerParamForPad('pad2').id, -7)
-    source = toggleLaneMute(source, 'pad4')
+    source = toggleVoiceMute(source, 'pad4')
     source = {
       ...source,
       instrumentSettings: {
@@ -170,7 +173,7 @@ describe('share URL', () => {
     if (shared.status !== 'ready') throw new Error('Expected a playable shared sampler beat')
     expect(activePattern(shared.project).padLanes).toEqual(activePattern(source).padLanes)
     expect(shared.project.instrumentSettings.sampler).toEqual(source.instrumentSettings.sampler)
-    expect(shared.project.mixer.pad4).toEqual({ muted: true, soloed: false })
+    expect(shared.project.mixer.pad4).toEqual({ muted: true, soloed: false, level: 1 })
     expect(shared.project.sources).toEqual([CURATED_SAMPLE_SOURCE])
   })
 
@@ -431,11 +434,54 @@ describe('share URL', () => {
 
   it('rejects a mixer key for a pad the fixed deck does not have', async () => {
     const invalid = createInitialProjectState()
-    ;(invalid.mixer as Record<string, unknown>).pad5 = { muted: false, soloed: true }
+    ;(invalid.mixer as Record<string, unknown>).pad5 = { muted: false, soloed: true, level: 1 }
 
     await expect(
       readSharedBeat(await createShareUrl(invalid, 'https://elevated-bpm.example/')),
     ).resolves.toMatchObject({ status: 'error', code: 'malformed' })
+  })
+
+  it('round-trips Levels, mutes and solos on every kind of voice', async () => {
+    let sender = setVoiceLevel(createInitialProjectState(), 'closedHat', 0.25)
+    sender = setVoiceLevel(toggleVoiceSolo(sender, 'bass'), 'bass', MAX_LEVEL)
+    sender = setVoiceLevel(toggleVoiceMute(sender, 'stab'), 'stab', 0)
+    sender = toggleVoiceSolo(sender, 'pad3')
+
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error(`Expected a ready link, got ${shared.status}`)
+    expect(shared.project.mixer).toEqual(sender.mixer)
+  })
+
+  it('opens a link written before Level existed with every voice at unity', async () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialProjectState())) as Record<string, unknown>
+    legacy.version = 11
+    legacy.mixer = { kick: { muted: true, soloed: false } }
+
+    const shared = await readSharedBeat(await legacyShareUrl(11, legacy))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a v11 link to open, got ${shared.status}`)
+    expect(shared.project.mixer).toEqual({ kick: { muted: true, soloed: false, level: 1 } })
+  })
+
+  it('rejects a mixer strip for an unknown voice, or with a Level out of range or missing', async () => {
+    const strips: Array<[voiceId: string, strip: unknown]> = [
+      ['master', { muted: false, soloed: false, level: 1 }],
+      ['bass', { muted: false, soloed: false, level: -0.1 }],
+      ['stab', { muted: false, soloed: false, level: MAX_LEVEL + 0.01 }],
+      ['kick', { muted: false, soloed: false, level: 'loud' }],
+      ['kick', { muted: false, soloed: false, level: Number.NaN }],
+      ['pad1', { muted: false, soloed: false }],
+    ]
+    for (const [voiceId, strip] of strips) {
+      const invalid = createInitialProjectState()
+      ;(invalid.mixer as Record<string, unknown>)[voiceId] = strip
+      await expect(
+        readSharedBeat(await createShareUrl(invalid, 'https://elevated-bpm.example/')),
+      ).resolves.toMatchObject({ status: 'error', code: 'malformed' })
+    }
   })
 
   it('previews a shared beat without mutating recipient-only project state', async () => {
@@ -613,6 +659,16 @@ describe('beat bundle', () => {
 
     if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
     expect(opened.project.transport.swing).toBe(0.7)
+  })
+
+  it('carries the mixer so the recipient hears the sender’s balance', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const mixed = setVoiceLevel(toggleVoiceSolo(sender, 'stab'), 'perc', 0.4)
+
+    const opened = await readBundle(await exportedBytes(mixed, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.mixer).toEqual(mixed.mixer)
   })
 
   it('names itself after the beat and blanks the recipient-owned fields a link does', async () => {

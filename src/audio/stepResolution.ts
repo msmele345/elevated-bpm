@@ -1,4 +1,4 @@
-import { audibleLaneIds, type Mixer } from '../model/mixer'
+import { audibleVoiceIds, type Mixer } from '../model/mixer'
 import { NOTE_LANES, noteEventAtStep, type LaneNoteEvent } from '../model/note'
 import { swingOffsetSeconds, type TransportSettings } from '../model/transport'
 import type { LaneId, Pattern } from '../model/types'
@@ -59,13 +59,16 @@ export interface StepResolution {
 }
 
 /**
- * Resolve one 16th. Drum and pad lanes pass through the mixer — muted lanes
- * stay silent and, when any lane is soloed, only soloed lanes sound — and when
- * a choker lane fires its target is cut, silencing a still-ringing voice from
- * an earlier step and preventing a same-step target from sounding, so the
- * open hat behaves like real 909 hardware under the closed hat. Note lanes do
- * not consult the mixer yet. Swing moves when the 16th lands, never what is on
- * it: the step index comes from the straight grid.
+ * Resolve one 16th. Every voice — drum, pad, bass and stab — passes through
+ * the one mixer rule: muted voices stay silent and, when any voice is soloed,
+ * only soloed voices sound. When a choker lane fires its target is cut,
+ * silencing a still-ringing voice from an earlier step and preventing a
+ * same-step target from sounding, so the open hat behaves like real 909
+ * hardware under the closed hat. Level is not decided here: it is the voice's
+ * channel gain, applied after the accent gain, so a hit's gain stays its
+ * accent alone and accents keep their headroom at any Level. Swing moves when
+ * the 16th lands, never what is on it: the step index comes from the straight
+ * grid.
  */
 export function resolveStep({
   pattern,
@@ -83,7 +86,7 @@ export function resolveStep({
   return {
     starts: hits.filter((hit) => !choked.has(hit.laneId)),
     chokes,
-    notes: notesAtStep(pattern, stepIndex),
+    notes: notesAtStep(pattern, stepIndex, mixer),
     swingOffset: swingOffsetSeconds(stepIndex, transport.bpm, transport.swing),
   }
 }
@@ -91,7 +94,7 @@ export function resolveStep({
 /** Every audible drum and pad lane sounding on `stepIndex`, in deck order, with its velocity. */
 function hitsAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer): Hit[] {
   const lanes = [...pattern.lanes, ...pattern.padLanes]
-  const audible = new Set(audibleLaneIds(lanes.map((lane) => lane.id), mixer))
+  const audible = new Set(audibleVoiceIds(lanes.map((lane) => lane.id), mixer))
   const hits: Hit[] = []
   for (const lane of lanes) {
     if (!audible.has(lane.id)) continue
@@ -102,9 +105,13 @@ function hitsAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer): Hit[] {
   return hits
 }
 
-/** Every melodic event starting on this 16th, one at most per note lane. */
-function notesAtStep(pattern: Pattern, stepIndex: number): LaneNoteEvent[] {
-  return NOTE_LANES.flatMap(({ id }) => {
+/** Every audible melodic event starting on this 16th, one at most per note lane. */
+function notesAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer): LaneNoteEvent[] {
+  const audible = audibleVoiceIds(
+    NOTE_LANES.map(({ id }) => id),
+    mixer,
+  )
+  return audible.flatMap((id) => {
     const event = noteEventAtStep(pattern, id, stepIndex)
     return event ? [{ laneId: id, ...event }] : []
   })

@@ -9,7 +9,7 @@ import {
 import { BASS_PARAMS } from './bass'
 import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
-import type { Mixer } from './mixer'
+import { MAX_LEVEL, VOICES, type Mixer } from './mixer'
 import { MAX_NOTE_LENGTH, MIN_NOTE_LENGTH, NOTE_LANES } from './note'
 import { KIT_LANES } from './pattern'
 import {
@@ -294,18 +294,24 @@ function isSources(value: unknown): value is SampleSource[] {
   return true
 }
 
+const VOICE_IDS: ReadonlySet<string> = new Set(VOICES.map(({ id }) => id))
+
+/**
+ * Every strip names a voice the deck has and is complete: mute and solo as
+ * booleans, Level a gain from silence to +6 dB. Older payloads reach here
+ * already repaired by migration, so a strip missing a field is a damaged one.
+ */
 function isMixer(value: unknown): value is Mixer {
   if (!isRecord(value)) return false
-  const laneIds = new Set<string>([
-    ...KIT_LANES.map(({ id }) => id),
-    ...PAD_LANES.map(({ id }) => id),
-  ])
   return Object.entries(value).every(
-    ([laneId, mix]) =>
-      laneIds.has(laneId) &&
+    ([voiceId, mix]) =>
+      VOICE_IDS.has(voiceId) &&
       isRecord(mix) &&
       typeof mix.muted === 'boolean' &&
-      typeof mix.soloed === 'boolean',
+      typeof mix.soloed === 'boolean' &&
+      isFiniteNumber(mix.level) &&
+      mix.level >= 0 &&
+      mix.level <= MAX_LEVEL,
   )
 }
 

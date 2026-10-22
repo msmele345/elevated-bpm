@@ -12,7 +12,7 @@ import {
   masterBusParams,
   type MasterSettings,
 } from '../model/master'
-import { laneIsAudible, type Mixer } from '../model/mixer'
+import { VOICES, voiceIsAudible, voiceLevel, type Mixer, type VoiceId } from '../model/mixer'
 import { midiToFrequency } from '../model/note'
 import { SCOPE_SPEC } from '../model/scope'
 import {
@@ -95,6 +95,13 @@ let voices: Record<LaneId, Voice> | null = null
  * rebuild them.
  */
 let padVoices: Record<PadLaneId, PadVoice> | null = null
+/**
+ * One channel gain per voice — the Level knob. It sits after everything that
+ * shapes a single hit or note (the accent gain, the synth's velocity, the bass
+ * filter), so live and sequenced sound pass through it alike and an accent
+ * keeps its headroom whatever the Level.
+ */
+let channels: Record<VoiceId, Tone.Gain> | null = null
 let samplesLoaded: Promise<void> | null = null
 
 /**
@@ -392,9 +399,17 @@ export function setPattern(pattern: Pattern): void {
   currentPattern = pattern
 }
 
-/** Point the scheduler at the latest mute/solo state. Cheap; call on every edit. */
+/**
+ * Point the scheduler at the latest mixer. Cheap; call on every edit. Mute and
+ * solo are read per 16th and per live hit; Level ramps each channel over a few
+ * milliseconds so a dragged knob fades rather than clicks.
+ */
 export function setMixer(mixer: Mixer): void {
   currentMixer = mixer
+  if (!channels) return
+  for (const { id } of VOICES) {
+    channels[id].gain.rampTo(voiceLevel(mixer, id), 0.02)
+  }
 }
 
 /** Point pad hits at the latest regions and Tune values. Cheap; call on every edit. */
@@ -603,11 +618,23 @@ function ensureVoices(): void {
   // Every instrument reaches the master through its own send tap, so each one
   // is already on the FX bus rather than being retrofitted onto it later.
   const taps = (fx = createFxBus(master.input)).taps
+  // Each voice's channel feeds its instrument's send tap.
+  const tapOf = (id: VoiceId): SendTap =>
+    isPadLaneId(id) ? taps.sampler : id === 'bass' || id === 'stab' ? taps[id] : taps.drums
+  // Built at the mixer's Level rather than ramped to it: a Tone ramp starts a
+  // look-ahead from now, and a first live note must not hear unity meanwhile.
+  const voiceChannels = (channels = Object.fromEntries(
+    VOICES.map(({ id }) => [
+      id,
+      new Tone.Gain(voiceLevel(currentMixer, id)).connect(tapOf(id).input),
+    ]),
+  ) as Record<VoiceId, Tone.Gain>)
   // One send for the whole kit and one for the sampler. Per-lane accent gains
-  // sit before those taps, so velocity rides through to the echo.
+  // and channel Levels sit before those taps, so velocity and Level ride
+  // through to the echo.
   const drumEntries = (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(
     ([laneId, url]) => {
-      const gain = new Tone.Gain(1).connect(taps.drums.input)
+      const gain = new Tone.Gain(1).connect(voiceChannels[laneId])
       const player = new Tone.Player(url).connect(gain)
       return [laneId, { player, gain }] as const
     },
@@ -615,7 +642,7 @@ function ensureVoices(): void {
   // Pad players are built empty. A pad has no file of its own — its audio
   // arrives from the registry at trigger time, whichever source it points at.
   const padEntries = PAD_LANES.map((pad) => {
-    const gain = new Tone.Gain(1).connect(taps.sampler.input)
+    const gain = new Tone.Gain(1).connect(voiceChannels[pad.id])
     const player = new Tone.Player().connect(gain)
     return [pad.id, { player, gain }] as const
   })
@@ -626,9 +653,10 @@ function ensureVoices(): void {
       createPadVoice(player, gain, sliceRegistry, padId),
     ]),
   ) as Record<PadLaneId, PadVoice>
-  bass = createBassVoice(taps.bass.input)
-  // Live and sequenced stabs share the tap, so both are on the send.
-  stab = createStabVoices(() => createStabSynth(taps.stab.input))
+  bass = createBassVoice(voiceChannels.bass)
+  // Live and sequenced stabs share one channel — and with it the tap — so a
+  // pool rebuilt after stop lands on the same Level and the same send.
+  stab = createStabVoices(() => createStabSynth(voiceChannels.stab))
   analyser = new Tone.Analyser('fft', SCOPE_SPEC.binCount)
   // Snappier than the analyser's 0.8 default: the scope does its own fall
   // decay, so internal smoothing only has to keep single frames from jittering.
@@ -655,6 +683,7 @@ function ensureVoices(): void {
       stab,
       master,
       fx,
+      channels,
       /**
        * Bytes the open editor is holding. Reading a `let` through a function,
        * so it reports what the engine holds *now* — closing the editor has to
@@ -691,6 +720,9 @@ export function attackStabNote(source: string, midi: number): void {
   void Tone.start().then(() => {
     ensureVoices()
     if (!stabNoteHolds.isCurrent(attack)) return
+    // The stab is a voice like any other: a muted (or out-soloed) stab takes no
+    // live notes either, and lights no keys, exactly as a muted pad does.
+    if (!voiceIsAudible('stab', currentMixer)) return
     stab?.attackLive(midiToFrequency(attack.midi), Tone.immediate(), 0.82)
     stabSoundingNotes.attackLive(attack.midi)
   })
@@ -712,7 +744,7 @@ export function attackPad(inputSourceId: string, padId: PadLaneId): void {
   // Queue the first gesture behind the shared preload instead of throwing it
   // away while the audio graph is still being built.
   void unlockAudio().then(() => {
-    if (!laneIsAudible(padId, currentMixer)) return
+    if (!voiceIsAudible(padId, currentMixer)) return
     const now = Tone.immediate()
     triggerPlayablePad(padId, 1, now, now, 'live')
   })

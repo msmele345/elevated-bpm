@@ -54,16 +54,42 @@ test file.
 
 ## Acceptance criteria
 
-- [ ] One pure function decides every sound on a 16th (drum/pad starts with
+- [x] One pure function decides every sound on a 16th (drum/pad starts with
       gains, chokes, note events); the transport callback contains no
-      sequencing decisions, only application of the result
-- [ ] No audible or behavioural change: every existing hit, choke, mixer,
-      note-event and engine test passes unchanged in what it asserts
-- [ ] New step-resolution tests cover a step mixing drums, a choke and bass +
-      stab notes in one result
-- [ ] In-browser: the demo groove plus a programmed bassline and stab plays
+      sequencing decisions, only application of the result — `resolveStep`
+      (`src/audio/stepResolution.ts`, the former `hits.ts`) takes a
+      `{ pattern, mixer, stepIndex }` input object and returns
+      `{ starts, chokes, notes }`. The old `hitsAtStep`/`voiceStep` are now
+      private to it, and `noteEventsAtStep` moved out of `note.ts` into it
+      (`noteEventAtStep`, the per-lane monophony rule, stays in the model). The
+      Tone callback derives the step index from ticks exactly as before
+      (`Math.round`, straight grid), calls `resolveStep` once and only routes
+      the result to voices
+- [x] No audible or behavioural change: every existing hit, choke, mixer,
+      note-event and engine test passes unchanged in what it asserts — the
+      eleven hit/choke cases moved from `hits.test.ts` to
+      `stepResolution.test.ts` with their assertions verbatim, now reached
+      through `resolveStep`; the `noteEventsAtStep` case moved the same way.
+      Note lanes still ignore the mixer, pinned by a test so EB3-02 changes it
+      on purpose. A new engine test in the mocked-Tone harness, written and
+      green against the old callback *before* the refactor, proves the callback
+      applies a mixed result as given: open-hat stop, kick/closed-hat starts at
+      their accent gains, bass and stab notes at the scheduled time with
+      length × one 16th. 589 tests pass, `tsc -b && vite build` clean
+- [x] New step-resolution tests cover a step mixing drums, a choke and bass +
+      stab notes in one result — `stepResolution.test.ts` asserts the whole
+      result for an accented kick, a closed hat choking a same-step open hat,
+      a perc, a two-step bass note and a transposed stab, plus a silent step
+- [x] In-browser: the demo groove plus a programmed bassline and stab plays
       identically before and after (event timestamps per lane match across two
-      loops), zero console errors
+      loops), zero console errors — the demo groove plus a four-on-the-floor
+      kick, a six-note bassline (two transposed, one clipped by the next note,
+      one wrapping the loop) and two stabs was loaded via a share link, and the
+      app's own Tone module was wrapped to log every `Player.start/stop` and
+      synth `triggerAttackRelease` (lane, pitch, duration, time). Captured on the
+      unchanged code, then again after: both runs logged the same 48 events
+      over two loops at 130 BPM, byte-identical in loop offset (to the µs),
+      frequency, duration and velocity, with zero console errors
 
 ## Testing decisions
 

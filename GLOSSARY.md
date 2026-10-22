@@ -128,7 +128,7 @@ conversations use, and exactly what each one means here. Last reviewed
 - **Bank (pattern bank)** [v3 spec]. The four pattern slots A–D. `patterns`
   always holds exactly four. This is not the source bank.
 - **Choke.** One lane cutting another's still-ringing sample: the closed hat
-  chokes the open hat, as on a 909. Code: `CHOKES`, `voiceStep`.
+  chokes the open hat, as on a 909. Code: `CHOKES`, `resolveStep`.
 - **Copy / Clear** [v3 spec]. Copy deep-copies the selected slot's lanes onto the next
   slot pressed and then selects that slot. Clear empties the selected slot. Both ask
   with an inline confirm before overwriting programming, never a browser
@@ -172,11 +172,14 @@ conversations use, and exactly what each one means here. Last reviewed
 - **Slot** [v3 spec]. One position in the pattern bank, named by its letter A–D.
 - **Step.** One 16th-note cell. There are 16 per lane (`STEP_COUNT`), and each lasts
   `secondsPerStep(bpm)`, which is 15/bpm seconds.
-- **Step resolution** [v3 spec]. The one pure function that decides what sounds on a
-  16th: starts with accent gains, chokes, note events (accent, legato, tie), the
-  swing offset, and the playing slot. The Tone callback applies its result and
-  decides nothing itself. It consolidates today's `voiceStep`/`hitsAtStep` and
-  `noteEventAtStep`.
+- **Step resolution.** The one pure function that decides what sounds on a
+  16th. It reads the pattern, the mixer and the step index, and returns drum and
+  pad starts with their accent gains (after mute/solo), chokes, and bass and stab
+  note events (pitch and length in steps). Note lanes don't consult the mixer yet.
+  The Tone callback applies its result and decides nothing itself. [v3 spec] The
+  input grows to the Bank, Transport and bass patch, and the result gains the
+  swing offset, the playing slot, mixer-filtered note events, and per-note
+  accent, legato and gate tie. Code: `resolveStep`, `StepResolution`.
 - **Swing** [v3 spec]. The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75).
   Every odd 16th is delayed by (swing − 0.5) × 2 × one step, so 66% is roughly a triplet feel
   and 75% is dotted. The Deck applies this offset itself and Tone's own swing stays at 0,

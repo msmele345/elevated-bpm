@@ -14,7 +14,6 @@ import {
   midiToFrequency,
   midiToNoteName,
   noteEventAtStep,
-  noteEventsAtStep,
   resizeNoteStep,
   toggleNoteStep,
   transposeNoteStep,
@@ -204,31 +203,6 @@ describe('noteEventAtStep', () => {
     const legacy = { ...createInitialPattern(), noteLanes: [] } as Pattern
 
     expect(noteEventAtStep(legacy, 'bass', 0)).toBeNull()
-  })
-})
-
-describe('noteEventsAtStep', () => {
-  it('returns bass and stab events from the same sequencer step', () => {
-    const bassAndStab = toggleNoteStep(
-      toggleNoteStep(createInitialPattern(), 'bass', 8),
-      'stab',
-      8,
-    )
-
-    expect(noteEventsAtStep(bassAndStab, 8)).toEqual([
-      {
-        laneId: 'bass',
-        midi: DEFAULT_PITCH,
-        frequency: midiToFrequency(DEFAULT_PITCH),
-        lengthSteps: MIN_NOTE_LENGTH,
-      },
-      {
-        laneId: 'stab',
-        midi: STAB_DEFAULT_PITCH,
-        frequency: midiToFrequency(STAB_DEFAULT_PITCH),
-        lengthSteps: MIN_NOTE_LENGTH,
-      },
-    ])
   })
 })
 

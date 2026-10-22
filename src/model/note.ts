@@ -187,14 +187,6 @@ export function noteEventAtStep(
   }
 }
 
-/** Every melodic event starting on one shared 16th-note transport boundary. */
-export function noteEventsAtStep(pattern: Pattern, stepIndex: number): LaneNoteEvent[] {
-  return NOTE_LANES.flatMap(({ id }) => {
-    const event = noteEventAtStep(pattern, id, stepIndex)
-    return event ? [{ laneId: id, ...event }] : []
-  })
-}
-
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 /** MIDI note number as a keyboard name, e.g. 36 → "C2". */

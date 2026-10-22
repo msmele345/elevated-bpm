@@ -17,7 +17,7 @@ import {
   type SampleSource,
   type SamplerSettings,
 } from './sampler'
-import { MAX_BPM, MAX_SWING, MIN_BPM, MIN_SWING, swingToPercent, wholeSwingPercent } from './transport'
+import { MAX_BPM, MIN_BPM, SWING_PARAM, wholeSwingPercent } from './transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -556,9 +556,6 @@ function parseBpmInRangeGoal(
   return { type: 'bpmInRange', min, max }
 }
 
-const MIN_SWING_PERCENT = swingToPercent(MIN_SWING)
-const MAX_SWING_PERCENT = swingToPercent(MAX_SWING)
-
 function parseSwingInRangeGoal(
   goal: Partial<SwingInRangeGoal>,
   lessonId: string,
@@ -570,13 +567,13 @@ function parseSwingInRangeGoal(
   if (
     typeof min !== 'number' ||
     typeof max !== 'number' ||
-    min < MIN_SWING_PERCENT ||
-    max > MAX_SWING_PERCENT ||
+    min < SWING_PARAM.min ||
+    max > SWING_PARAM.max ||
     min > max
   ) {
     fail(
       lessonId,
-      `goal[${index}] swing range must run min → max inside [${MIN_SWING_PERCENT}, ${MAX_SWING_PERCENT}] percent`,
+      `goal[${index}] swing range must run min → max inside [${SWING_PARAM.min}, ${SWING_PARAM.max}] percent`,
     )
   }
   return { type: 'swingInRange', min, max }

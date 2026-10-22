@@ -588,7 +588,7 @@ describe('migrateProjectState', () => {
     expect(migrated.version).toBe(PROJECT_STATE_VERSION)
   })
 
-  it('repairs a hand-edited swing on a v10 document rather than handing the deck a bad value', () => {
+  it('opens a v10 document at straight swing, whatever stray swing field it carries', () => {
     const v10 = JSON.parse(
       JSON.stringify({ ...createInitialProjectState(), version: 10 }),
     ) as Record<string, unknown>

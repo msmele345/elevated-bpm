@@ -50,9 +50,9 @@ export type TransportParamId = 'swing'
 export const SWING_PARAM: ParamSpec & { id: TransportParamId } = {
   id: 'swing',
   label: 'Swing',
-  min: MIN_SWING * 100,
-  max: MAX_SWING * 100,
-  default: DEFAULT_SWING * 100,
+  min: swingToPercent(MIN_SWING),
+  max: swingToPercent(MAX_SWING),
+  default: swingToPercent(DEFAULT_SWING),
   unit: '%',
 }
 

@@ -113,7 +113,13 @@ strip. That is expected.
       loops all 36.9231 ms late (formula 36.923), even steps 0, max error 0 ms.
       75% (set live with End): 18 off-beats over 2.3 loops all 57.6923 ms late
       (formula 57.692), max error 0 ms. Every kick and hat time had a bass note
-      at the identical time; kicks stayed 461.538 ms apart; zero console errors
+      at the identical time; kicks stayed 461.538 ms apart; zero console errors.
+      Under swing a one-step bass note on an odd 16th releases *after* the next
+      even note's attack on the monophonic synth; Tone's next attack cancels
+      that stale release. Checked at 75% on 11 even notes: their envelope 5/20/40 ms
+      past the stale release point read 0.393/0.346/0.306 against
+      0.395/0.347/0.307 straight (still decaying toward the 0.25 sustain, never
+      released), and the oscillator's stale stop was cancelled on all 10 checked
 - [x] `GLOSSARY.md` updated — Swing and Transport lose their spec tags and
       describe what shipped; Step resolution, Goal context, goal types, Param
       registry, Live play, Playhead, Neutral, Demo groove and ProjectState (v11)

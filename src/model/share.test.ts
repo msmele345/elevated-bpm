@@ -702,6 +702,8 @@ describe('beat bundle', () => {
     expect(opened.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(opened.project).lanes).toEqual(activePattern(sender).lanes)
     expect(opened.project.transport.bpm).toBe(138)
+    // A version that predates swing opens straight, exactly as it played.
+    expect(opened.project.transport.swing).toBe(0.5)
     // A version that predates the sampler brings empty pads, so the bundle
     // needs no audio to be complete.
     expect(opened.project.instrumentSettings.sampler.pad1.region).toBeNull()

@@ -772,13 +772,15 @@ export async function play(): Promise<void> {
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
       if (!currentPattern || !voices) return
       // Step resolution decides everything that sounds on this 16th; the
-      // callback only applies it to the voices. The tempo is the transport's
-      // live value — the one note lengths are measured in — so a swing offset
-      // and a note length agree even mid-ramp.
+      // callback only applies it to the voices. The tempo is read once, live,
+      // so the swing offset and every note length on this 16th are measured
+      // in the same step even mid-ramp.
+      const liveBpm = transport.bpm.value
+      const stepSeconds = secondsPerStep(liveBpm)
       const { starts, chokes, notes, swingOffset } = resolveStep({
         pattern: currentPattern,
         mixer: currentMixer,
-        transport: { bpm: transport.bpm.value, swing: currentSwing },
+        transport: { bpm: liveBpm, swing: currentSwing },
         stepIndex,
       })
       // Every sequenced sound on this 16th lands at the same, possibly swung,
@@ -805,7 +807,7 @@ export async function play(): Promise<void> {
       // polyphonic pool from live input so same-pitch releases cannot steal a
       // held live key.
       for (const note of notes) {
-        const duration = note.lengthSteps * secondsPer16th()
+        const duration = note.lengthSteps * stepSeconds
         if (note.laneId === 'bass' && bass) {
           bass.synth.triggerAttackRelease(note.frequency, duration, at)
         }

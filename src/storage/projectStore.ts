@@ -12,7 +12,7 @@ import { STORES, withStore } from './db'
  * outright.
  */
 
-const CURRENT_KEY = 'current'
+export const CURRENT_KEY = 'current'
 
 /** Persist the current document, replacing any previous save. */
 export async function saveProjectState(state: ProjectState): Promise<void> {

@@ -1,4 +1,6 @@
-import curatedBreak from './curatedBreak.json'
+// The import attribute lets Node's ESM loader load the model too: the browser
+// suite builds seed documents from it outside the bundler.
+import curatedBreak from './curatedBreak.json' with { type: 'json' }
 import { claimsInstrumentKeys } from './instrumentKeys'
 import { clampParam, type ParamSpec } from './knob'
 import { sliceKey } from './slice'

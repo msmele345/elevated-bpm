@@ -207,12 +207,12 @@ Every new setting defaults to the sound the Deck makes today: swing 50%, level 0
 
 - One ProjectState version bump per issue that changes the document, chained through the existing migration hook. Every step adds fields only, with defaults that reproduce today's sound:
   - **v11**: Transport gains `swing`, a fraction from 0.50 to 0.75, default 0.50.
-  - **v12**: the mixer is keyed by voice (drum, pad and note lanes). Each entry gains `level`, a linear gain multiplier from 0 to about 2 (+6 dB), default 1. Missing entries and missing fields still mean "unity, unmuted, unsoloed".
+  - **v12**: the mixer is keyed by voice (drum, pad and note lanes). Each entry gains `level`, a linear gain multiplier from 0 to about 2 (+6 dB), default 1. A missing entry still means "unity, unmuted, unsoloed". A missing field is repaired by migration: v11 → v12 fills `level: 1` and any missing flag on every existing entry. A v12 payload is not accepted with a missing field; every entry in a v12 link or bundle must carry `muted`, `soloed` and `level`.
   - **v13**: `patterns` always holds exactly four slots, in A–D order, each named by its letter. The existing pattern becomes A and keeps its id, so `activePatternId` stays valid; B–D are added empty with fresh ids.
   - **v14**: every note step in every slot gains `slide: false` and `accent: false`. The bass patch gains `envMod` with default 0, and the settings repair clamps or defaults it the way it does every other knob.
 - The share/bundle validator is updated at each version, and it is the one place both links and bundles are checked. It checks:
   - swing range;
-  - mixer voice ids and level range;
+  - mixer voice ids, complete entries (`muted`, `soloed`, `level`) and level range;
   - 1–4 patterns with unique slot letters, with `activePatternId` among them;
   - boolean note flags;
   - the envMod range.

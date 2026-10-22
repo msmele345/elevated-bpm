@@ -20,8 +20,9 @@ volume".
 ### In
 
 - Mixer keyed by voice (drum, pad and note lane ids). Each entry gains `level`,
-  a linear gain multiplier 0 to ~2 (+6 dB), default 1. Missing entries and
-  missing fields still mean "unity, unmuted, unsoloed". v11 → v12 migration.
+  a linear gain multiplier 0 to ~2 (+6 dB), default 1. A missing entry still
+  means "unity, unmuted, unsoloed"; a missing field is repaired by the v11 → v12
+  migration, and a v12 link or bundle must carry complete entries.
 - A channel gain per voice, ramped ~20 ms on change, sitting **after** the
   per-hit accent gain and note velocity — live and sequenced sound pass through
   it alike, and accents keep their headroom.

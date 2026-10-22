@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// The layout harness runs against the production build, which Vite's preview
+// The layout seam runs against the production build, which Vite's preview
 // server serves. `npm run test:e2e` builds first; CI builds in its own step.
 // Once per machine, install the browser with `npx playwright install chromium`.
 const PORT = 4173
@@ -8,7 +8,8 @@ const PORT = 4173
 export default defineConfig({
   testDir: 'e2e',
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
+  // No retries: a retry that passes would hide the failure the CI artifact is for.
+  retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: `http://localhost:${PORT}`,

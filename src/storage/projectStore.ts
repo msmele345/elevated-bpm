@@ -10,6 +10,9 @@ import { STORES, withStore } from './db'
  * shared with the sampler's audio and lives in `db.ts`, because IndexedDB
  * allows one version per database and two modules disagreeing about it fails
  * outright.
+ *
+ * `CURRENT_KEY` is exported only so the layout seam's seed helper writes the
+ * record this store reads.
  */
 
 export const CURRENT_KEY = 'current'

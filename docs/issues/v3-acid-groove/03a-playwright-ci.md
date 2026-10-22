@@ -44,9 +44,10 @@ test itself is written first thing in EB3-03b.
       green on this PR — job `e2e` in `.github/workflows/ci.yml` shares the
       `build-and-test` triggers. Pending a push and PR; not yet run on GitHub.
 - [x] Smoke test: fresh project at 1280×720 renders with Play visible —
-      `e2e/smoke.spec.ts` wipes storage, loads `/`, and finds
-      `getByRole('button', { name: 'Play', exact: true })` visible at the
-      config's 1280×720 viewport on the production build.
+      `e2e/smoke.spec.ts` seeds a 137 BPM project, wipes it, loads `/`, and finds
+      `getByRole('button', { name: 'Play', exact: true })` visible and the tempo
+      back at its default, on the production build at the config's 1280×720
+      viewport.
 - [x] State-seeding helper exists and is used by at least the smoke test (wiped
       IndexedDB) — `e2e/helpers/project.ts`: `wipeProjectStorage` (smoke) and
       `seedProjectState` (`e2e/seed.spec.ts`). Writes run on a static asset before
@@ -60,13 +61,18 @@ test itself is written first thing in EB3-03b.
 
 ## Implementation notes
 
-- **Second spec.** `e2e/seed.spec.ts` is a harness self-check, not a layout
-  assertion. Without it `seedProjectState` has no caller and no proof. The ticket
-  asked for one smoke test; this is the only addition.
+- **Second spec.** `e2e/seed.spec.ts` checks the seed helper itself, not a
+  layout fact. Without it `seedProjectState` has no caller and no proof. The
+  ticket asked for one smoke test; this is the only addition.
+- **The wipe is observable.** A fresh browser context is already empty, so the
+  smoke test seeds a 137 BPM project before it wipes, and checks the default
+  tempo afterwards. Without the seed, a broken wipe would pass unnoticed.
 - **Outside the suite.** `src/storage/db.ts` and `src/storage/projectStore.ts`
   export `DB_NAME`, `DB_VERSION` and `CURRENT_KEY`, so the helper cannot drift
   from the app. `src/model/sampler.ts` gets `with { type: 'json' }` on its JSON
   import, the only bare JSON import in the model graph: Node's ESM loader refuses
   the bare form, and the seed helper builds documents from the model.
-  `tsconfig.e2e.json` puts the suite under `tsc -b`.
+  `tsconfig.e2e.json` puts the suite under `tsc -b`, so `npm run build`, which
+  `build-and-test` also runs, fails on a suite type error too. `@types/node` stays
+  out of the app's compile through `"types": []` in `tsconfig.app.json`.
 - **Local setup.** Run `npx playwright install chromium` once per machine.

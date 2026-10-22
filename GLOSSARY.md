@@ -416,6 +416,11 @@ voice Level and bass/stab mute & solo) have shipped.
   fifth drum lane must sit at or above 720px.
 - **Issue track.** A release's ordered set of issue files, sliced from its spec.
   Not a curriculum track.
+- **Layout seam.** Seam 6 in the v3 spec's Testing Decisions: the facts jsdom
+  cannot measure, checked in a real browser. It runs as the Playwright suite in
+  `e2e/`, against the production build, in the `e2e` CI job. Today it holds only
+  the smoke check; the fold and sideways-scroll checks arrive with EB3-03b.
+  Code: `playwright.config.ts`.
 - **Performance rule.** React re-renders on user edits only, never on the audio
   clock. The playhead, meters, LEDs and room light animate from rAF reading the
   engine directly.

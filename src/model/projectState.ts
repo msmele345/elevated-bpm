@@ -1,3 +1,4 @@
+import { clampParam } from './knob'
 import {
   createBassSettings,
   DEFAULT_BASS_SETTINGS,
@@ -19,7 +20,16 @@ import {
   type MasterParamId,
   type MasterSettings,
 } from './master'
-import type { LaneMix, Mixer } from './mixer'
+import {
+  levelParamForVoice,
+  UNITY_MIX,
+  voiceMix,
+  voiceOfLevelParam,
+  type LevelParamId,
+  type Mixer,
+  type VoiceId,
+  type VoiceMix,
+} from './mixer'
 import { resizeNoteStep, toggleNoteStep, transposeNoteStep, withNoteLanes } from './note'
 import {
   createDemoPattern,
@@ -67,8 +77,9 @@ import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 // v8 added the shared FX bus and its per-instrument send levels; v9 added the
 // sampler's source metadata, pad lanes and pad settings; v10 makes the
 // curriculum multi-track — one lesson pointer per arc, plus the arc on screen;
-// v11 adds swing to the transport.
-export const PROJECT_STATE_VERSION = 11
+// v11 adds swing to the transport; v12 keys the mixer by voice — bass and stab
+// join the drum and pad lanes — and gives every strip a Level.
+export const PROJECT_STATE_VERSION = 12
 
 /**
  * The arc a document that predates the multi-track curriculum was on.
@@ -107,7 +118,7 @@ export interface ProjectState {
   sources: SampleSource[]
   lessonProgress: Record<string, LessonProgress>
   prefs: Record<string, unknown>
-  /** Per-lane mute/solo. Absent lanes are audible and un-soloed. */
+  /** Per-voice mute, solo and Level. Absent voices are audible, un-soloed, at unity. */
   mixer: Mixer
   /** Which curriculum track is on screen. */
   activeArcId: string
@@ -476,29 +487,42 @@ export function enterLesson(
   )
 }
 
-const AUDIBLE: LaneMix = { muted: false, soloed: false }
-
-/** Immutably flip one field of one lane's mixer strip. */
-function updateLaneMix(
+/** Immutably change one voice's mixer strip. */
+function updateVoiceMix(
   state: ProjectState,
-  laneId: LaneId,
-  patch: Partial<LaneMix>,
+  voiceId: VoiceId,
+  patch: Partial<VoiceMix>,
 ): ProjectState {
-  const current = state.mixer[laneId] ?? AUDIBLE
   return {
     ...state,
-    mixer: { ...state.mixer, [laneId]: { ...current, ...patch } },
+    mixer: { ...state.mixer, [voiceId]: { ...voiceMix(state.mixer, voiceId), ...patch } },
   }
 }
 
-/** Immutably toggle a lane's mute. */
-export function toggleLaneMute(state: ProjectState, laneId: LaneId): ProjectState {
-  return updateLaneMix(state, laneId, { muted: !(state.mixer[laneId]?.muted ?? false) })
+/** Immutably toggle a voice's mute. */
+export function toggleVoiceMute(state: ProjectState, voiceId: VoiceId): ProjectState {
+  return updateVoiceMix(state, voiceId, { muted: !voiceMix(state.mixer, voiceId).muted })
 }
 
-/** Immutably toggle a lane's solo. */
-export function toggleLaneSolo(state: ProjectState, laneId: LaneId): ProjectState {
-  return updateLaneMix(state, laneId, { soloed: !(state.mixer[laneId]?.soloed ?? false) })
+/** Immutably toggle a voice's solo. */
+export function toggleVoiceSolo(state: ProjectState, voiceId: VoiceId): ProjectState {
+  return updateVoiceMix(state, voiceId, { soloed: !voiceMix(state.mixer, voiceId).soloed })
+}
+
+/** Immutably set a voice's Level, clamped to silence…+6 dB. */
+export function setVoiceLevel(state: ProjectState, voiceId: VoiceId, level: number): ProjectState {
+  return updateVoiceMix(state, voiceId, {
+    level: clampParam(levelParamForVoice(voiceId), level),
+  })
+}
+
+/** Immutably set the Level a uniquely named Level knob turns. */
+export function setLevelParamValue(
+  state: ProjectState,
+  id: LevelParamId,
+  level: number,
+): ProjectState {
+  return setVoiceLevel(state, voiceOfLevelParam(id), level)
 }
 
 /**
@@ -533,7 +557,9 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
     case 9:
       return migrateProjectState(migrateV9ToV10(doc as ProjectStateV9))
     case 10:
-      return migrateV10ToV11(doc as ProjectStateV10)
+      return migrateProjectState(migrateV10ToV11(doc as ProjectStateV10))
+    case 11:
+      return migrateV11ToV12(doc as ProjectStateV11)
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:
@@ -577,8 +603,11 @@ type ProjectStateV1 = ProjectStateBase & { version: 1 }
 /** v2 grew the full kit but had no mixer. */
 type ProjectStateV2 = ProjectStateBase & { version: 2 }
 
+/** Every mixer strip before v12: mute and solo, keyed by drum or pad lane. */
+type MixerPreV12 = Partial<Record<string, Partial<Omit<VoiceMix, 'level'>>>>
+
 /** v3 had the mixer, but patterns were drums-only and no synth was patched. */
-type ProjectStateV3 = ProjectStateBase & { version: 3; mixer: Mixer }
+type ProjectStateV3 = ProjectStateBase & { version: 3; mixer: MixerPreV12 }
 
 /** Instrument patches before v7 carried only the bass; the master bus had no macros. */
 interface InstrumentSettingsPreV7 {
@@ -634,9 +663,16 @@ type ProjectStateV9 = SingleArcProjectState & {
 }
 
 /** v10 had the multi-track curriculum, but every 16th sat dead on the grid. */
-type ProjectStateV10 = Omit<ProjectState, 'version' | 'transport'> & {
+type ProjectStateV10 = Omit<ProjectState, 'version' | 'transport' | 'mixer'> & {
   version: 10
   transport: TransportPreV11
+  mixer: MixerPreV12
+}
+
+/** v11 had swing, but no Level, and bass and stab had no strip of their own. */
+type ProjectStateV11 = Omit<ProjectState, 'version' | 'mixer'> & {
+  version: 11
+  mixer: MixerPreV12
 }
 
 function migrateV0ToV1(doc: object): ProjectStateV1 {
@@ -749,7 +785,7 @@ function migrateV9ToV10(doc: ProjectStateV9): ProjectStateV10 {
   }
 }
 
-function migrateV10ToV11(doc: ProjectStateV10): ProjectState {
+function migrateV10ToV11(doc: ProjectStateV10): ProjectStateV11 {
   return {
     ...doc,
     version: 11,
@@ -757,4 +793,14 @@ function migrateV10ToV11(doc: ProjectStateV10): ProjectState {
     // document has to sound exactly the way its owner left it.
     transport: { bpm: doc.transport.bpm, swing: DEFAULT_SWING },
   }
+}
+
+function migrateV11ToV12(doc: ProjectStateV11): ProjectState {
+  // Unity on every strip, because that is what every v11 voice played at; a
+  // strip missing a flag gets its resting value, so the share validator can
+  // insist on complete strips from here on.
+  const mixer: Mixer = Object.fromEntries(
+    Object.entries(doc.mixer ?? {}).map(([voiceId, mix]) => [voiceId, { ...UNITY_MIX, ...mix }]),
+  )
+  return { ...doc, version: 12, mixer }
 }

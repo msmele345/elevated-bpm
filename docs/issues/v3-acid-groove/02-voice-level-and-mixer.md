@@ -49,24 +49,73 @@ little worse until EB3-06.
 
 ## Acceptance criteria
 
-- [ ] All eleven voices have a Level knob next to their M/S, showing dB from −∞
-      to +6, defaulting to 0 dB, operable by drag and keyboard
-- [ ] Bass and stab have M and S; solo works identically across all eleven
-      voices (multiple solos, solo overrides mute) for sequenced and live sound
-- [ ] Accented hits stay louder than unaccented at any Level (gain applied after
-      accent)
-- [ ] Moving a Level while playing ramps without clicks
-- [ ] v11 documents migrate to v12 at unity, unmuted, unsoloed and sound
-      identical
-- [ ] Levels, mutes and solos round-trip through links and bundles; unknown
-      voice ids and out-of-range levels are rejected
-- [ ] Every Level knob is a registered deck param a lesson could spotlight or
-      sweep (shipped-lessons guard still passes)
-- [ ] Render-stability tests still show unrelated lanes not re-rendering on a
-      Level move; a11y suite passes (every new control named)
-- [ ] In-browser: Level on the hats measurably lowers only the hats; bass solo
-      leaves only bass audible; muting the stab silences live keys too
-- [ ] `GLOSSARY.md` updated
+- [x] All eleven voices have a Level knob next to their M/S, showing dB from −∞
+      to +6, defaulting to 0 dB, operable by drag and keyboard — `LEVEL_PARAMS`
+      (`src/model/mixer.ts`) gives each voice in `VOICES` a spec (0 to
+      `MAX_LEVEL` = +6 dB, default 1) on a new `'fader'` taper in `knob.ts`:
+      the bottom 15% of travel runs linearly out of silence to −24 dB, the rest
+      is even dB steps up to +6. `formatParam` reads it as "−∞ dB" / "0.0 dB" /
+      "+6.0 dB". `VoiceMixStrip` renders M, S and a `Knob size="small"` — in
+      the lane label for drum and pad rows, on the panel plate (`PanelTitle`
+      children) for bass and stab. Taper and readout tested in `knob.test.ts`;
+      mounted tests (`App.test.ts`, "App voice mixer") find all eleven sliders
+      at "0.0 dB" beside their M/S and drive one with End/Home/PageUp/arrows
+- [x] Bass and stab have M and S; solo works identically across all eleven
+      voices (multiple solos, solo overrides mute) for sequenced and live sound —
+      the mixer is keyed by `VoiceId`; `audibleVoiceIds`/`voiceIsAudible` are
+      the one rule. `resolveStep` now filters bass and stab note events through
+      it (seam tests: muted bass/stab, a drum solo silencing notes, a bass solo
+      silencing every hit, cross-kind multiple solos, solo over mute), and
+      `attackStabNote` refuses a live note — and its key light — when the stab
+      is not audible, as `attackPad` already did (engine test). In-browser: a
+      held live C4 measured −11.2 dB on the stab channel unmuted, and nothing
+      (no signal, no lit key) with the stab muted or the bass soloed
+- [x] Accented hits stay louder than unaccented at any Level (gain applied after
+      accent) — `resolveStep` hit gains stay accent-only at Levels 0–2 (seam
+      test); in the engine each kit/pad player runs player → accent gain →
+      channel gain, and the engine test walks that chain to prove they are
+      separate nodes
+- [x] Moving a Level while playing ramps without clicks — `setMixer` ramps every
+      channel with `gain.rampTo(level, 0.02)` (engine test asserts the call per
+      voice). In-browser, the scheduled curve of a +6 dB → −∞ move on the perc
+      channel was linear over 18 ms (1.976 → 1.577 → 1.178 → 0.779 → 0.38),
+      starting after Tone's usual look-ahead, like every other knob
+- [x] v11 documents migrate to v12 at unity, unmuted, unsoloed and sound
+      identical — `migrateV11ToV12` fills `level: 1` (and any missing flag) on
+      every existing strip and changes nothing else (whole-document `toEqual`
+      in `projectState.test.ts`); a v10 document still chains through to v12.
+      In-browser, Level edits autosaved as `version: 12` and came back
+      identical after reload
+- [x] Levels, mutes and solos round-trip through links and bundles; unknown
+      voice ids and out-of-range levels are rejected — `isMixer`
+      (`sharePayload.ts`, both carriers) requires a known voice id, boolean
+      flags and a finite Level in `[0, MAX_LEVEL]`. `share.test.ts`: a link and
+      a bundle round-trip mixed strips (hats −12 dB, bass soloed at +6, stab
+      muted at −∞, a pad soloed); a v11 link opens at unity; `master`, −0.1,
+      above +6 dB, a string, NaN and a missing Level are rejected
+- [x] Every Level knob is a registered deck param a lesson could spotlight or
+      sweep (shipped-lessons guard still passes) — `LEVEL_PARAMS` joins
+      `DECK_PARAMS` (`kickLevel`, `pad1Level`, `bassLevel`, `stabLevel`, …;
+      uniqueness asserted in `deckParams.test.ts`); a lesson parses with
+      `knob:closedHatLevel` spotlights and `paramSwept` on `pad1Level`
+      (`lesson.test.ts`). `handleLevelChange` observes Level motion like every
+      other knob. The shipped-lessons contract is unchanged and passes
+- [x] Render-stability tests still show unrelated lanes not re-rendering on a
+      Level move; a11y suite passes (every new control named) — new
+      `render.test.ts` case: a Closed Hat Level move changes only that lane's
+      `level` prop and no panel's props (the sampler is handed a memoized
+      pad-only mixer); a Bass Level move changes only `BassPanel`'s `level`.
+      `a11y.test.ts` passes unchanged: every slider is named "<Voice> Level"
+- [x] In-browser: Level on the hats measurably lowers only the hats; bass solo
+      leaves only bass audible; muting the stab silences live keys too —
+      analysers on each channel while playing the demo plus a bass and a stab
+      note: hats −10.6 dB on the knob took the closed-hat peak from −5.0 to
+      −15.6 dBFS while clap, perc, open hat, bass and stab held their levels;
+      Solo Bass left the bass at +1.2 and every other channel silent; the stab
+      result is under AC2. Transport stayed `started`; zero console errors
+- [x] `GLOSSARY.md` updated — Voice and Level lose their `[v3 spec]` tags and
+      describe what shipped; Mixer, Mute / solo, step resolution, the param
+      registry, Neutral, Send / return and ProjectState (v12) corrected
 
 ## Testing decisions
 

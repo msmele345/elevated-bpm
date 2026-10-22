@@ -47,6 +47,7 @@ describe('lane rendering', () => {
           onCycleStep: noop,
           onToggleMute: noop,
           onToggleSolo: noop,
+          onLevelChange: noop,
         }),
         createElement(NoteRow, {
           lane: note.lane,

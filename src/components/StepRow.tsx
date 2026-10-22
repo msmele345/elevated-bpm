@@ -1,5 +1,7 @@
 import { memo } from 'react'
+import type { LevelParamId } from '../model/mixer'
 import type { LaneId, StepLane } from '../model/types'
+import { VoiceMixStrip } from './VoiceMixStrip'
 
 interface StepRowProps {
   lane: StepLane<LaneId>
@@ -12,19 +14,24 @@ interface StepRowProps {
   onCycleStep: (laneId: LaneId, stepIndex: number) => void
   onToggleMute: (laneId: LaneId) => void
   onToggleSolo: (laneId: LaneId) => void
+  onLevelChange: (id: LevelParamId, value: number) => void
   spotlit?: boolean
   muted?: boolean
   soloed?: boolean
-  /** Not sounding right now (muted, or un-soloed while another lane solos). */
+  /** Not sounding right now (muted, or un-soloed while another voice solos). */
   silenced?: boolean
+  /** The lane's Level, a linear channel gain. */
+  level?: number
+  /** The active lesson is pointing at this lane's Level knob. */
+  levelSpotlit?: boolean
 }
 
 /**
- * One sequencer lane: label + mute/solo strip plus 16 step buttons, grouped
+ * One sequencer lane: label + mute/solo/Level strip plus 16 step buttons, grouped
  * into the four classic 909 color quads. Steps are plain DOM buttons (per the
  * rendering split: pads/keys/steps are DOM/CSS, never canvas).
  *
- * Memoized: a row is eighteen controls, and seven of them sit on the deck. A
+ * Memoized: a row is nineteen controls, and seven of them sit on the deck. A
  * knob moving elsewhere must not cost a rebuild of all of them mid-playback.
  */
 function StepRowLane({
@@ -32,10 +39,13 @@ function StepRowLane({
   onCycleStep,
   onToggleMute,
   onToggleSolo,
+  onLevelChange,
   spotlit = false,
   muted = false,
   soloed = false,
   silenced = false,
+  level = 1,
+  levelSpotlit = false,
 }: StepRowProps) {
   const classNames = ['step-row', spotlit && 'is-spotlit', silenced && 'is-silenced']
     .filter(Boolean)
@@ -45,26 +55,17 @@ function StepRowLane({
       <div className="lane-label">
         <span className="lane-led" aria-hidden="true" />
         {lane.label}
-        <span className="lane-mix">
-          <button
-            type="button"
-            className="lane-mix-btn is-mute"
-            aria-pressed={muted}
-            aria-label={`Mute ${lane.label}`}
-            onClick={() => onToggleMute(lane.id)}
-          >
-            M
-          </button>
-          <button
-            type="button"
-            className="lane-mix-btn is-solo"
-            aria-pressed={soloed}
-            aria-label={`Solo ${lane.label}`}
-            onClick={() => onToggleSolo(lane.id)}
-          >
-            S
-          </button>
-        </span>
+        <VoiceMixStrip
+          voiceId={lane.id}
+          label={lane.label}
+          muted={muted}
+          soloed={soloed}
+          level={level}
+          levelSpotlit={levelSpotlit}
+          onToggleMute={onToggleMute}
+          onToggleSolo={onToggleSolo}
+          onLevelChange={onLevelChange}
+        />
       </div>
       <div className="step-grid" role="group" aria-label={`${lane.label} steps`}>
         {lane.steps.map((step, i) => (

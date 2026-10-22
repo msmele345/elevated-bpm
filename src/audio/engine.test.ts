@@ -264,7 +264,7 @@ describe('live sampler audio', () => {
     expect(pad1.start).toHaveBeenCalledTimes(1)
 
     engine.releasePad('computer:Digit1')
-    engine.setMixer({ kick: { muted: false, soloed: true } })
+    engine.setMixer({ kick: { muted: false, soloed: true, level: 1 } })
     engine.attackPad('pointer:7', 'pad1')
     await flushPromises()
 
@@ -677,5 +677,113 @@ describe('swing', () => {
     engine.releasePad('pointer:swing')
     engine.releaseStabNote('computer:KeyA')
     engine.setSwing(0.5)
+  })
+})
+
+describe('voice Level and the mixer', () => {
+  type Ramp = ReturnType<typeof vi.fn>
+  interface Chained {
+    destination: { gain?: { rampTo: Ramp; value: number }; destination?: unknown } | null
+  }
+  /** The node a voice's output feeds — for a kit player, its accent gain. */
+  const next = (node: unknown) => (node as Chained).destination as Chained & {
+    gain: { rampTo: Ramp; value: number; setValueAtTime: Ramp }
+  }
+  const strip = (fields: Partial<{ muted: boolean; soloed: boolean; level: number }>) => ({
+    muted: false,
+    soloed: false,
+    level: 1,
+    ...fields,
+  })
+
+  it('gives every voice a channel gain after its accent gain, ramped to its Level', async () => {
+    const engine = await import('./engine')
+    await engine.unlockAudio()
+    const [kick, , closedHat, , , pad1] = tone.players
+    const bass = tone.synths[0]
+    const stabLive = tone.polySynths[0]
+
+    // Kit and pads: player → accent gain → channel gain.
+    const kickChannel = next(next(kick))
+    const hatChannel = next(next(closedHat))
+    const padChannel = next(next(pad1))
+    // Bass: synth → filter → channel gain. Stab: both pools → one channel gain.
+    const bassChannel = next(next(bass))
+    const stabChannel = next(stabLive)
+    for (const channel of [kickChannel, hatChannel, padChannel, bassChannel, stabChannel]) {
+      channel.gain.rampTo.mockClear()
+    }
+
+    engine.setMixer({
+      closedHat: strip({ level: 0.25 }),
+      pad1: strip({ level: 1.5 }),
+      bass: strip({ level: 0.5, soloed: true }),
+      stab: strip({ level: 0, muted: true }),
+    })
+
+    expect(hatChannel.gain.rampTo.mock.calls).toEqual([[0.25, 0.02]])
+    expect(padChannel.gain.rampTo.mock.calls).toEqual([[1.5, 0.02]])
+    expect(bassChannel.gain.rampTo.mock.calls).toEqual([[0.5, 0.02]])
+    expect(stabChannel.gain.rampTo.mock.calls).toEqual([[0, 0.02]])
+    // A voice with no strip rides at unity.
+    expect(kickChannel.gain.rampTo.mock.calls).toEqual([[1, 0.02]])
+    // Every channel is its own node: Level never shares a gain with accent.
+    expect(new Set([kickChannel, hatChannel, padChannel, bassChannel, stabChannel]).size).toBe(5)
+    expect(next(kick)).not.toBe(kickChannel)
+    engine.setMixer({})
+  })
+
+  it('routes the recreated sequenced stab pool through the same channel after a stop', async () => {
+    const engine = await import('./engine')
+    await engine.play()
+    engine.stop()
+    const liveChannel = next(tone.polySynths[0])
+    expect(next(tone.polySynths.at(-1)!)).toBe(liveChannel)
+  })
+
+  it('keeps live stab keys silent and unlit while the stab is muted or another voice solos', async () => {
+    const engine = await import('./engine')
+    await engine.unlockAudio()
+    const liveStab = tone.polySynths[0]
+
+    for (const mixer of [{ stab: strip({ muted: true }) }, { bass: strip({ soloed: true }) }]) {
+      liveStab.triggerAttack.mockClear()
+      engine.setMixer(mixer)
+      engine.attackStabNote('computer:KeyA', 60)
+      await flushPromises()
+
+      expect(liveStab.triggerAttack).not.toHaveBeenCalled()
+      expect(engine.getSoundingStabNotes()).toEqual([])
+      engine.releaseStabNote('computer:KeyA')
+    }
+
+    // Solo overrides mute here too, and an unmuted stab plays at once.
+    liveStab.triggerAttack.mockClear()
+    engine.setMixer({ stab: strip({ muted: true, soloed: true }) })
+    engine.attackStabNote('computer:KeyA', 60)
+    await flushPromises()
+    expect(liveStab.triggerAttack.mock.calls).toEqual([[midiToFrequency(60), 10, 0.82]])
+    engine.releaseStabNote('computer:KeyA')
+    engine.setMixer({})
+  })
+
+  it('skips sequenced bass and stab notes the mixer silences', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    engine.setPattern(toggleNoteStep(toggleNoteStep(createInitialPattern(), 'bass', 6), 'stab', 6))
+    engine.setMixer({ bass: strip({ muted: true }) })
+    await engine.play()
+    const bass = tone.synths[0]
+    const stab = tone.polySynths.at(-1)!
+    bass.triggerAttackRelease.mockClear()
+    stab.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(6 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](90)
+
+    expect(bass.triggerAttackRelease).not.toHaveBeenCalled()
+    expect(stab.triggerAttackRelease).toHaveBeenCalledTimes(1)
+    engine.stop()
+    engine.setMixer({})
   })
 })

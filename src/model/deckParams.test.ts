@@ -3,17 +3,19 @@ import { BASS_PARAMS } from './bass'
 import { DECK_PARAMS, DECK_PARAM_IDS, deckParamSpec, isDeckParamId } from './deckParams'
 import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
+import { LEVEL_PARAMS } from './mixer'
 import { SAMPLER_PARAMS } from './sampler'
 import { TRANSPORT_PARAMS } from './transport'
 
 describe('the deck param registry', () => {
-  it('holds every knob on the deck — bass, master, FX, sampler Tune, and transport Swing', () => {
+  it('holds every knob on the deck — bass, master, FX, sampler Tune, transport Swing and every Level', () => {
     for (const param of [
       ...BASS_PARAMS,
       ...MASTER_PARAMS,
       ...FX_PARAMS,
       ...SAMPLER_PARAMS,
       ...TRANSPORT_PARAMS,
+      ...LEVEL_PARAMS,
     ]) {
       expect([param.id, deckParamSpec(param.id)]).toEqual([param.id, param])
     }
@@ -22,13 +24,21 @@ describe('the deck param registry', () => {
         MASTER_PARAMS.length +
         FX_PARAMS.length +
         SAMPLER_PARAMS.length +
-        TRANSPORT_PARAMS.length,
+        TRANSPORT_PARAMS.length +
+        LEVEL_PARAMS.length,
     )
   })
 
   it('makes Swing a knob a lesson can name, though its value lives in the Transport', () => {
     expect(isDeckParamId('swing')).toBe(true)
     expect(deckParamSpec('swing')).toMatchObject({ min: 50, max: 75, unit: '%' })
+  })
+
+  it('makes every voice’s Level a knob a lesson can name, though its value lives in the mixer', () => {
+    for (const id of ['kickLevel', 'closedHatLevel', 'pad1Level', 'bassLevel', 'stabLevel']) {
+      expect(isDeckParamId(id)).toBe(true)
+    }
+    expect(deckParamSpec('bassLevel')).toMatchObject({ min: 0, max: 10 ** (6 / 20), unit: 'dB' })
   })
 
   it('gives every knob a unique id across instruments', () => {

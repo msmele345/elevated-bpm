@@ -86,7 +86,7 @@ describe('resolveStep — drum and pad starts', () => {
       ['closedHat', 0],
     ])
 
-    const hits = startsAt(pattern, 0, { closedHat: { muted: true, soloed: false } })
+    const hits = startsAt(pattern, 0, { closedHat: { muted: true, soloed: false, level: 1 } })
     expect(hits.map((h) => h.laneId)).toEqual(['kick'])
   })
 
@@ -96,7 +96,7 @@ describe('resolveStep — drum and pad starts', () => {
       ['closedHat', 0],
     ])
 
-    const hits = startsAt(pattern, 0, { closedHat: { muted: false, soloed: true } })
+    const hits = startsAt(pattern, 0, { closedHat: { muted: false, soloed: true, level: 1 } })
     expect(hits.map((h) => h.laneId)).toEqual(['closedHat'])
   })
 
@@ -121,12 +121,12 @@ describe('resolveStep — drum and pad starts', () => {
     ])
 
     expect(
-      startsAt(pattern, 0, { kick: { muted: false, soloed: true } }).map(
+      startsAt(pattern, 0, { kick: { muted: false, soloed: true, level: 1 } }).map(
         (hit) => hit.laneId,
       ),
     ).toEqual(['kick'])
     expect(
-      startsAt(pattern, 0, { pad2: { muted: false, soloed: true } }).map(
+      startsAt(pattern, 0, { pad2: { muted: false, soloed: true, level: 1 } }).map(
         (hit) => hit.laneId,
       ),
     ).toEqual(['pad2'])
@@ -172,7 +172,7 @@ describe('resolveStep — open-hat choke (909 behavior)', () => {
     ])
 
     const { starts, chokes } = resolveAt(pattern, 4, {
-      closedHat: { muted: true, soloed: false },
+      closedHat: { muted: true, soloed: false, level: 1 },
     })
     expect(starts.map((h) => h.laneId)).toEqual(['openHat'])
     expect(chokes).toEqual([])
@@ -250,21 +250,60 @@ describe('resolveStep — one 16th, every sound', () => {
       notes: [],
     })
   })
+})
 
-  it('leaves note events out of the mixer for now: a drum solo does not silence bass or stab', () => {
-    // Bass/stab mute and solo arrive with EB3-02; until then note lanes
-    // ignore the mixer, exactly as the engine did before step resolution.
-    let pattern = program(createInitialPattern(), [['kick', 0]])
-    pattern = toggleNoteStep(toggleNoteStep(pattern, 'bass', 0), 'stab', 0)
+describe('resolveStep — one mixer rule across all eleven voices', () => {
+  /** Kick, a pad, bass and stab all on step 1. */
+  function everyKind(): Pattern {
+    let pattern = program(createInitialPattern(), [['kick', 0], ['pad2', 0]])
+    return toggleNoteStep(toggleNoteStep(pattern, 'bass', 0), 'stab', 0)
+  }
+  const strip = (fields: Partial<{ muted: boolean; soloed: boolean; level: number }>) => ({
+    muted: false,
+    soloed: false,
+    level: 1,
+    ...fields,
+  })
+  const sounding = (mixer: Mixer) => {
+    const result = resolveAt(everyKind(), 0, mixer)
+    return [...result.starts.map((hit) => hit.laneId), ...result.notes.map((n) => n.laneId)]
+  }
 
-    const result = resolveStep({
-      pattern,
-      mixer: { kick: { muted: false, soloed: true } },
-      transport: STRAIGHT,
-      stepIndex: 0,
-    })
-    expect(result.starts.map((hit) => hit.laneId)).toEqual(['kick'])
-    expect(result.notes.map((note) => note.laneId)).toEqual(['bass', 'stab'])
+  it('silences a muted bass or stab, leaving everything else', () => {
+    expect(sounding({ bass: strip({ muted: true }) })).toEqual(['kick', 'pad2', 'stab'])
+    expect(sounding({ stab: strip({ muted: true }) })).toEqual(['kick', 'pad2', 'bass'])
+  })
+
+  it('a drum solo silences the bass and stab', () => {
+    expect(sounding({ kick: strip({ soloed: true }) })).toEqual(['kick'])
+  })
+
+  it('a bass solo silences every drum and pad hit and the stab', () => {
+    expect(sounding({ bass: strip({ soloed: true }) })).toEqual(['bass'])
+  })
+
+  it('allows several solos across kinds, and solo overrides mute on a note voice', () => {
+    expect(
+      sounding({ pad2: strip({ soloed: true }), stab: strip({ muted: true, soloed: true }) }),
+    ).toEqual(['pad2', 'stab'])
+  })
+
+  it('keeps accented hits louder than unaccented ones at any Level: Level is not a hit gain', () => {
+    const pattern = program(createInitialPattern(), [['kick', 0, true], ['closedHat', 0]])
+    for (const level of [0, 0.1, 0.5, 1, 2]) {
+      const { starts } = resolveAt(pattern, 0, {
+        kick: strip({ level }),
+        closedHat: strip({ level }),
+      })
+      expect(starts).toEqual([
+        { laneId: 'kick', gain: ACCENT_GAIN },
+        { laneId: 'closedHat', gain: UNACCENTED_GAIN },
+      ])
+    }
+  })
+
+  it('does not treat a voice at −∞ as muted: Level is a gain, mute and solo decide events', () => {
+    expect(sounding({ bass: strip({ level: 0 }) })).toEqual(['kick', 'pad2', 'bass', 'stab'])
   })
 })
 

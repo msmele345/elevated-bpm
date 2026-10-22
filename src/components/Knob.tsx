@@ -12,6 +12,12 @@ interface KnobProps<Id extends string> {
   value: number
   /** Highlighted while a lesson is pointing the user at this knob. */
   spotlit?: boolean
+  /**
+   * 'small' is the mixer-strip size: a compact dial with its readout and no
+   * printed label, for a knob whose neighbours already say whose it is (a
+   * lane's M and S). Its accessible name is still the spec's full label.
+   */
+  size?: 'small'
   /** The knob names itself, so a panel can hand every knob one stable handler. */
   onChange: (id: Id, value: number) => void
 }
@@ -49,7 +55,13 @@ function dialArc(normalized: number): string {
  * requires a mouse. Values move in knob-travel space, so a log-tapered
  * parameter like cutoff responds evenly across its whole range.
  */
-function KnobDial<Id extends string>({ spec, value, spotlit = false, onChange }: KnobProps<Id>) {
+function KnobDial<Id extends string>({
+  spec,
+  value,
+  spotlit = false,
+  size,
+  onChange,
+}: KnobProps<Id>) {
   const dragRef = useRef<{ startY: number; startNormalized: number } | null>(null)
   const normalized = normalizeParam(spec, value)
   const [pointerX, pointerY] = pointOnDial(normalized, RADIUS - 5)
@@ -113,7 +125,11 @@ function KnobDial<Id extends string>({ spec, value, spotlit = false, onChange }:
   }
 
   return (
-    <div className={spotlit ? 'knob is-spotlit' : 'knob'}>
+    <div
+      className={['knob', size === 'small' && 'is-small', spotlit && 'is-spotlit']
+        .filter(Boolean)
+        .join(' ')}
+    >
       <div
         className="knob-dial"
         role="slider"
@@ -143,7 +159,7 @@ function KnobDial<Id extends string>({ spec, value, spotlit = false, onChange }:
           />
         </svg>
       </div>
-      <span className="knob-label">{spec.label}</span>
+      {size !== 'small' && <span className="knob-label">{spec.label}</span>}
       <span className="knob-readout">{readout}</span>
     </div>
   )

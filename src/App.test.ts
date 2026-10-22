@@ -1829,3 +1829,89 @@ describe('App swing', () => {
     await waitFor(async () => expect((await loadProjectState())?.transport.swing).toBe(0.75))
   })
 })
+
+describe('App voice mixer', () => {
+  const lastMixer = () => engineSpies.setMixer.mock.calls.at(-1)![0] as ProjectState['mixer']
+
+  it('gives all eleven voices a Level knob beside their M and S, resting at 0 dB', async () => {
+    await hydratedDeck()
+
+    const voices = [
+      'Kick',
+      'Clap',
+      'Closed Hat',
+      'Open Hat',
+      'Perc',
+      'Pad 1',
+      'Pad 2',
+      'Pad 3',
+      'Pad 4',
+      'Bass',
+      'Stab',
+    ]
+    for (const voice of voices) {
+      const level = screen.getByRole('slider', { name: `${voice} Level` })
+      expect(level.getAttribute('aria-valuetext')).toBe('0.0 dB')
+      expect(screen.getByRole('button', { name: `Mute ${voice}` })).toBeTruthy()
+      expect(screen.getByRole('button', { name: `Solo ${voice}` })).toBeTruthy()
+    }
+  })
+
+  it('puts the bass and stab strips in their panel headers', async () => {
+    await hydratedDeck()
+
+    const bass = screen.getByRole('region', { name: 'Bass Line' })
+    const stab = screen.getByRole('region', { name: 'Chord Stab' })
+    for (const [panel, voice] of [
+      [bass, 'Bass'],
+      [stab, 'Stab'],
+    ] as const) {
+      const header = panel.querySelector('.panel-title')!
+      expect(within(header as HTMLElement).getByRole('button', { name: `Mute ${voice}` })).toBeTruthy()
+      expect(within(header as HTMLElement).getByRole('button', { name: `Solo ${voice}` })).toBeTruthy()
+      expect(within(header as HTMLElement).getByRole('slider', { name: `${voice} Level` })).toBeTruthy()
+    }
+  })
+
+  it('solos the bass and mutes the stab through the one mixer the engine reads', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Solo Bass' }))
+    expect(lastMixer().bass).toEqual({ muted: false, soloed: true, level: 1 })
+    expect(screen.getByRole('button', { name: 'Solo Bass' }).getAttribute('aria-pressed')).toBe('true')
+    // Every un-soloed voice shows as silenced, drums included.
+    expect(screen.getByRole('group', { name: 'Kick steps' }).closest('.is-silenced')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Chord Stab' }).classList).toContain('is-silenced')
+    expect(screen.getByRole('region', { name: 'Bass Line' }).classList).not.toContain('is-silenced')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Solo Bass' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mute Stab' }))
+    expect(lastMixer().stab).toEqual({ muted: true, soloed: false, level: 1 })
+    expect(screen.getByRole('region', { name: 'Chord Stab' }).classList).toContain('is-silenced')
+  })
+
+  it('turns a Level from the keyboard, reads it out in dB, and saves it', async () => {
+    await hydratedDeck()
+    const hats = screen.getByRole('slider', { name: 'Closed Hat Level' })
+
+    fireEvent.keyDown(hats, { key: 'End' })
+    expect(hats.getAttribute('aria-valuetext')).toBe('+6.0 dB')
+    fireEvent.keyDown(hats, { key: 'Home' })
+    expect(hats.getAttribute('aria-valuetext')).toBe('−∞ dB')
+    expect(lastMixer().closedHat).toEqual({ muted: false, soloed: false, level: 0 })
+    fireEvent.keyDown(hats, { key: 'PageUp' })
+    fireEvent.keyDown(hats, { key: 'PageUp' })
+    const level = lastMixer().closedHat!.level
+    expect(level).toBeGreaterThan(0)
+    expect(level).toBeLessThan(1)
+
+    const stab = screen.getByRole('slider', { name: 'Stab Level' })
+    fireEvent.keyDown(stab, { key: 'ArrowDown' })
+    expect(lastMixer().stab!.level).toBeLessThan(1)
+
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    const saved = (await loadProjectState())!
+    expect(saved.mixer.closedHat?.level).toBe(level)
+    expect(saved.mixer.stab?.level).toBe(lastMixer().stab!.level)
+  })
+})

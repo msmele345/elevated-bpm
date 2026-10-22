@@ -9,6 +9,7 @@ import {
   createSamplerSettings,
   samplerParamForPad,
 } from './sampler'
+import { MAX_LEVEL } from './mixer'
 import { DEFAULT_BPM, DEFAULT_SWING } from './transport'
 import {
   DEFAULT_ARC_ID,
@@ -33,12 +34,14 @@ import {
   setSamplerParamValue,
   setTransportBpm,
   setTransportSwing,
+  setVoiceLevel,
+  setLevelParamValue,
   cycleActivePatternStep,
   enterLesson,
   selectLesson,
   toggleActivePatternNoteStep,
-  toggleLaneMute,
-  toggleLaneSolo,
+  toggleVoiceMute,
+  toggleVoiceSolo,
   transposeActivePatternNote,
   updateLessonProgress,
 } from './projectState'
@@ -481,31 +484,62 @@ describe('setTransportSwing', () => {
 })
 
 describe('mixer', () => {
-  it('starts with an empty mixer — every lane audible', () => {
+  it('starts with an empty mixer — every voice audible at unity', () => {
     expect(createInitialProjectState().mixer).toEqual({})
   })
 
   it('toggles a lane mute immutably in the document', () => {
     const state = createInitialProjectState()
-    const muted = toggleLaneMute(state, 'closedHat')
-    expect(muted.mixer.closedHat).toEqual({ muted: true, soloed: false })
+    const muted = toggleVoiceMute(state, 'closedHat')
+    expect(muted.mixer.closedHat).toEqual({ muted: true, soloed: false, level: 1 })
     expect(state.mixer.closedHat).toBeUndefined()
 
-    const unmuted = toggleLaneMute(muted, 'closedHat')
+    const unmuted = toggleVoiceMute(muted, 'closedHat')
     expect(unmuted.mixer.closedHat?.muted).toBe(false)
   })
 
   it('toggles a lane solo without clearing its mute flag', () => {
-    const state = toggleLaneMute(createInitialProjectState(), 'kick')
-    const soloed = toggleLaneSolo(state, 'kick')
-    expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true })
+    const state = toggleVoiceMute(createInitialProjectState(), 'kick')
+    const soloed = toggleVoiceSolo(state, 'kick')
+    expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true, level: 1 })
   })
 
-  it('stores pad mute and solo in the same mixer as the kit', () => {
-    const state = toggleLaneMute(createInitialProjectState(), 'pad2')
-    const soloed = toggleLaneSolo(state, 'pad2')
+  it('stores pad, bass and stab mute and solo in the same mixer as the kit', () => {
+    let state = toggleVoiceSolo(toggleVoiceMute(createInitialProjectState(), 'pad2'), 'pad2')
+    state = toggleVoiceSolo(state, 'bass')
+    state = toggleVoiceMute(state, 'stab')
 
-    expect(soloed.mixer.pad2).toEqual({ muted: true, soloed: true })
+    expect(state.mixer.pad2).toEqual({ muted: true, soloed: true, level: 1 })
+    expect(state.mixer.bass).toEqual({ muted: false, soloed: true, level: 1 })
+    expect(state.mixer.stab).toEqual({ muted: true, soloed: false, level: 1 })
+  })
+
+  it('sets one voice’s Level, clamped to silence…+6 dB, without touching its mute or solo', () => {
+    const muted = toggleVoiceMute(createInitialProjectState(), 'closedHat')
+    const lowered = setVoiceLevel(muted, 'closedHat', 0.25)
+
+    expect(lowered.mixer.closedHat).toEqual({ muted: true, soloed: false, level: 0.25 })
+    expect(muted.mixer.closedHat?.level).toBe(1)
+    expect(setVoiceLevel(muted, 'bass', 9).mixer.bass?.level).toBe(MAX_LEVEL)
+    expect(setVoiceLevel(muted, 'bass', -1).mixer.bass?.level).toBe(0)
+  })
+
+  it('keeps a voice’s Level through mute and solo toggles', () => {
+    const lowered = setVoiceLevel(createInitialProjectState(), 'stab', 0.5)
+    const toggled = toggleVoiceSolo(toggleVoiceMute(lowered, 'stab'), 'stab')
+    expect(toggled.mixer.stab).toEqual({ muted: true, soloed: true, level: 0.5 })
+  })
+
+  it('sets a Level by its knob id, so the deck can hand every Level knob one handler', () => {
+    const state = setLevelParamValue(createInitialProjectState(), 'pad1Level', 0.4)
+    expect(state.mixer.pad1).toEqual({ muted: false, soloed: false, level: 0.4 })
+  })
+
+  it('carries Level, mute and solo on every voice through a save and reload', () => {
+    let state = setVoiceLevel(createInitialProjectState(), 'kick', 1.5)
+    state = setVoiceLevel(toggleVoiceSolo(state, 'bass'), 'bass', 0.7)
+    state = toggleVoiceMute(state, 'stab')
+    expect(migrateProjectState(JSON.parse(JSON.stringify(state)))!.mixer).toEqual(state.mixer)
   })
 })
 
@@ -586,6 +620,37 @@ describe('migrateProjectState', () => {
 
     expect(migrated).toEqual({ ...current, transport: { bpm: 126, swing: 0.5 } })
     expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+  })
+
+  it('lifts a v11 document’s mixer to unity Level, keeping every mute and solo', () => {
+    // v11 had no Level, so every voice ran at unity: 1 is the only value that
+    // keeps an upgraded beat sounding the way its owner left it.
+    const current = toggleVoiceSolo(
+      toggleVoiceMute(setTransportSwing(createInitialProjectState(), 0.6), 'closedHat'),
+      'kick',
+    )
+    const v11 = JSON.parse(JSON.stringify({ ...current, version: 11 })) as Record<string, unknown>
+    v11.mixer = {
+      closedHat: { muted: true, soloed: false },
+      kick: { muted: false, soloed: true },
+    }
+
+    const migrated = migrateProjectState(v11)!
+
+    expect(migrated).toEqual(current)
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+  })
+
+  it('repairs a v11 mixer strip missing a field to its resting value', () => {
+    const v11 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 11 }),
+    ) as Record<string, unknown>
+    v11.mixer = { perc: { muted: true }, snare: {} }
+
+    expect(migrateProjectState(v11)!.mixer).toEqual({
+      perc: { muted: true, soloed: false, level: 1 },
+      snare: { muted: false, soloed: false, level: 1 },
+    })
   })
 
   it('opens a v10 document at straight swing, whatever stray swing field it carries', () => {

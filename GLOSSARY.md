@@ -2,8 +2,9 @@
 
 The project's shared language: the words specs, issues, PRs, code comments and
 conversations use, and exactly what each one means here. Last reviewed
-2026-10-19: v2 (the SP-04 sampler release) is shipped, and v3 is specified in
-`docs/specs/v3-groove-bank-acid.md`.
+2026-10-21: v2 (the SP-04 sampler release) is shipped, v3 is specified in
+`docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
+voice Level and bass/stab mute & solo) have shipped.
 
 ## How to use and maintain this file
 
@@ -64,10 +65,11 @@ conversations use, and exactly what each one means here. Last reviewed
     Sampling, and [v3 spec] Acid). Arc is the model word for the same thing.
   - An **issue track** is a release's ordered set of issue files.
   - In music, a track is a song. In that sense, say "song" or "source" instead.
-- **Voice.** In the audio engine, a voice is the Tone object that makes a
-  sound (`createBassVoice`, `createStabVoices`, the pad voices). In the v3
-  mixer [v3 spec], a voice is anything with its own channel: the five drum lanes, the
-  four pad lanes, bass and stab.
+- **Voice.** In the mixer, a voice is anything with its own channel: the five
+  drum lanes, the four pad lanes, bass and stab, eleven in all. Code: `VoiceId`
+  (`LaneId | NoteLaneId`), `VOICES`. In the audio engine, a voice is also the
+  Tone object that makes a sound (`createBassVoice`, `createStabVoices`, the pad
+  voices). Both senses are current; context says which.
 
 ---
 
@@ -101,7 +103,8 @@ conversations use, and exactly what each one means here. Last reviewed
 - **Param registry (deck param registry).** Every knob on the Deck in one
   list, so a lesson goal or spotlight can name any of them, and a mistyped one
   fails when the lesson loads. It includes `swing`, whose value lives in the
-  Transport rather than an instrument patch. [v3 spec] Adds `envMod` and the level knobs.
+  Transport rather than an instrument patch, and every voice's Level knob
+  (`kickLevel`, `pad1Level`, `bassLevel`, `stabLevel`, …). [v3 spec] Adds `envMod`.
   Code: `DECK_PARAMS`, `isDeckParamId`, `TRANSPORT_PARAMS`.
 - **Room (room light).** The beat-synced club backdrop around the Deck. It is
   driven from rAF through CSS variables and never re-renders React. Code:
@@ -179,10 +182,11 @@ conversations use, and exactly what each one means here. Last reviewed
   16th. It reads the pattern, the mixer, the Transport and the step index, and
   returns drum and pad starts with their accent gains (after mute/solo), chokes,
   bass and stab note events (pitch and length in steps), and the swing offset in
-  seconds for that 16th. Note lanes don't consult the mixer yet. The Tone callback
-  applies its result and decides nothing itself. [v3 spec] The input grows to the
-  Bank and bass patch, and the result gains the playing slot, mixer-filtered note
-  events, and per-note accent, legato and gate tie. Code: `resolveStep`,
+  seconds for that 16th. Bass and stab note events are filtered by the same
+  mute/solo rule as drum and pad hits; Level is not part of resolution (hit gains
+  stay accent-only). The Tone callback applies its result and decides nothing
+  itself. [v3 spec] The input grows to the Bank and bass patch, and the result
+  gains the playing slot and per-note accent, legato and gate tie. Code: `resolveStep`,
   `StepResolution`.
 - **Swing.** The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75, default 0.50).
   Every odd 16th of every sequenced voice is delayed by (swing − 0.5) × 2 × one step, so 66%
@@ -201,27 +205,40 @@ conversations use, and exactly what each one means here. Last reviewed
 - **FX bus.** One shared delay into a reverb, fed by per-instrument sends,
   returning into the master input upstream of the master filter. Closing that filter
   therefore dulls the tails too. Code: `FX_PARAMS`, `FxSettings`.
-- **Level** [v3 spec]. A voice's channel gain: linear from 0 to about 2 (+6 dB), default 1,
-  shown in dB with −∞ at 0. It sits after the accent gain and note velocity, so
-  live and sequenced sound pass through it alike. Say "Level", not "volume".
+- **Level.** A voice's channel gain, stored linear from 0 (silence, −∞ dB) to
+  `MAX_LEVEL` (+6 dB, about 1.995), default 1 (0 dB). One channel `Tone.Gain` per
+  voice applies it, after the per-hit accent gain, synth velocity and bass
+  filter, so live and sequenced sound pass through it alike and accents keep
+  their headroom; it ramps over 20 ms. Each voice has a small Level knob beside
+  its M/S, using the `'fader'` taper (silence at the bottom, then even dB steps
+  from −24 to +6 dB) and reading out in dB. Level does not mute: a voice at −∞
+  still counts as audible to mute/solo. No goal type reads it, but each Level
+  knob is a deck param, so `paramSwept` and `knob:` spotlights can name it. Say
+  "Level", not "volume". Code: `VoiceMix.level`, `setVoiceLevel`,
+  `setLevelParamValue`, `LEVEL_PARAMS`, `levelParamForVoice`, `VoiceMixStrip`.
 - **Macro.** A Master-strip knob that works on the whole mix: **Filter** (a −12 dB/oct
   lowpass, 120 Hz–18 kHz) and **Drive** (saturation, 0–100%). Code:
   `MASTER_PARAMS`, `MasterSettings`.
 - **Master bus.** Every voice → input → filter → drive → output.
-- **Mixer.** The per-lane mute/solo map in ProjectState, keyed by lane id. A
-  missing entry means audible and unsoloed. Code: `Mixer`, `LaneMix` (`muted`,
-  `soloed`). [v3 spec] It is re-keyed by voice and adds `level`.
-- **Mute / solo.** The hardware rule: if any lane is soloed, only soloed lanes play;
-  solo overrides mute; several solos are allowed. Today it covers the drum and pad lanes, both sequenced
-  hits and live pads. [v3 spec] It applies per voice, so bass and stab (live keys included) join it.
-  Code: `audibleLaneIds`, `laneIsAudible`.
+- **Mixer.** The per-voice map in ProjectState, keyed by voice id (drum, pad
+  and note lane ids). Each strip is `VoiceMix { muted, soloed, level }`. A
+  missing entry, or a missing field on one, reads as unity Level, unmuted,
+  unsoloed. Code: `Mixer`, `VoiceMix`, `voiceMix`, `voiceLevel`.
+- **Mute / solo.** The hardware rule, across all eleven voices: if any voice is
+  soloed, only soloed voices play; solo overrides mute; several solos are
+  allowed. It filters events rather than scaling gain: sequenced drum and pad
+  hits, bass and stab note events, live pads and live stab keys (a muted or
+  out-soloed stab takes no live notes and lights no keys). A note already
+  ringing when you mute keeps ringing. Code: `audibleVoiceIds`,
+  `voiceIsAudible`, `toggleVoiceMute`, `toggleVoiceSolo`.
 - **Neutral.** A param's resting value, at which it changes nothing: sends at 0,
-  drive at 0, master filter at 18 kHz, swing 50%, [v3 spec] Env Mod 0, Level 1. Every new
+  drive at 0, master filter at 18 kHz, swing 50%, Level 1, [v3 spec] Env Mod 0. Every new
   param must default to neutral, so an untouched Deck sounds exactly as it did
   before the param existed.
 - **Send / return.** A send is a per-instrument level into the FX bus (`drumSend`,
   `bassSend`, `stabSend`, `samplerSend`). The return is the FX bus output back into
-  the master input. Sends are tapped after mute, so a muted voice sends nothing.
+  the master input. Sends are tapped after mute and after Level (the channel gain
+  feeds the instrument's send tap), so a muted voice sends nothing.
 
 ## Sampler
 
@@ -291,8 +308,9 @@ conversations use, and exactly what each one means here. Last reviewed
 - **ProjectState.** The one versioned JSON document and the single source of
   truth. It holds `patterns`, `activePatternId`, `transport`, `instrumentSettings`,
   `sources` (metadata only), `lessonProgress`, `prefs`, `mixer`, `activeArcId` and
-  `activeLessonIds`. It never holds audio. It is at v11 today (v11 added swing); [v3 spec]
-  v12–v14 are planned. Founding
+  `activeLessonIds`. It never holds audio. It is at v12 today (v11 added swing; v12 keys the
+  mixer by voice with Level, and its migration fills `level: 1` on every existing
+  strip and repairs missing flags); [v3 spec] v13–v14 are planned. Founding
   term. Code: `ProjectState`, `PROJECT_STATE_VERSION`.
 - **Sample store.** A separate IndexedDB store, split into slices (precious) and
   sources (expendable). Code: `saveSlice`, `saveSource`, `loadStoredAudio`.

@@ -246,6 +246,50 @@ describe('deck render cost', () => {
     expect(changedPropsPerPanel(panelMark).size).toBe(3)
   })
 
+  it('rebuilds only the turned voice when a Level moves mid-playback', async () => {
+    // A Level is dragged at pointer rate like any knob. The lane it belongs to
+    // has to take the new level; every other lane — and every panel that does
+    // not hold that voice — must sit the drag out.
+    await renderReadyDeck()
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const drumMark = recorded.stepRow.length
+    const noteMark = recorded.noteRow.length
+    const panelMark = recorded.panel.length
+    const hats = screen.getByRole('slider', { name: 'Closed Hat Level' })
+    fireEvent.keyDown(hats, { key: 'ArrowDown' })
+    fireEvent.keyDown(hats, { key: 'ArrowDown' })
+
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, drumMark)) {
+      expect(changed, `drum lane ${id}`).toEqual(id === 'closedHat' ? ['level'] : [])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, noteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
+    for (const [name, changed] of changedPropsPerPanel(panelMark)) {
+      expect(changed, `panel ${name}`).toEqual([])
+    }
+    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(9)
+    expect(changedPropsPerPanel(panelMark).size).toBe(3)
+
+    // The bass Level lives in the bass panel's header: that panel takes the
+    // new level, and its note lane — like every other lane — does not move.
+    const bassMark = recorded.panel.length
+    const laneMark = recorded.stepRow.length
+    const bassNoteMark = recorded.noteRow.length
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Bass Level' }), { key: 'ArrowDown' })
+    for (const [name, changed] of changedPropsPerPanel(bassMark)) {
+      expect(changed, `panel ${name}`).toEqual(name === 'BassPanel' ? ['level'] : [])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, laneMark)) {
+      expect(changed, `drum lane ${id}`).toEqual([])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, bassNoteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
+  })
+
   it('rebuilds no lane when the tempo fader moves, though the sampler now reads the tempo', async () => {
     // Fit-to-steps is a fraction of the bar, so its readout has to follow the
     // tempo — which puts BPM into the sampler panel's props for the first

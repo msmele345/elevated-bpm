@@ -37,6 +37,7 @@ import {
   spotlitParamIds,
 } from './model/lesson'
 import {
+  anySoloed,
   levelParamForVoice,
   voiceIsAudible,
   voiceMix,
@@ -271,7 +272,7 @@ export default function App() {
   const bpm = project.transport.bpm
   const swing = project.transport.swing
   const mixer = project.mixer
-  const soloing = Object.values(mixer).some((mix) => mix?.soloed)
+  const soloing = anySoloed(mixer)
   // The sampler is handed only its own four strips, memoized on them, so a
   // Level dragged on a drum lane or the bass is not a new prop for the panel.
   const padMixer = useMemo<Mixer>(

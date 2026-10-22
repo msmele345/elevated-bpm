@@ -60,9 +60,15 @@ vi.mock('tone', () => {
 
   class Gain extends Node {
     gain = new AudioParam()
+    /**
+     * The value the node was built at. Real Tone ramps start a look-ahead from
+     * now, so this — not the last ramp target — is what the first note hears.
+     */
+    built: number
     constructor(value = 0) {
       super()
       this.gain.value = value
+      this.built = value
     }
   }
 
@@ -785,5 +791,23 @@ describe('voice Level and the mixer', () => {
     expect(stab.triggerAttackRelease).toHaveBeenCalledTimes(1)
     engine.stop()
     engine.setMixer({})
+  })
+})
+
+describe('a Level set before the first gesture', () => {
+  it('is in force the moment the voices exist, not one look-ahead later', async () => {
+    // A saved project hands the engine its mixer before any gesture builds the
+    // audio graph. A channel built at unity and ramped down afterwards would
+    // play a first live note at full level for Tone's whole look-ahead.
+    vi.resetModules()
+    const engine = await import('./engine')
+    engine.setMixer({ stab: { muted: false, soloed: false, level: 0.25 } })
+    tone.resolveLoaded()
+    await engine.unlockAudio()
+
+    const stabChannel = (tone.polySynths.at(-1) as unknown as {
+      destination: { built: number }
+    }).destination
+    expect(stabChannel.built).toBe(0.25)
   })
 })

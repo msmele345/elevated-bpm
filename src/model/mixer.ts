@@ -57,21 +57,26 @@ export function voiceLevel(mixer: Mixer, voiceId: VoiceId): number {
 }
 
 /** True if any voice is soloed — solo mode suppresses every un-soloed voice. */
-function anySoloed(mixer: Mixer): boolean {
+export function anySoloed(mixer: Mixer): boolean {
   return Object.values(mixer).some((mix) => mix?.soloed)
 }
 
 /**
- * The voices that should sound, filtered from `voices` in order. Hardware
- * rules: with any solo engaged, only soloed voices play (multiple solos
+ * The hardware rule for one strip, given whether anything on the deck is
+ * soloed: with any solo engaged, only soloed voices play (multiple solos
  * allowed) and solo overrides mute; otherwise every un-muted voice plays.
+ * Taking `soloing` rather than the whole mixer lets a panel that holds only
+ * its own strips still apply the deck-wide rule.
  */
+export function mixIsAudible(mix: Partial<VoiceMix> | undefined, soloing: boolean): boolean {
+  const { muted, soloed } = { ...UNITY_MIX, ...mix }
+  return soloing ? soloed : !muted
+}
+
+/** The voices that should sound, filtered from `voices` in order. */
 export function audibleVoiceIds<Id extends VoiceId>(voices: Id[], mixer: Mixer): Id[] {
   const soloing = anySoloed(mixer)
-  return voices.filter((voiceId) => {
-    const mix = voiceMix(mixer, voiceId)
-    return soloing ? mix.soloed : !mix.muted
-  })
+  return voices.filter((voiceId) => mixIsAudible(mixer[voiceId], soloing))
 }
 
 /** Apply the one global mute/solo rule to a live voice before it reaches audio. */

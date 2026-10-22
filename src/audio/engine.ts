@@ -621,8 +621,13 @@ function ensureVoices(): void {
   // Each voice's channel feeds its instrument's send tap.
   const tapOf = (id: VoiceId): SendTap =>
     isPadLaneId(id) ? taps.sampler : id === 'bass' || id === 'stab' ? taps[id] : taps.drums
+  // Built at the mixer's Level rather than ramped to it: a Tone ramp starts a
+  // look-ahead from now, and a first live note must not hear unity meanwhile.
   const voiceChannels = (channels = Object.fromEntries(
-    VOICES.map(({ id }) => [id, new Tone.Gain(1).connect(tapOf(id).input)]),
+    VOICES.map(({ id }) => [
+      id,
+      new Tone.Gain(voiceLevel(currentMixer, id)).connect(tapOf(id).input),
+    ]),
   ) as Record<VoiceId, Tone.Gain>)
   // One send for the whole kit and one for the sampler. Per-lane accent gains
   // and channel Levels sit before those taps, so velocity and Level ride
@@ -657,7 +662,6 @@ function ensureVoices(): void {
   // decay, so internal smoothing only has to keep single frames from jittering.
   analyser.smoothing = 0.5
   Tone.getDestination().connect(analyser)
-  setMixer(currentMixer)
   setBassSettings(bassSettings)
   setMasterSettings(masterSettings)
   setFxSettings(fxSettings)

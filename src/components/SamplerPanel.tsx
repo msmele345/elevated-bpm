@@ -1,7 +1,13 @@
 import { memo, useEffect, useRef, useState, type DragEvent } from 'react'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { INTAKE_LIMITS_HINT } from '../model/intake'
-import { levelParamForVoice, voiceLevel, type LevelParamId, type Mixer } from '../model/mixer'
+import {
+  levelParamForVoice,
+  mixIsAudible,
+  voiceMix,
+  type LevelParamId,
+  type Mixer,
+} from '../model/mixer'
 import {
   PAD_LANES,
   formatPadRate,
@@ -513,17 +519,16 @@ function SamplerInstrument({
 
       <div className="sampler-sequencer">
         {lanes.map((lane) => {
-          const mix = mixer[lane.id]
-          const silenced = soloing ? !mix?.soloed : (mix?.muted ?? false)
+          const mix = voiceMix(mixer, lane.id)
           return (
             <StepRow
               key={lane.id}
               lane={lane}
-              muted={mix?.muted ?? false}
-              soloed={mix?.soloed ?? false}
-              silenced={silenced}
+              muted={mix.muted}
+              soloed={mix.soloed}
+              silenced={!mixIsAudible(mix, soloing)}
               onCycleStep={onCycleStep}
-              level={voiceLevel(mixer, lane.id)}
+              level={mix.level}
               levelSpotlit={spotlitParams.includes(levelParamForVoice(lane.id).id)}
               onToggleMute={onToggleMute}
               onToggleSolo={onToggleSolo}

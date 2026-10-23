@@ -14,10 +14,10 @@
  * their work away.
  */
 
-const DB_NAME = 'elevated-bpm'
+export const DB_NAME = 'elevated-bpm'
 
 /** v1 held the project document alone; v2 adds the sampler's slices and sources. */
-const DB_VERSION = 2
+export const DB_VERSION = 2
 
 export const STORES = {
   project: 'project',

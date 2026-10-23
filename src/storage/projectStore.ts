@@ -10,9 +10,12 @@ import { STORES, withStore } from './db'
  * shared with the sampler's audio and lives in `db.ts`, because IndexedDB
  * allows one version per database and two modules disagreeing about it fails
  * outright.
+ *
+ * `CURRENT_KEY` is exported only so the layout seam's seed helper writes the
+ * record this store reads.
  */
 
-const CURRENT_KEY = 'current'
+export const CURRENT_KEY = 'current'
 
 /** Persist the current document, replacing any previous save. */
 export async function saveProjectState(state: ProjectState): Promise<void> {

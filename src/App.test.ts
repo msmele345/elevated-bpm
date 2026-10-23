@@ -1974,3 +1974,113 @@ describe('App voice mixer', () => {
     expect(saved.mixer.stab?.level).toBe(lastMixer().stab!.level)
   })
 })
+
+describe('App progress chips', () => {
+  /** The lesson card's chip list, by the name a screen reader hears. */
+  function chips(): HTMLElement[] {
+    return within(screen.getByRole('list', { name: 'Goal progress' })).getAllByRole('listitem')
+  }
+
+  /** The deck's one polite live region for lesson progress. */
+  function announcer(): HTMLElement {
+    const region = document.querySelector<HTMLElement>('.lesson-announcer')
+    expect(region?.getAttribute('aria-live')).toBe('polite')
+    return region!
+  }
+
+  function kick(step: number): void {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Kick step ${step}( |$)`) }))
+  }
+
+  function enterLesson(position: number): void {
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Lesson ${position}:`) }))
+  }
+
+  it('shows a chip per assertion that counts placement and extras, never positions', async () => {
+    await hydratedDeck()
+
+    expect(chips().map((chip) => chip.textContent)).toEqual(['Kick 0/4'])
+    kick(1)
+    expect(chips()[0].textContent).toBe('Kick 1/4')
+    kick(2)
+    expect(chips()[0].textContent).toBe('Kick 1/4 · 1 extra')
+  })
+
+  it('turns a met chip into a ✓ with accessible text, and lists the capstone as a checklist', async () => {
+    await hydratedDeck()
+    enterLesson(14)
+
+    expect(chips().map((chip) => chip.textContent)).toEqual([
+      'Kick 0/4',
+      'Clap 1/2',
+      'Closed Hat 3/4',
+      'Bass notes 0/4',
+      'Stab notes 0/2',
+    ])
+    for (const step of [1, 5, 9, 13]) kick(step)
+
+    const [kickChip, clapChip] = chips()
+    expect(kickChip.classList.contains('is-met')).toBe(true)
+    expect(kickChip.textContent).toBe('✓Kick 4/4, done')
+    expect(within(kickChip).getByText('✓').getAttribute('aria-hidden')).toBe('true')
+    expect(clapChip.classList.contains('is-met')).toBe(false)
+  })
+
+  it('announces a chip becoming met, and nothing for count changes', async () => {
+    await hydratedDeck()
+    enterLesson(14)
+
+    for (const step of [1, 5, 9]) kick(step)
+    expect(announcer().textContent).toBe('')
+
+    kick(13)
+    expect(announcer().textContent).toBe('Kick 4/4 done')
+    const firstSaid = announcer().firstElementChild
+
+    kick(2)
+    expect(announcer().firstElementChild).toBe(firstSaid)
+    kick(2)
+    kick(2)
+    // Undone and redone: met again, said again — as a new node, so the same
+    // words are heard a second time rather than left unchanged.
+    expect(announcer().textContent).toBe('Kick 4/4 done')
+    expect(announcer().firstElementChild).not.toBe(firstSaid)
+  })
+
+  it('announces the lesson completing once, instead of the chip that completed it', async () => {
+    await hydratedDeck()
+
+    for (const step of [1, 5, 9]) kick(step)
+    expect(announcer().textContent).toBe('')
+    kick(13)
+
+    await waitFor(() =>
+      expect(announcer().textContent).toBe('Lesson complete: Four on the Floor'),
+    )
+    expect(screen.getByText('Lesson complete')).toBeTruthy()
+    // The celebration is no second live region.
+    const celebration = screen.getByText(/^Locked in/)
+    expect(celebration.getAttribute('role')).toBeNull()
+    expect(celebration.closest('[aria-live]')).toBeNull()
+    expect(chips()[0].classList.contains('is-met')).toBe(true)
+  })
+
+  it('says nothing for work that was already done on arrival or on reload', async () => {
+    let saved = createInitialProjectState()
+    for (const step of [0, 4, 8, 12]) saved = cycleActivePatternStep(saved, 'kick', step)
+    await saveProjectState(saved)
+
+    await hydratedDeck()
+
+    // Lesson 1 is earned by the saved beat as the deck opens, silently.
+    await waitFor(() => expect(screen.getByText('Lesson complete')).toBeTruthy())
+    expect(announcer().textContent).toBe('')
+
+    // Walking onto a lesson whose chip is already met is not meeting it.
+    enterLesson(14)
+    expect(chips()[0].classList.contains('is-met')).toBe(true)
+    expect(announcer().textContent).toBe('')
+  })
+})

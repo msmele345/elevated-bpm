@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  assertionProgress,
   isGoalMet,
   parseLesson,
   spotlitLaneIds,
   spotlitNoteLaneIds,
   spotlitParamIds,
   spotlightsTarget,
+  type GoalAssertion,
   type GoalContext,
   type SamplerGoalContext,
 } from './lesson'
@@ -782,5 +784,236 @@ describe('parseLesson — the sampling goal vocabulary', () => {
       'padTuned',
       'padStepsPlaced',
     ])
+  })
+})
+
+describe('assertionProgress — how close a goal is, never which steps are wrong', () => {
+  const kicks = { type: 'stepsActive', lane: 'kick', steps: [0, 4, 8, 12] } satisfies GoalAssertion
+
+  it('counts wanted steps placed and extras for an exact-placement goal', () => {
+    expect(assertionProgress(kicks, patternWithKicksOn([0, 4, 5]))).toEqual({
+      met: false,
+      done: 2,
+      total: 4,
+      extra: 1,
+    })
+  })
+
+  it('is met only with every wanted step and zero extras', () => {
+    expect(assertionProgress(kicks, patternWithKicksOn([0, 4, 8, 12])).met).toBe(true)
+    const crowded = assertionProgress(kicks, patternWithKicksOn([0, 4, 8, 12, 15]))
+    expect(crowded).toMatchObject({ met: false, done: 4, total: 4, extra: 1 })
+  })
+
+  it('reports nothing done on a lane the pattern does not have', () => {
+    const pattern = { ...createInitialPattern(), lanes: [] }
+    expect(assertionProgress(kicks, { pattern })).toMatchObject({ met: false, done: 0, extra: 0 })
+  })
+
+  it('counts accents, not plain hits, for stepsAccented', () => {
+    const goal = { type: 'stepsAccented', lane: 'kick', steps: [0, 8] } satisfies GoalAssertion
+    const pattern = drumPattern('kick', [0, 4, 8, 12], [0, 4])
+    expect(assertionProgress(goal, { pattern })).toEqual({ met: false, done: 1, total: 2, extra: 1 })
+  })
+
+  it('counts notes placed and extras for notesActive', () => {
+    const goal = { type: 'notesActive', lane: 'bass', steps: [2, 6, 10, 14] } satisfies GoalAssertion
+    const pattern = notePattern('bass', [2, 6, 7])
+    expect(assertionProgress(goal, { pattern })).toEqual({ met: false, done: 2, total: 4, extra: 1 })
+  })
+
+  it('caps a minimum count at the minimum', () => {
+    const goal = { type: 'notesPlaced', lane: 'bass', min: 4 } satisfies GoalAssertion
+    expect(assertionProgress(goal, { pattern: notePattern('bass', [0, 1]) })).toEqual({
+      met: false,
+      done: 2,
+      total: 4,
+      extra: 0,
+    })
+    expect(assertionProgress(goal, { pattern: notePattern('bass', [0, 1, 2, 3, 4, 5]) })).toEqual({
+      met: true,
+      done: 4,
+      total: 4,
+      extra: 0,
+    })
+  })
+
+  it('counts distinct pitches for pitchesVaried', () => {
+    const goal = { type: 'pitchesVaried', lane: 'bass', min: 3 } satisfies GoalAssertion
+    const pattern = notePattern('bass', [0, 4, 8], { 4: 3 })
+    expect(assertionProgress(goal, { pattern })).toMatchObject({ met: false, done: 2, total: 3 })
+  })
+
+  it('measures a sweep as travel against minTravel', () => {
+    const goal = { type: 'paramSwept', param: 'cutoff', minTravel: 0.5 } satisfies GoalAssertion
+    const motion = { cutoff: { min: 0.2, max: 0.5 } }
+    expect(assertionProgress(goal, { pattern: createInitialPattern(), motion })).toMatchObject({
+      met: false,
+      total: 0.5,
+    })
+    expect(assertionProgress(goal, { pattern: createInitialPattern(), motion }).done).toBeCloseTo(0.3)
+    expect(assertionProgress(goal, { pattern: createInitialPattern() })).toMatchObject({
+      met: false,
+      done: 0,
+    })
+  })
+
+  it('counts notes held together against minNotes for chordPlayed', () => {
+    const goal = { type: 'chordPlayed', minNotes: 3 } satisfies GoalAssertion
+    expect(
+      assertionProgress(goal, { pattern: createInitialPattern(), chord: { held: {}, maxNotes: 2 } }),
+    ).toEqual({ met: false, done: 2, total: 3, extra: 0 })
+    expect(
+      assertionProgress(goal, { pattern: createInitialPattern(), chord: { held: {}, maxNotes: 5 } }),
+    ).toMatchObject({ met: true, done: 3 })
+  })
+
+  it('reports the current tempo against a bpm range', () => {
+    const goal = { type: 'bpmInRange', min: 138, max: 145 } satisfies GoalAssertion
+    expect(assertionProgress(goal, { pattern: createInitialPattern(), bpm: 130 })).toMatchObject({
+      met: false,
+      current: 130,
+    })
+    expect(assertionProgress(goal, { pattern: createInitialPattern(), bpm: 140 }).met).toBe(true)
+    expect(assertionProgress(goal, { pattern: createInitialPattern() })).toMatchObject({
+      met: false,
+      current: undefined,
+    })
+  })
+
+  it('reports the current swing in whole percent against a swing range', () => {
+    const goal = { type: 'swingInRange', min: 54, max: 70 } satisfies GoalAssertion
+    expect(assertionProgress(goal, { pattern: createInitialPattern(), swing: 0.5 })).toMatchObject({
+      met: false,
+      current: 50,
+    })
+    expect(assertionProgress(goal, { pattern: createInitialPattern(), swing: 0.6 })).toMatchObject({
+      met: true,
+      current: 60,
+    })
+  })
+
+  describe('sampler goals', () => {
+    const pattern = createInitialPattern()
+    const upload: SampleSource = { id: 'mine', name: 'Mine', origin: 'upload', duration: 4, channels: 2 }
+    const chop = (start: number, duration: number): SampleRegion => ({
+      sourceId: CURATED_SAMPLE_SOURCE.id,
+      start,
+      duration,
+    })
+    function withPad(pad: PadLaneId, settings: Record<string, unknown>, sources = [CURATED_SAMPLE_SOURCE]) {
+      const pads = createSamplerSettings()
+      return { pattern, sampler: { pads: { ...pads, [pad]: { ...pads[pad], ...settings } }, sources } }
+    }
+
+    it('counts sources the learner brought in, capped at the minimum', () => {
+      const goal = { type: 'sourceLoaded', origin: 'user', min: 1 } satisfies GoalAssertion
+      expect(assertionProgress(goal, withPad('pad1', {}))).toMatchObject({ met: false, done: 0, total: 1 })
+      expect(
+        assertionProgress(goal, withPad('pad1', {}, [CURATED_SAMPLE_SOURCE, upload, { ...upload, id: 'b' }])),
+      ).toMatchObject({ met: true, done: 1, total: 1 })
+    })
+
+    it('counts pads holding a chop', () => {
+      const goal = { type: 'padAssigned', min: 3 } satisfies GoalAssertion
+      expect(assertionProgress(goal, withPad('pad2', { region: chop(0, 0.3) }))).toMatchObject({
+        met: false,
+        done: 1,
+        total: 3,
+      })
+    })
+
+    it('counts pad steps placed across the sampler', () => {
+      const goal = { type: 'padStepsPlaced', min: 4 } satisfies GoalAssertion
+      const placed = { ...pattern, padLanes: pattern.padLanes.map((lane, i) => i === 0
+        ? { ...lane, steps: lane.steps.map((step, s) => ({ ...step, on: s < 2 })) }
+        : lane) }
+      expect(assertionProgress(goal, { pattern: placed })).toMatchObject({ met: false, done: 2, total: 4 })
+    })
+
+    it('reports a chop start only when it is cut from the goal source', () => {
+      const goal = {
+        type: 'regionStartsWithin',
+        pad: 'pad1',
+        source: CURATED_SAMPLE_SOURCE.id,
+        from: 0.4,
+        to: 0.53,
+      } satisfies GoalAssertion
+      expect(assertionProgress(goal, withPad('pad1', { region: chop(0.7, 0.3) }))).toMatchObject({
+        met: false,
+        current: 0.7,
+      })
+      expect(assertionProgress(goal, withPad('pad1', { region: chop(0.45, 0.3) })).met).toBe(true)
+      const elsewhere = withPad('pad1', { region: { sourceId: 'mine', start: 0.45, duration: 0.3 } }, [upload])
+      expect(assertionProgress(goal, elsewhere)).toMatchObject({ met: false, current: undefined })
+    })
+
+    it('reports a chop length against regionShorterThan', () => {
+      const goal = { type: 'regionShorterThan', pad: 'pad1', seconds: 0.4 } satisfies GoalAssertion
+      expect(assertionProgress(goal, withPad('pad1', { region: chop(0.45, 0.6) }))).toMatchObject({
+        met: false,
+        current: 0.6,
+      })
+      expect(assertionProgress(goal, withPad('pad1', {}))).toMatchObject({ met: false, current: undefined })
+    })
+
+    it('reports a pad fit against fitTargetSet', () => {
+      const goal = { type: 'fitTargetSet', pad: 'pad2', minSteps: 16 } satisfies GoalAssertion
+      expect(assertionProgress(goal, withPad('pad2', { region: chop(0, 2), fit: 8 }))).toMatchObject({
+        met: false,
+        current: 8,
+      })
+      expect(assertionProgress(goal, withPad('pad2', { region: chop(0, 2), fit: null }))).toMatchObject({
+        met: false,
+        current: undefined,
+      })
+    })
+
+    it('reports a pad tune against padTuned', () => {
+      const goal = { type: 'padTuned', pad: 'pad1', minSemitones: 5 } satisfies GoalAssertion
+      expect(assertionProgress(goal, withPad('pad1', { tune: -3 }))).toMatchObject({ met: false, current: -3 })
+      expect(assertionProgress(goal, withPad('pad1', { tune: -5 })).met).toBe(true)
+    })
+  })
+})
+
+describe('isGoalMet — derived from progress', () => {
+  it('is met exactly when every assertion reports met', () => {
+    const lesson = parseLesson({
+      ...validLesson,
+      goal: [
+        { type: 'stepsActive', lane: 'kick', steps: [0, 4, 8, 12] },
+        { type: 'bpmInRange', min: 138, max: 145 },
+      ],
+    })
+    const context = { ...patternWithKicksOn([0, 4, 8, 12]), bpm: 130 }
+    expect(lesson.goal.map((goal) => assertionProgress(goal, context).met)).toEqual([true, false])
+    expect(isGoalMet(lesson, context)).toBe(false)
+    expect(isGoalMet(lesson, { ...context, bpm: 140 })).toBe(true)
+  })
+})
+
+describe('parseLesson — goal label', () => {
+  it('keeps a non-empty label that overrides the chip noun', () => {
+    const lesson = parseLesson({
+      ...validLesson,
+      goal: [{ type: 'stepsActive', lane: 'kick', steps: [0, 4, 8, 12], label: 'Downbeats' }],
+    })
+    expect(lesson.goal[0].label).toBe('Downbeats')
+  })
+
+  it('omits the label when the goal has none', () => {
+    expect('label' in parseLesson(validLesson).goal[0]).toBe(false)
+  })
+
+  it('rejects an empty or non-string label', () => {
+    for (const label of ['', '   ', 4]) {
+      expect(() =>
+        parseLesson({
+          ...validLesson,
+          goal: [{ type: 'stepsActive', lane: 'kick', steps: [0, 4, 8, 12], label }],
+        }),
+      ).toThrow(/label/)
+    }
   })
 })

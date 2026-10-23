@@ -11,6 +11,7 @@ import {
   type SamplerGoalContext,
 } from '../model/lesson'
 import { NOTE_LANES } from '../model/note'
+import { progressChip, progressChips } from '../model/progressChip'
 import { createDemoPattern, createInitialPattern } from '../model/pattern'
 import { createDemoProjectState } from '../model/projectState'
 import { MAX_SLICE_SECONDS } from '../model/region'
@@ -545,6 +546,38 @@ describe('the curriculum', () => {
             { justCompleted: false, showFinale: false },
           ])
         }
+      }
+    }
+  })
+
+  it('gives every assertion of every shipped lesson a chip, with no JSON edits', () => {
+    const lessons = ARCS.flatMap((arc) => arc.lessons)
+    expect(lessons).toHaveLength(20)
+    for (const lesson of lessons) {
+      for (const context of [openingContext(), satisfyingContext(lesson)]) {
+        const chips = progressChips(lesson, context)
+        expect(chips).toHaveLength(lesson.goal.length)
+        for (const chip of chips) {
+          expect([lesson.id, chip.text]).not.toEqual([lesson.id, expect.stringMatching(/undefined|NaN|^\s|\s$/)])
+          expect(chip.text.length).toBeGreaterThan(3)
+        }
+      }
+    }
+  })
+
+  it('shows every chip met when the lesson is, and the broken one unmet on a near miss', () => {
+    for (const lesson of ARCS.flatMap((arc) => arc.lessons)) {
+      const complete = satisfyingContext(lesson)
+      expect([lesson.id, progressChips(lesson, complete).every((chip) => chip.met)]).toEqual([
+        lesson.id,
+        true,
+      ])
+      for (const goal of lesson.goal) {
+        expect([lesson.id, goal.type, progressChip(goal, nearMiss(complete, goal)).met]).toEqual([
+          lesson.id,
+          goal.type,
+          false,
+        ])
       }
     }
   })

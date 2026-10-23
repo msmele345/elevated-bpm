@@ -2,9 +2,10 @@
 
 The project's shared language: the words specs, issues, PRs, code comments and
 conversations use, and exactly what each one means here. Last reviewed
-2026-10-21: v2 (the SP-04 sampler release) is shipped, v3 is specified in
+2026-10-23: v2 (the SP-04 sampler release) is shipped, v3 is specified in
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
-voice Level and bass/stab mute & solo) have shipped.
+voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
+layout) have shipped.
 
 ## How to use and maintain this file
 
@@ -78,12 +79,16 @@ voice Level and bass/stab mute & solo) have shipped.
 - **Bass synth (BL-303).** A monophonic 303-style synth: a sawtooth into a
   resonant −24 dB lowpass. Its knobs are Cutoff, Resonance and Decay, and
   [v3 spec] Env Mod is added. It plays the bass note lane. Code: `BASS_PARAMS`, `BassSettings`.
-- **Deck.** The whole instrument surface: every panel, the Master strip, and
-  the curriculum UI woven through them. Founding term.
+- **Deck.** The whole instrument surface: every panel, the transport strip,
+  the Master strip, and the curriculum UI woven through them. Top to bottom:
+  header (with the Share menu), any share strip, transport strip, curriculum
+  line, lesson card, Drums, Sampler, Bass, Stab, Master. Founding term.
 - **Deck section.** A block of the Deck with an id, a heading and a skip link.
-  This one list drives all three, and adding a panel without adding a section
-  fails the accessibility suite (see Eight-control rule). [v3 spec] The transport strip
-  becomes a section. Code: `DECK_SECTIONS`.
+  This one list drives all three, in the order the Deck stacks them
+  (transport, curriculum, drums, sampler, bass, stabs, master); adding a panel
+  without adding a section fails the accessibility suite (see Eight-control
+  rule), and so does a list whose order disagrees with the page. Code:
+  `DECK_SECTIONS`.
 - **Drum machine (DR-909, "Rhythm Section").** The sample-based kit of five
   drum lanes. Code: `KIT_LANES`, `KIT_SAMPLES`.
 - **Instrument.** A sound source that owns its params and its lanes:
@@ -93,8 +98,9 @@ voice Level and bass/stab mute & solo) have shipped.
   responds to drag (shift for fine) and keys (arrows, Page, Home/End). Code: `Knob`,
   `ParamSpec`.
 - **Master strip (MX-01, "Main Out").** The panel with the scope, the master
-  macros and the FX controls. It sits above the instruments today; [v3 spec] it moves to the
-  bottom of the Deck.
+  macros and the FX controls. It sits at the bottom of the Deck, after the
+  Stab, as it sits at the end of the signal chain. It no longer holds the
+  transport (see Transport strip).
 - **Model plate.** The name/model heading on each panel: DR-909, SP-04,
   BL-303, CS-08, MX-01. EB-01 is the plate on the Techno graduation. These are the
   Deck's own names, not trademarks. Code: `PanelTitle`.
@@ -115,10 +121,13 @@ voice Level and bass/stab mute & solo) have shipped.
 - **Stab synth (CS-08).** A polyphonic chord synth with a fixed patch. It is played live
   on the on-screen keyboard or the computer keys A–K, and sequenced on the stab
   note lane. Code: `StabKeyboard`, `createStabVoices`.
-- **Transport strip** [v3 spec]. The sticky bar at the top of the Deck holding
-  Play/Stop, tempo, Swing, slots A–D, Copy and Clear. It replaces the transport row
-  inside the Master strip. Code today: `TransportBar`, which already holds Play, tempo
-  and Swing.
+- **Transport strip.** The sticky bar pinned to the top of the viewport
+  holding Play/Stop, the tempo fader with its BPM readout, and Swing (a compact
+  Level-sized knob with its name printed beside it). It is its own deck section,
+  one row and 52px tall on desktop (`--transport-strip-h`); scroll targets clear
+  it through `scroll-padding-top`. [v3 spec] It gains slots A–D, Copy and Clear
+  (EB3-07a) in the room left at its right-hand end, and a two-row phone layout
+  (EB3-06). Code: `TransportStrip`.
 
 ## Patterns, lanes and time
 
@@ -303,8 +312,8 @@ voice Level and bass/stab mute & solo) have shipped.
   unknown version falls back to a fresh document. Code: `migrateProjectState`.
 - **Opening deck.** What a first-time visitor gets: the demo groove, the curated
   source, empty pads and nothing earned. Code: `openingProjectState`.
-- **prefs.** A reserved slot in ProjectState. It is still `{}`. [v3 spec] Layout state
-  stays out of it; the curriculum expand state is session-only.
+- **prefs.** A reserved slot in ProjectState. It is still `{}`. Layout state
+  stays out of it: the curriculum line's expand state is session-only.
 - **ProjectState.** The one versioned JSON document and the single source of
   truth. It holds `patterns`, `activePatternId`, `transport`, `instrumentSettings`,
   `sources` (metadata only), `lessonProgress`, `prefs`, `mixer`, `activeArcId` and
@@ -339,6 +348,16 @@ voice Level and bass/stab mute & solo) have shipped.
 - **Share link (share payload).** `?p=` carrying ProjectState as JSON, then gzip, then
   base64url, kept under 2,000 characters. Recipient-owned fields (progress, prefs) are
   blanked. Code: `createShareUrl`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
+- **Share menu (Share ▾).** The header button that unfolds the three ways a
+  beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,
+  with the copy explaining each. A disclosure, not an ARIA menu; Escape or a
+  press outside puts it away. It stays disabled until the deck has hydrated.
+  Incoming-share choices and share errors are never in it: they are share
+  strips, and a strip appearing puts the menu away. Code: `ShareMenu`.
+- **Share strip.** A full-width strip under the header that asks for a
+  decision about sharing: the incoming beat's Keep this beat / Back to my
+  project, or a link, bundle or save error with Dismiss. Event-driven, never
+  permanent, never folded into the Share menu. Code: `ShareStrips`.
 - **Share validator.** The one check that both links and bundles pass. Every
   version bump updates it. Code: `isSharedProject`.
 
@@ -353,8 +372,11 @@ voice Level and bass/stab mute & solo) have shipped.
   the work never takes it back. Code: `LessonProgress.completed`,
   `detectLessonCompletion`.
 - **Curriculum.** Every arc together, behind the track selector.
-- **Curriculum line** [v3 spec]. The compact curriculum header: track selector,
-  n/total, current lesson name, and "Path ▸" to expand the numbered path.
+- **Curriculum line.** The compact curriculum header, one line tall: track
+  selector, a short progress meter with n/total, the current lesson's number and
+  name, and "Path ▸", which unfolds the numbered path. Whether the path is
+  unfolded is session-only component state, never saved to `prefs`. Code:
+  `LessonArc`.
 - **Demo rule.** The opening deck may groove, but it must never complete a lesson.
   On any lane a lesson asserts, the demo places only steps that lesson also
   wants (the open hat is the one deliberate exception). [v3 spec] No slot of the opening deck
@@ -385,9 +407,10 @@ voice Level and bass/stab mute & solo) have shipped.
   one means a JSON file plus one line in the arc's list. Founding term. Code: `Lesson`.
 - **Lesson card.** The lesson's panel on the Deck. [v3 spec] Once earned, it collapses to
   a strip of about 44px with ✓ and Next ▸.
-- **Path.** The numbered row of lessons for the active arc. Every lesson can be
-  entered, and the Deck is never gated. Navigation moves a marker and never touches the
-  sandbox. Code: `LessonArc`, `ArcEntry`.
+- **Path.** The numbered row of lessons for the active arc, folded behind the
+  curriculum line's "Path ▸" until asked for. Every lesson can be entered, and the
+  Deck is never gated. Navigation moves a marker and never touches the sandbox.
+  Code: `LessonArc`, `ArcEntry`.
 - **Progress chip** [v3 spec]. One assertion's progress on the lesson card (for example,
   "Kick 3/4"), shown with ✓ when met and hidden once the lesson is earned. An optional JSON
   `label` overrides the noun. Lesson completion is derived from the same progress
@@ -411,16 +434,17 @@ voice Level and bass/stab mute & solo) have shipped.
   eight controls that has no skip link. Code: `src/a11y.test.ts`.
 - **First-click promise.** The product promise: the Deck is playable, with sound,
   from the first click. Nothing (login, setup, a lesson) gates the instrument.
-- **Fold / fold budget** [v3 spec]. The fold is what is visible without scrolling. The v3 budget:
-  at 1280×720, on a fresh project with lesson 1's card open, the bottom of the
-  fifth drum lane must sit at or above 720px.
+- **Fold / fold budget.** The fold is what is visible without scrolling. The v3 budget:
+  at 1280×720, on a fresh project with lesson 1's card open, Play and the tempo
+  are in view and the bottom of the fifth drum lane sits at or above 720px.
+  Checked by `e2e/fold.spec.ts`.
 - **Issue track.** A release's ordered set of issue files, sliced from its spec.
   Not a curriculum track.
 - **Layout seam.** Seam 6 in the v3 spec's Testing Decisions: the facts jsdom
   cannot measure, checked in a real browser. It runs as the Playwright suite in
-  `e2e/`, against the production build, in the `e2e` CI job. Today it holds only
-  the smoke check; the fold and sideways-scroll checks arrive with EB3-03b.
-  Code: `playwright.config.ts`.
+  `e2e/`, against the production build, in the `e2e` CI job. It holds the smoke
+  check, the fold check and the pinned-transport check; the sideways-scroll and
+  two-column checks arrive with EB3-05 and EB3-06. Code: `playwright.config.ts`.
 - **Performance rule.** React re-renders on user edits only, never on the audio
   clock. The playhead, meters, LEDs and room light animate from rAF reading the
   engine directly.

@@ -5,13 +5,14 @@ import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
 import { PanelTitle } from './components/PanelTitle'
-import { ShareControls } from './components/ShareControls'
+import { ShareMenu } from './components/ShareMenu'
+import { ShareStrips } from './components/ShareStrips'
 import { SamplerPanel } from './components/SamplerPanel'
 import { SkipLinks } from './components/SkipLinks'
 import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
-import { TransportBar } from './components/TransportBar'
+import { TransportStrip } from './components/TransportStrip'
 import { usePlayhead } from './hooks/usePlayhead'
 import { useRoomLight } from './hooks/useRoomLight'
 import {
@@ -1269,22 +1270,25 @@ export default function App() {
           Elevated <em>BPM</em>
         </h1>
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
+        <ShareMenu
+          shareReady={hydrated}
+          isSharing={isSharing}
+          isBundling={isBundling}
+          sharedUrl={sharedUrl}
+          copied={shareCopied}
+          strip={incomingShareError ?? outgoingShareError ?? (sharePreview ? 'preview' : null)}
+          onShare={handleShare}
+          onExportBundle={handleExportBundle}
+          onOpenBundle={handleOpenBundle}
+        />
       </header>
 
-      <ShareControls
+      <ShareStrips
         previewing={sharePreview !== null}
         errorMessage={incomingShareError ?? outgoingShareError}
-        shareReady={hydrated}
-        isSharing={isSharing}
-        isBundling={isBundling}
-        sharedUrl={sharedUrl}
-        copied={shareCopied}
         // Counted from the pads that landed silent, so a bundle — which carries
         // its audio — says nothing, and a link says exactly what it cost.
         degradedNotice={sharePreview ? sharedAudioNotice(project, audio) : null}
-        onShare={handleShare}
-        onExportBundle={handleExportBundle}
-        onOpenBundle={handleOpenBundle}
         onKeep={handleKeepSharedBeat}
         onRestore={handleRestoreOwnProject}
         onDismissError={() => {
@@ -1294,6 +1298,18 @@ export default function App() {
             setOutgoingShareError(null)
           }
         }}
+      />
+
+      <TransportStrip
+        isPlaying={isPlaying}
+        bpm={bpm}
+        swing={swing}
+        spotlitTempo={spotlitTarget('transport:tempo')}
+        spotlitSwing={spotlitParams.includes(SWING_PARAM.id)}
+        heldForRecording={isTransportHeld(recordingState)}
+        onTogglePlay={handleTogglePlay}
+        onBpmChange={handleBpmChange}
+        onSwingChange={handleSwingChange}
       />
 
       <LessonArc
@@ -1320,64 +1336,6 @@ export default function App() {
           onDismiss={handleDismissLesson}
         />
       )}
-
-      {/* The master strip: deck-global transport, the main-out scope, and the
-          two macro knobs — filter and drive — that shape the whole mix. */}
-      <section
-        className="panel master-panel"
-        id={DECK_SECTION_IDS.master}
-        tabIndex={-1}
-        aria-labelledby={sectionTitleId(DECK_SECTION_IDS.master)}
-      >
-        <PanelTitle
-          sectionId={DECK_SECTION_IDS.master}
-          name="Master"
-          model="MAIN OUT · MX-01"
-        />
-        <TransportBar
-          isPlaying={isPlaying}
-          bpm={bpm}
-          swing={swing}
-          spotlitTempo={spotlitTarget('transport:tempo')}
-          spotlitSwing={spotlitParams.includes(SWING_PARAM.id)}
-          heldForRecording={isTransportHeld(recordingState)}
-          onTogglePlay={handleTogglePlay}
-          onBpmChange={handleBpmChange}
-          onSwingChange={handleSwingChange}
-        />
-        <div className="master-out">
-          <SpectrumScope />
-          <div className="knob-row master-knobs">
-            {MASTER_PARAMS.map((param) => (
-              <Knob
-                key={param.id}
-                spec={param}
-                value={masterSettings[param.id]}
-                spotlit={spotlitParams.includes(param.id)}
-                onChange={handleMasterParamChange}
-              />
-            ))}
-          </div>
-        </div>
-        {/* The send bus, grouped apart from the macros: three send levels and
-            the two controls shaping what they arrive into. */}
-        <div className="fx-bus">
-          <span className="fx-bus-name" id={FX_GROUP_LABEL_ID}>
-            Send FX · delay 1/8 dotted → reverb
-          </span>
-          <div className="knob-row fx-knobs" role="group" aria-labelledby={FX_GROUP_LABEL_ID}>
-            {FX_PARAMS.map((param) => (
-              <Knob
-                key={param.id}
-                spec={param}
-                value={fxSettings[param.id]}
-                spotlit={spotlitParams.includes(param.id)}
-                onChange={handleFxParamChange}
-              />
-            ))}
-          </div>
-        </div>
-      </section>
 
       <section
         className="panel"
@@ -1487,6 +1445,54 @@ export default function App() {
         onToggleSolo={handleToggleSolo}
         onLevelChange={handleLevelChange}
       />
+
+      {/* The master strip, last on screen as it is last in the signal chain:
+          the main-out scope, the two macro knobs — filter and drive — that
+          shape the whole mix, and the send FX bus. */}
+      <section
+        className="panel master-panel"
+        id={DECK_SECTION_IDS.master}
+        tabIndex={-1}
+        aria-labelledby={sectionTitleId(DECK_SECTION_IDS.master)}
+      >
+        <PanelTitle
+          sectionId={DECK_SECTION_IDS.master}
+          name="Master"
+          model="MAIN OUT · MX-01"
+        />
+        <div className="master-out">
+          <SpectrumScope />
+          <div className="knob-row master-knobs">
+            {MASTER_PARAMS.map((param) => (
+              <Knob
+                key={param.id}
+                spec={param}
+                value={masterSettings[param.id]}
+                spotlit={spotlitParams.includes(param.id)}
+                onChange={handleMasterParamChange}
+              />
+            ))}
+          </div>
+        </div>
+        {/* The send bus, grouped apart from the macros: three send levels and
+            the two controls shaping what they arrive into. */}
+        <div className="fx-bus">
+          <span className="fx-bus-name" id={FX_GROUP_LABEL_ID}>
+            Send FX · delay 1/8 dotted → reverb
+          </span>
+          <div className="knob-row fx-knobs" role="group" aria-labelledby={FX_GROUP_LABEL_ID}>
+            {FX_PARAMS.map((param) => (
+              <Knob
+                key={param.id}
+                spec={param}
+                value={fxSettings[param.id]}
+                spotlit={spotlitParams.includes(param.id)}
+                onChange={handleFxParamChange}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
     </main>
       {editor && (
         <RegionEditor

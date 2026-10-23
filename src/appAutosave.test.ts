@@ -80,7 +80,7 @@ async function renderHydratedDeck() {
   const view = render(createElement(App))
   await waitFor(() =>
     expect(
-      (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
     ).toBe(false),
   )
   return view

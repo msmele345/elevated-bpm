@@ -133,7 +133,7 @@ async function renderReadyDeck() {
   await waitFor(
     () =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     // fake-indexeddb is normally effectively instant, but a shared CI runner
     // can take longer than Testing Library's one-second default.

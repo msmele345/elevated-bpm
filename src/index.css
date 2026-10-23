@@ -49,6 +49,11 @@
   /* one vertical rhythm between everything stacked on the deck */
   --deck-gap: 14px;
 
+  /* The sticky transport strip's height. Scroll targets clear it (see the
+     html rule below), so nothing a skip link or a lesson jumps to lands
+     underneath it. */
+  --transport-strip-h: 52px;
+
   /* The room's light levels, written per-frame by useRoomLight (rAF, never
      React state). Defaults keep the room calm before the first frame lands. */
   --pulse: 0;
@@ -64,6 +69,12 @@
 * {
   box-sizing: border-box;
   margin: 0;
+}
+
+/* The transport strip is pinned over the top of the page, so anything
+   scrolled into view stops below it rather than behind it. */
+html {
+  scroll-padding-top: calc(var(--transport-strip-h) + 10px);
 }
 
 body {
@@ -332,7 +343,9 @@ body::before {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 6;
+  /* Above the header (7) and the sticky transport strip (5): a focused
+     skip link must never be painted over. */
+  z-index: 8;
 }
 
 .skip-link {
@@ -376,9 +389,11 @@ body::before {
 }
 
 .deck-header {
+  /* Above the sticky transport strip, so the Share menu drops over it. */
+  position: relative;
+  z-index: 7;
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 16px;
   padding: 0 6px;
   flex-wrap: wrap;
@@ -402,6 +417,7 @@ body::before {
 }
 
 .deck-model {
+  margin-right: auto;
   font-family: var(--font-display);
   font-size: 0.7rem;
   font-weight: 600;
@@ -409,21 +425,86 @@ body::before {
   color: var(--ink-dim);
 }
 
-/* ── Share link / incoming beat strip ─────────────────────────────── */
-.share-controls {
-  margin: -4px 6px 0;
+/* ── Share menu and incoming beat strips ──────────────────────────── */
+/* Share ▾ in the header: a raised key that drops a plate of the three ways
+   a beat leaves or arrives. The plate floats over the deck rather than
+   pushing it down — the whole point is that sharing costs the deck no room. */
+.share-menu {
+  position: relative;
+  align-self: center;
+}
+
+.share-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.share-menu-trigger:hover:not(:disabled) {
+  background: var(--key-face-hover);
+}
+
+.share-menu-trigger:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+.share-menu-trigger:disabled {
+  cursor: wait;
+  color: var(--ink-dim);
+}
+
+.share-menu-trigger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.share-menu-trigger[aria-expanded='true'] {
+  box-shadow: var(--key-pressed);
+}
+
+.share-menu-caret {
+  font-size: 0.7rem;
+  color: var(--ink-dim);
+}
+
+.share-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(360px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border: 1px solid #000;
+  border-radius: 10px;
+  background: var(--strip-face);
+  box-shadow:
+    var(--strip-shadow),
+    0 18px 40px rgba(0, 0, 0, 0.6);
 }
 
 .share-action {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
 }
 
 .share-action + .share-action {
-  margin-top: 9px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .share-bundle-controls {
@@ -437,7 +518,6 @@ body::before {
 .share-hint {
   flex-basis: 100%;
   margin: 3px 0 0;
-  text-align: right;
   color: var(--ink-dim);
   font-size: 0.6rem;
   line-height: 1.5;
@@ -583,6 +663,11 @@ body::before {
   padding: 10px 12px;
 }
 
+/* The strips sit in the deck's own rhythm; only a second strip needs a gap. */
+.share-strips .share-notice:first-child {
+  margin-top: 0;
+}
+
 .share-result label {
   display: grid;
   gap: 6px;
@@ -642,21 +727,41 @@ body::before {
   text-transform: uppercase;
 }
 
-/* ── Transport ─────────────────────────────────────────────────────── */
-.transport {
+/* ── Transport strip ───────────────────────────────────────────────── */
+/* The deck's clock, pinned to the top of the screen. Opaque, because the
+   panels scroll underneath it; one row, so it never eats the screen; and
+   the free room at its right-hand end is where the pattern bank lands. */
+.transport-strip {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  min-height: var(--transport-strip-h);
   display: flex;
   align-items: center;
+  padding: 6px 14px;
+  border: 1px solid #000;
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--panel-edge) 0%, var(--panel) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 24px rgba(0, 0, 0, 0.55);
+}
+
+.transport {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  /* Always one row: --transport-strip-h, and so every scroll target's
+     clearance, assumes it. The two-row phone strip (EB3-06) must raise
+     that height with it. */
   gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .transport-play {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 22px;
+  padding: 8px 20px;
   border: 1px solid #000;
   border-radius: 6px;
   background: var(--key-face);
@@ -763,7 +868,7 @@ body::before {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 5px 12px;
   border-radius: 5px;
   border: 1px solid #000;
   background: var(--well-bg);
@@ -788,6 +893,27 @@ body::before {
   text-transform: uppercase;
 }
 
+/* Swing: the compact dial, with its name printed beside it the way the
+   tempo fader's is — the strip's height has no room for a label above. */
+.transport-swing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transport-swing-label {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.transport-swing.is-spotlit .transport-swing-label {
+  color: var(--quad-2);
+}
+
 /* ── Master strip: main out — scope beside the two macro knobs ─────── */
 /* The mixer surface of the strip: the display window grows, the macros sit
    beside it like a mixer's master section. The knobs reuse the shared knob
@@ -808,6 +934,14 @@ body::before {
   flex: 1;
   min-width: 0;
   height: clamp(96px, 10vw, 124px);
+}
+
+/* First under the plate now the transport has moved out to its own strip:
+   the plate's hairline already separates it. */
+.master-panel .master-out {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: none;
 }
 
 .master-out .knob-row.master-knobs {
@@ -862,7 +996,7 @@ body::before {
 }
 
 /* ── Master strip: the main-out spectrum scope ─────────────────────── */
-/* A recessed display window under the transport: 16 log-spaced bars — one
+/* A recessed display window at the head of the Master strip: 16 log-spaced bars — one
    per step, in the step grid's quad colors — drawn as LED segment ladders on
    canvas by SpectrumScope (rAF reading the engine's analyser, never React). */
 .scope {
@@ -1770,23 +1904,24 @@ body::before {
   }
 }
 
-/* ── The curriculum arc ────────────────────────────────────────────── */
-/* The whole path across the top of the deck: one numbered pad per lesson,
-   built from the same materials as a step button so the curriculum reads as
-   part of the machine rather than a website bolted onto it. */
+/* ── The curriculum line ───────────────────────────────────────────── */
+/* One line across the top of the deck — tracks, progress, the lesson the
+   user is on — with the whole path folded behind "Path ▸": one numbered pad
+   per lesson, built from the same materials as a step button so the
+   curriculum reads as part of the machine rather than a website bolted on. */
 .arc {
-  padding: 12px 16px 14px;
+  padding: 7px 12px;
   background: var(--strip-face);
   border: 1px solid #000;
   border-radius: 10px;
   box-shadow: var(--strip-shadow);
 }
 
-.arc-head {
+.arc-line {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
 }
 
 .arc-tag {
@@ -1830,7 +1965,6 @@ body::before {
 .arc-tracks {
   display: flex;
   gap: 6px;
-  margin: 10px 0 2px;
 }
 
 .arc-track {
@@ -1879,10 +2013,17 @@ body::before {
   color: var(--go);
 }
 
+/* Compact progress: a short meter with its n/total beside it. */
+.arc-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .arc-meter {
   position: relative;
+  width: 64px;
   height: 3px;
-  margin: 9px 0 11px;
   border-radius: 2px;
   background: var(--well-bg);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8);
@@ -1903,8 +2044,45 @@ body::before {
   flex-wrap: wrap;
   gap: 6px;
   padding: 0;
-  margin: 0;
+  margin: 10px 0 2px;
   list-style: none;
+}
+
+.arc-path-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 5px 10px;
+  border: 1px solid #000;
+  border-radius: 6px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--silkscreen);
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.arc-path-toggle:hover {
+  background: var(--key-face-hover);
+}
+
+.arc-path-toggle:active,
+.arc-path-toggle[aria-expanded='true'] {
+  box-shadow: var(--key-pressed);
+}
+
+.arc-path-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.arc-path-toggle-caret {
+  color: var(--quad-2);
 }
 
 .arc-stop {
@@ -1970,10 +2148,11 @@ body::before {
 }
 
 .arc-here {
-  margin-top: 10px;
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
+  flex: 1 1 140px;
   font-family: var(--font-display);
   font-size: 0.68rem;
   font-weight: 600;
@@ -1986,6 +2165,12 @@ body::before {
   color: var(--quad-2);
   font-family: var(--font-mono);
   letter-spacing: 0.06em;
+}
+
+.arc-here-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 640px) {

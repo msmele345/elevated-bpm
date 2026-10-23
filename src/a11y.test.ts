@@ -96,7 +96,7 @@ async function renderDeck(): Promise<HTMLElement> {
   // The deck mounts against a placeholder document and swaps in the stored one;
   // wait for hydration so the assertions see the real, populated deck.
   await waitFor(() =>
-    expect((screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(
       false,
     ),
     // Hydration reads IndexedDB and runs beside the other DOM suites in CI.
@@ -158,6 +158,20 @@ describe('deck accessibility', () => {
     expect(barriers.map(identify)).toEqual([])
   })
 
+  it('stacks the deck in the order its skip links promise', async () => {
+    // A skip link list that disagrees with the page is a map of somewhere else.
+    await renderDeck()
+
+    const onPage = DECK_SECTIONS.map((section) => document.getElementById(section.id)!)
+    for (let i = 1; i < onPage.length; i += 1) {
+      const follows = onPage[i - 1].compareDocumentPosition(onPage[i])
+      expect(
+        follows & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${DECK_SECTIONS[i].id} should come after ${DECK_SECTIONS[i - 1].id}`,
+      ).toBeTruthy()
+    }
+  })
+
   it('moves focus into the section a skip link names', async () => {
     const deck = await renderDeck()
 
@@ -184,7 +198,15 @@ describe('deck accessibility', () => {
     // screen reader user navigates the deck by.
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(
-      expect.arrayContaining(['Master', 'Drum Machine', 'Sampler', 'Bass Line', 'Chord Stab']),
+      expect.arrayContaining([
+        'Transport',
+        'Curriculum',
+        'Drum Machine',
+        'Sampler',
+        'Bass Line',
+        'Chord Stab',
+        'Master',
+      ]),
     )
   })
 

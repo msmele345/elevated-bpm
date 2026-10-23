@@ -269,10 +269,16 @@ beforeEach(async () => {
   await deleteProjectDatabase()
 })
 
+/** Open the header's Share menu, unless it is already open. */
+function openShareMenu(): void {
+  const trigger = screen.getByRole('button', { name: 'Share' })
+  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger)
+}
+
 /** The deck mounts on a placeholder document and swaps in the stored one. */
 async function hydratedDeck(): Promise<void> {
   render(createElement(App))
-  const shareButton = screen.getByRole('button', { name: 'Share beat' })
+  const shareButton = screen.getByRole('button', { name: 'Share' })
   await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
 }
 
@@ -682,7 +688,7 @@ describe('App microphone recording', () => {
 describe('App sampler workflow', () => {
   it('assigns the curated source, programs its lane, and plays it live without changing the pattern', async () => {
     render(createElement(App))
-    const shareButton = screen.getByRole('button', { name: 'Share beat' })
+    const shareButton = screen.getByRole('button', { name: 'Share' })
     await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
 
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
@@ -716,7 +722,7 @@ describe('App sampler workflow', () => {
     render(createElement(App))
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     )
     const input = document.createElement('input')
@@ -737,7 +743,7 @@ describe('App sampler workflow', () => {
     render(createElement(App))
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     )
 
@@ -763,7 +769,7 @@ describe('App sampler workflow', () => {
     render(createElement(App))
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     )
     const pad = screen.getByRole('button', { name: 'Play Pad 2 — empty' })
@@ -789,9 +795,11 @@ describe('App sharing workflow', () => {
 
     render(createElement(App))
 
-    const shareButton = screen.getByRole('button', { name: 'Share beat' })
-    expect((shareButton as HTMLButtonElement).disabled).toBe(true)
-    await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
+    // The whole Share menu waits for the real project, so nothing in it can
+    // reach the placeholder.
+    const shareMenu = screen.getByRole('button', { name: 'Share' })
+    expect((shareMenu as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect((shareMenu as HTMLButtonElement).disabled).toBe(false))
     // Let this mounted project's own debounced save settle before the next
     // isolated IndexedDB fixture starts.
     await new Promise((resolve) => setTimeout(resolve, 450))
@@ -907,10 +915,14 @@ describe('App sharing workflow', () => {
     })
 
     render(createElement(App))
-    const shareButton = screen.getByRole('button', { name: 'Share beat' })
-    await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    )
 
-    fireEvent.click(shareButton)
+    openShareMenu()
+    fireEvent.click(screen.getByRole('button', { name: 'Share beat' }))
 
     await screen.findByText('Share URL copied to your clipboard.')
     expect(writeText).toHaveBeenCalledOnce()
@@ -1013,6 +1025,7 @@ describe('App beat bundles', () => {
   }
 
   function openBundle(file: File): void {
+    openShareMenu()
     fireEvent.change(screen.getByLabelText('Open a bundle'), { target: { files: [file] } })
   }
 
@@ -1031,6 +1044,7 @@ describe('App beat bundles', () => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL }))
 
     await hydratedDeck()
+    openShareMenu()
     fireEvent.click(screen.getByRole('button', { name: 'Export bundle' }))
 
     await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
@@ -1051,6 +1065,7 @@ describe('App beat bundles', () => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() }))
 
     await hydratedDeck()
+    openShareMenu()
     fireEvent.click(screen.getByRole('button', { name: 'Export bundle' }))
 
     const alert = await screen.findByRole('alert')
@@ -1618,8 +1633,15 @@ describe('App curriculum tracks', () => {
     fireEvent.click(track(name))
   }
 
+  /** Unfold the curriculum line's numbered path, unless it already is. */
+  function showPath(): void {
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+  }
+
   /** The lesson the panel is currently showing, by its position line. */
   function standingOn(): string {
+    showPath()
     return screen.getByRole('button', { name: /^Lesson \d+/, current: 'step' }).getAttribute(
       'aria-label',
     )!
@@ -1639,10 +1661,46 @@ describe('App curriculum tracks', () => {
     expect(standingOn()).toContain('Load a Sound')
   })
 
+  it('folds the path into one line that names the lesson, and unfolds it on request', async () => {
+    await hydratedDeck()
+
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    const line = screen.getByRole('navigation', { name: 'Curriculum' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('button', { name: /^Lesson \d+:/ })).toBeNull()
+    // Folded, the line still says where the learner is and how far along.
+    expect(within(line).getByText('Four on the Floor')).toBeTruthy()
+    expect(screen.getByRole('progressbar', { name: 'Lessons complete' })).toBeTruthy()
+
+    fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getAllByRole('button', { name: /^Lesson \d+:/ })).toHaveLength(14)
+    // Unfolded, every lesson is one click away.
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 3:/ }))
+    expect(within(line).getByText('Clap on 2 and 4')).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(screen.queryByRole('button', { name: /^Lesson \d+:/ })).toBeNull()
+  })
+
+  it('keeps the path’s unfolding to this session, out of the saved project', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Path' }))
+    // Moving along the path is a document edit, so a save follows it.
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 2:/ }))
+    await new Promise((resolve) => setTimeout(resolve, 450))
+
+    const saved = await loadProjectState()
+    expect(saved?.prefs).toEqual({})
+  })
+
   it('keeps each track’s place, in the session and across a reload', async () => {
     await hydratedDeck()
 
     // Step off the path on each track, then leave and come back to both.
+    showPath()
     fireEvent.click(screen.getByRole('button', { name: /^Lesson 9:/ }))
     expect(standingOn()).toContain('Sweep the Filter')
     switchTo('Sampling')
@@ -1745,6 +1803,7 @@ describe('App curriculum tracks', () => {
 
     await saveProjectState(createInitialProjectState())
     await hydratedDeck()
+    openShareMenu()
     fireEvent.change(screen.getByLabelText('Open a bundle'), {
       target: { files: [new File([bundle.blob], bundle.fileName)] },
     })

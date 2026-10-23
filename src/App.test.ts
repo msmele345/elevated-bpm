@@ -25,6 +25,7 @@ import {
   setTransportBpm,
   setTransportSwing,
   toggleActivePatternNoteStep,
+  toggleVoiceSolo,
   updateLessonProgress,
   type ProjectState,
 } from './model/projectState'
@@ -1476,6 +1477,26 @@ describe('App sampler compaction', () => {
     expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
   })
 
+  it('keeps a silent pad drawn even with no steps, so its relink is never folded away', async () => {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    // A region but no stored slice, and nothing programmed.
+    await saveProjectState(
+      commitRegionToSamplerPad(addSource(createInitialProjectState(), uploaded), 'pad1', REGION),
+    )
+
+    await hydratedDeck()
+
+    expect(screen.getByRole('button', { name: 'Pad 1 step 1' })).toBeTruthy()
+    expect(screen.getByText('Relink Pad 1')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+  })
+
   it('folds a soundless lane back into a card when its last step is cleared, keeping focus', async () => {
     // Programming without a sound: the lane is shown for the steps alone.
     await saveProjectState(cycleActivePatternStep(createInitialProjectState(), 'pad2', 2))
@@ -1492,6 +1513,34 @@ describe('App sampler compaction', () => {
     expect(screen.getByRole('group', { name: 'Pad 2: load a sound' })).toBeTruthy()
     // The control the user pressed is gone; focus lands on the card, not the page.
     expect(document.activeElement).toBe(screen.getByLabelText('Pad 2 sound source'))
+  })
+
+  it('keeps a soloed soundless lane on the deck when its last step is cleared', async () => {
+    await saveProjectState(
+      toggleVoiceSolo(cycleActivePatternStep(createInitialProjectState(), 'pad2', 2), 'pad2'),
+    )
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // on → accented
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // accented → off
+
+    // Still soloed, so still silencing every other voice: its S has to stay in reach.
+    expect(screen.getByRole('button', { name: /^Pad 2 step 3/ }).getAttribute('aria-pressed')).toBe(
+      'false',
+    )
+    expect(screen.queryByRole('group', { name: 'Pad 2: load a sound' })).toBeNull()
+  })
+
+  it("spotlights an empty pad's card when the lesson points at that pad's Tune", async () => {
+    await saveProjectState(enterLessonIn(createInitialProjectState(), 'sampling', 'tune-a-pad'))
+    await hydratedDeck()
+
+    // No sound yet, so no Tune knob: the card is where the lesson starts.
+    const card = screen.getByRole('group', { name: 'Pad 1: load a sound' })
+    expect(card.hasAttribute('data-spotlit')).toBe(true)
+    expect(
+      screen.getByRole('group', { name: 'Pad 2: load a sound' }).hasAttribute('data-spotlit'),
+    ).toBe(false)
   })
 })
 

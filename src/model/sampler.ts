@@ -3,6 +3,7 @@
 import curatedBreak from './curatedBreak.json' with { type: 'json' }
 import { claimsInstrumentKeys } from './instrumentKeys'
 import { clampParam, type ParamSpec } from './knob'
+import type { VoiceMix } from './mixer'
 import { sliceKey } from './slice'
 import type { DrumStep, PadLaneId } from './types'
 
@@ -139,10 +140,16 @@ export function padAudioState(pad: PadSettings, audio: AvailableAudio): PadAudio
  * Whether a pad's step lane belongs on the deck: once it has a sound, or once
  * it has programming. The second half is what keeps a pad that lost its audio
  * (a share link, a cleared slice) from hiding the steps the user made. A pad
- * with neither is a "Load a sound" card instead of a row of silent steps.
+ * with neither is a "Load a sound" card instead of a row of silent steps,
+ * unless it is muted or soloed: a solo silences every other voice, and the
+ * card has no S button to take it back.
  */
-export function padLaneShown(pad: PadSettings, steps: readonly DrumStep[]): boolean {
-  return pad.region !== null || steps.some((step) => step.on)
+export function padLaneShown(
+  pad: PadSettings,
+  steps: readonly DrumStep[],
+  mix: VoiceMix,
+): boolean {
+  return pad.region !== null || steps.some((step) => step.on) || mix.muted || mix.soloed
 }
 
 /**

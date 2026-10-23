@@ -282,13 +282,6 @@ spotlight, EB3-05 sampler compaction and two columns) have shipped.
 - **Pad.** One of four sampler pads, numbered 1–4 so that the label is the key
   that plays it. A pad holds a region reference, Tune, Fit and a name. Code:
   `PadSettings`, `PAD_LANES`.
-- **Pad card ("Load a sound" card).** What a pad with no sound and no
-  programming shows instead of its full strip and step lane: its number, a
-  source picker and a "From file" control, and it still takes a dropped file.
-  The lane appears as soon as the pad has a region or any step is on (the
-  sound-or-steps rule), so a pad that lost its audio keeps its programming in
-  view. Clearing the last step of a soundless pad folds it back into a card
-  and moves focus to the card's picker. Code: `padLaneShown`.
 - **Pad audio state.** One of four states:
   - `empty`: no region.
   - `ready`.
@@ -296,6 +289,16 @@ spotlight, EB3-05 sampler compaction and two columns) have shipped.
   - `silent`: the slice is missing; the pad keeps its programming and offers relink.
 
   Code: `PadAudioState`, `padAudioState`.
+- **Pad card ("Load a sound" card).** What a pad with no sound and no
+  programming shows instead of its full strip and step lane: its number, a
+  source picker and a "From file" control, and it still takes a dropped file.
+  The lane appears as soon as the pad has a region or any step is on (the
+  sound-or-steps rule), so a pad that lost its audio keeps its programming in
+  view; a silent pad (region kept, slice gone) stays drawn with its relink. A
+  muted or soloed pad also stays drawn, so its S is never hidden. Clearing the
+  last step of a soundless pad folds it back into a card and moves focus to the
+  card's picker. A lesson spotlighting a card's Tune knob lights the card,
+  because there is no knob until the pad has a sound. Code: `padLaneShown`.
 - **Region.** A re-editable window into a source: source id, start and
   duration. A pad holds a region, never a copy of the audio. Code: `SampleRegion`.
 - **Region editor.** The waveform plus a two-thumb slider for a region's edges.

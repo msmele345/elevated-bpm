@@ -55,6 +55,14 @@ the Deck on screen at once.
       source, stays for a silent programmed pad, folds back to a card when its
       last step is cleared, with focus kept on the card)
 
+**Note (sound-or-steps):** "has a sound" is read as "has a region". A silent
+pad (its slice is gone) keeps its full strip, Relink and lane even with no
+steps, so programming and the repair path are never folded away. Two
+additions came out of review. A muted or soloed pad also stays drawn, because
+a soloed card would silence the deck with no S button to undo it. A lesson
+spotlighting `knob:pad1Tune` (Tune a Pad) lights Pad 1's card on a fresh deck,
+because the knob only exists once the pad has a sound.
+
 **Note:** at exactly 1600px each column is ~762px, so a step button is 24px
 wide (34px in the 920px single column), which is the WCAG 2.5.8 minimum. Steps
 grow back to full width as the viewport approaches 1900px.

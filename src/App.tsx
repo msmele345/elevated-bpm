@@ -1276,9 +1276,7 @@ export default function App() {
           isBundling={isBundling}
           sharedUrl={sharedUrl}
           copied={shareCopied}
-          stripShown={
-            sharePreview !== null || incomingShareError !== null || outgoingShareError !== null
-          }
+          strip={incomingShareError ?? outgoingShareError ?? (sharePreview ? 'preview' : null)}
           onShare={handleShare}
           onExportBundle={handleExportBundle}
           onOpenBundle={handleOpenBundle}

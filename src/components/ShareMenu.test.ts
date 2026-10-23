@@ -95,10 +95,36 @@ describe('ShareMenu', () => {
       onExportBundle: () => undefined,
       onOpenBundle: () => undefined,
     }
-    const view = render(createElement(ShareMenu, { ...props, stripShown: false }))
+    const view = render(createElement(ShareMenu, { ...props, strip: null }))
+    fireEvent.click(trigger())
+    // The keyboard user pressed Export bundle; the export failed.
+    screen.getByRole('button', { name: 'Export bundle' }).focus()
+
+    view.rerender(createElement(ShareMenu, { ...props, strip: 'Pad 1 has no audio' }))
+
+    expect(trigger().getAttribute('aria-expanded')).toBe('false')
+    // The control that had focus is gone; focus goes back where it came from,
+    // not to the top of the document.
+    expect(document.activeElement).toBe(trigger())
+  })
+
+  it('steps aside for a new strip even while another is already showing', () => {
+    // A recipient previewing a shared link opens the menu and an export fails:
+    // the error strip arrives on top of the preview strip.
+    const props = {
+      shareReady: true,
+      isSharing: false,
+      isBundling: false,
+      sharedUrl: null,
+      copied: false,
+      onShare: () => undefined,
+      onExportBundle: () => undefined,
+      onOpenBundle: () => undefined,
+    }
+    const view = render(createElement(ShareMenu, { ...props, strip: 'preview' }))
     fireEvent.click(trigger())
 
-    view.rerender(createElement(ShareMenu, { ...props, stripShown: true }))
+    view.rerender(createElement(ShareMenu, { ...props, strip: 'Pad 1 has no audio' }))
 
     expect(trigger().getAttribute('aria-expanded')).toBe('false')
   })

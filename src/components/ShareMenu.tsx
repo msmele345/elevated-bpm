@@ -9,8 +9,12 @@ interface ShareMenuProps {
   isBundling: boolean
   sharedUrl: string | null
   copied: boolean
-  /** A share strip (an incoming preview or an error) is on the deck. */
-  stripShown?: boolean
+  /**
+   * What the share strip on the deck is saying, if one is up (an incoming
+   * preview or an error). Each new strip puts the menu away, even one that
+   * replaces or joins a strip already showing.
+   */
+  strip?: string | null
   onShare: () => void
   onExportBundle: () => void
   onOpenBundle: (file: File) => void
@@ -31,7 +35,7 @@ export function ShareMenu({
   isBundling,
   sharedUrl,
   copied,
-  stripShown = false,
+  strip = null,
   onShare,
   onExportBundle,
   onOpenBundle,
@@ -42,10 +46,14 @@ export function ShareMenu({
   const panelId = useId()
 
   // A strip is a decision the user must make, and the open plate hangs right
-  // over where strips land — so a strip arriving puts the menu away.
+  // over where strips land — so a strip arriving puts the menu away. If focus
+  // was inside the plate (the Export button that just failed), it goes back
+  // to the trigger rather than falling to the top of the document.
   useEffect(() => {
-    if (stripShown) setOpen(false)
-  }, [stripShown])
+    if (strip === null) return
+    if (rootRef.current?.contains(document.activeElement)) triggerRef.current?.focus()
+    setOpen(false)
+  }, [strip])
 
   useEffect(() => {
     if (!open) return

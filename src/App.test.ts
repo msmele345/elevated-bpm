@@ -18,11 +18,13 @@ import {
   addSource,
   commitRegionToSamplerPad,
   createInitialProjectState,
+  createDemoProjectState,
   cycleActivePatternStep,
   enterLesson as enterLessonIn,
   setSamplerPadFit,
   setTransportBpm,
   setTransportSwing,
+  toggleActivePatternNoteStep,
   updateLessonProgress,
   type ProjectState,
 } from './model/projectState'
@@ -2069,7 +2071,8 @@ describe('App progress chips', () => {
     const celebration = screen.getByText(/^Locked in/)
     expect(celebration.getAttribute('role')).toBeNull()
     expect(celebration.closest('[aria-live]')).toBeNull()
-    expect(chips()[0].classList.contains('is-met')).toBe(true)
+    // An earned card says it is done; the chips step aside (EB3-04b).
+    expect(screen.queryByRole('list', { name: 'Goal progress' })).toBeNull()
   })
 
   it('says nothing for work that was already done on arrival or on reload', async () => {
@@ -2163,10 +2166,11 @@ describe('App lesson strip and scroll to spotlight', () => {
         await hydratedDeck()
         for (const step of [1, 5, 9, 13]) kick(step)
 
-        // The celebration first, chips and all, with the way on already offered.
+        // The celebration first, with the way on already offered. An earned
+        // lesson says it is done, so its chips step aside.
         await waitFor(() => expect(screen.getByText(/^Locked in/)).toBeTruthy())
-        expect(within(lessonCard()).getByRole('list', { name: 'Goal progress' })).toBeTruthy()
-        expect(screen.getByRole('button', { name: 'Next lesson: Offbeat Hats' })).toBeTruthy()
+        expect(within(lessonCard()).queryByRole('list', { name: 'Goal progress' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Next: Offbeat Hats' })).toBeTruthy()
 
         await waitFor(
           () => expect(lessonCard().classList.contains('is-strip')).toBe(true),
@@ -2176,7 +2180,7 @@ describe('App lesson strip and scroll to spotlight', () => {
         expect(within(card).getByText('✓').getAttribute('aria-hidden')).toBe('true')
         expect(within(card).getByText('Lesson complete')).toBeTruthy()
         expect(within(card).getByRole('heading', { name: 'Four on the Floor' })).toBeTruthy()
-        expect(within(card).getByRole('button', { name: 'Next lesson: Offbeat Hats' })).toBeTruthy()
+        expect(within(card).getByRole('button', { name: 'Next: Offbeat Hats' })).toBeTruthy()
         expect(
           within(card).getByRole('button', { name: 'Reopen lesson' }).getAttribute('aria-expanded'),
         ).toBe('false')
@@ -2204,14 +2208,46 @@ describe('App lesson strip and scroll to spotlight', () => {
 
       expect(lessonCard().classList.contains('is-strip')).toBe(false)
       expect(within(lessonCard()).getByText(fourOnTheFloor.intro)).toBeTruthy()
+      expect(within(lessonCard()).queryByRole('list', { name: 'Goal progress' })).toBeNull()
       const collapse = screen.getByRole('button', { name: 'Collapse lesson' })
       expect(collapse.getAttribute('aria-expanded')).toBe('true')
       // Still earned, still waiting on the learner to move on.
-      expect(screen.getByRole('button', { name: 'Next lesson: Offbeat Hats' })).toBeTruthy()
+      expect(screen.getByRole('button', { name: 'Next: Offbeat Hats' })).toBeTruthy()
 
       fireEvent.click(collapse)
       expect(lessonCard().classList.contains('is-strip')).toBe(true)
     })
+
+    it(
+      'holds the celebration behind a finale until the finale is closed',
+      async () => {
+        // The Techno capstone, one kick short of done.
+        let saved = createDemoProjectState()
+        for (const step of [0, 4, 8]) saved = cycleActivePatternStep(saved, 'kick', step)
+        saved = cycleActivePatternStep(saved, 'snare', 4)
+        saved = cycleActivePatternStep(saved, 'closedHat', 14)
+        for (const step of [1, 3, 9, 11]) saved = toggleActivePatternNoteStep(saved, 'bass', step)
+        for (const step of [2, 10]) saved = toggleActivePatternNoteStep(saved, 'stab', step)
+        await saveProjectState(enterLessonIn(saved, DEFAULT_ARC_ID, 'your-first-techno-groove'))
+        await hydratedDeck()
+        await waitFor(() =>
+          expect(
+            within(lessonCard()).getByRole('heading', { name: 'Your First Techno Groove' }),
+          ).toBeTruthy(),
+        )
+
+        kick(13)
+        const close = await screen.findByRole('button', { name: /Keep it rolling/ })
+        await new Promise((resolve) => setTimeout(resolve, CELEBRATION_MS + 300))
+        fireEvent.click(close)
+
+        // The learner has not seen the celebration yet, so it has not ended.
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(lessonCard().classList.contains('is-strip')).toBe(false)
+        expect(screen.getByText(/^Locked in/)).toBeTruthy()
+      },
+      CELEBRATION_MS + 5000,
+    )
 
     it('waits for Next ▸ before moving the path on', async () => {
       await savedWithLessonOneEarned()
@@ -2224,7 +2260,7 @@ describe('App lesson strip and scroll to spotlight', () => {
       kick(2)
       expect(within(lessonCard()).getByRole('heading', { name: 'Four on the Floor' })).toBeTruthy()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Next lesson: Offbeat Hats' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Next: Offbeat Hats' }))
 
       expect(within(lessonCard()).getByRole('heading', { name: 'Offbeat Hats' })).toBeTruthy()
       expect(lessonCard().classList.contains('is-complete')).toBe(false)
@@ -2268,6 +2304,23 @@ describe('App lesson strip and scroll to spotlight', () => {
       expect(scrolled).not.toHaveBeenCalled()
     })
 
+    it('does not scroll into a lesson whose goal is already met on arrival', async () => {
+      // Four on the floor already programmed, but saved standing on lesson 2.
+      let saved = createInitialProjectState()
+      for (const step of [0, 4, 8, 12]) saved = cycleActivePatternStep(saved, 'kick', step)
+      await saveProjectState(enterLessonIn(saved, DEFAULT_ARC_ID, 'offbeat-hats'))
+      await hydratedDeck()
+      await waitFor(() =>
+        expect(within(lessonCard()).getByRole('heading', { name: 'Offbeat Hats' })).toBeTruthy(),
+      )
+
+      pickLesson(1)
+
+      // It is earned the moment it opens, so its spotlight is already resting.
+      await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
+      expect(scrolled).not.toHaveBeenCalled()
+    })
+
     it('leaves a spotlight that is already fully visible where it is', async () => {
       boxOf = (element) =>
         element.matches('.is-spotlit, [data-spotlit]')
@@ -2295,7 +2348,7 @@ describe('App lesson strip and scroll to spotlight', () => {
       await hydratedDeck()
       await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
 
-      fireEvent.click(screen.getByRole('button', { name: 'Next lesson: Offbeat Hats' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Next: Offbeat Hats' }))
       expect(scrolled).toHaveBeenCalledTimes(1)
       expect(scrolled.mock.contexts[0]).toBe(
         screen.getByRole('button', { name: /^Closed Hat step 1( |$)/ }).closest('.step-row'),

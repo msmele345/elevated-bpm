@@ -35,13 +35,20 @@ function scrollSpotlightIntoView(root: HTMLElement | null): void {
 
 /**
  * Scroll to spotlight. Entering a lesson asks for a scroll with
- * `requestScroll`, called alongside the edit that enters it; the scroll runs
+ * `requestSpotlightScroll`, called alongside the edit that enters it; the scroll runs
  * after that edit has rendered, so the new lesson's ring is on screen to find.
  * Nothing else ever sets the request — not hydration, not an edit while the
  * lesson is worked on — so the page never moves under a knob being dragged.
- * `scrollNow` is "Show me": the same scroll, on demand.
+ * `showSpotlight` is "Show me": the same scroll, on demand.
+ *
+ * `worthScrolling` is false for an entered lesson whose goal is already met:
+ * it is earned on arrival and its ring rests at once, so there is nothing to
+ * guide the learner to.
  */
-export function useSpotlightScroll(rootRef: RefObject<HTMLElement | null>) {
+export function useSpotlightScroll(
+  rootRef: RefObject<HTMLElement | null>,
+  worthScrolling: boolean,
+) {
   const pendingRef = useRef(false)
 
   // No dependency list: a ref check after every commit, so whatever render
@@ -49,13 +56,13 @@ export function useSpotlightScroll(rootRef: RefObject<HTMLElement | null>) {
   useEffect(() => {
     if (!pendingRef.current) return
     pendingRef.current = false
-    scrollSpotlightIntoView(rootRef.current)
+    if (worthScrolling) scrollSpotlightIntoView(rootRef.current)
   })
 
-  const requestScroll = useCallback(() => {
+  const requestSpotlightScroll = useCallback(() => {
     pendingRef.current = true
   }, [])
-  const scrollNow = useCallback(() => scrollSpotlightIntoView(rootRef.current), [rootRef])
+  const showSpotlight = useCallback(() => scrollSpotlightIntoView(rootRef.current), [rootRef])
 
-  return { requestScroll, scrollNow }
+  return { requestSpotlightScroll, showSpotlight }
 }

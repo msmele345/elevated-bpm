@@ -18,7 +18,7 @@ interface LessonPanelProps {
   celebrating: boolean
   /** The lesson Next ▸ moves on to, or null when the track has nothing left to earn. */
   nextTitle: string | null
-  /** One Progress chip per goal assertion, in goal order. */
+  /** One Progress chip per goal assertion, in goal order; shown only while unearned. */
   chips: readonly ProgressChip[]
   /** Whether the lesson has a spotlit control on the deck for "Show me" to find. */
   canShowMe: boolean
@@ -34,7 +34,8 @@ interface LessonPanelProps {
  * auto-detected, and can be dismissed at any time (the sandbox is never gated).
  *
  * Once the celebration is over an earned lesson shrinks to a slim strip — ✓,
- * Next ▸ and a way to reopen its text — so the Deck comes back on screen. The
+ * Next ▸ and a way to reopen its text — so the Deck comes back on screen. An
+ * earned card shows no chips: it says it is done. The
  * path still waits for Next ▸, so a celebration is never cut short. Whether the
  * strip is reopened is the card's own business: the card is keyed by lesson,
  * so walking onto another lesson starts it folded again, and nothing is saved.
@@ -57,17 +58,19 @@ function Lessons({
   onShowMe,
 }: LessonPanelProps) {
   const [reopened, setReopened] = useState(false)
+  const view: 'working' | 'celebrating' | 'reopened' | 'strip' = !completed
+    ? 'working'
+    : celebrating
+      ? 'celebrating'
+      : reopened
+        ? 'reopened'
+        : 'strip'
 
   const next = (
-    <button
-      type="button"
-      className="lesson-next"
-      onClick={onNext}
-      aria-label={nextTitle ? `Next lesson: ${nextTitle}` : 'Put lesson away'}
-    >
+    <button type="button" className="lesson-next" onClick={onNext}>
       {nextTitle ? (
         <>
-          Next <span aria-hidden="true">▸</span>
+          Next: {nextTitle} <span aria-hidden="true">▸</span>
         </>
       ) : (
         'Done'
@@ -75,7 +78,7 @@ function Lessons({
     </button>
   )
 
-  if (completed && !celebrating && !reopened) {
+  if (view === 'strip') {
     return (
       <aside className="lesson-panel is-complete is-strip" aria-label="Lesson">
         <span className="lesson-check" aria-hidden="true">
@@ -100,14 +103,32 @@ function Lessons({
   }
 
   return (
-    <aside className={completed ? 'lesson-panel is-complete' : 'lesson-panel'} aria-label="Lesson">
+    <aside
+      className={
+        view === 'working'
+          ? 'lesson-panel'
+          : view === 'reopened'
+            ? 'lesson-panel is-complete is-reopened'
+            : 'lesson-panel is-complete'
+      }
+      aria-label="Lesson"
+    >
       <div className="lesson-head">
         <span className="lesson-tag">
           {completed ? 'Lesson complete' : `Lesson ${position} of ${total}`}
         </span>
-        {completed ? (
+        {view === 'working' ? (
+          <button
+            type="button"
+            className="lesson-dismiss"
+            onClick={onDismiss}
+            aria-label="Dismiss lesson"
+          >
+            ✕
+          </button>
+        ) : (
           <div className="lesson-actions">
-            {reopened && (
+            {view === 'reopened' && (
               <button
                 type="button"
                 className="lesson-link"
@@ -120,15 +141,6 @@ function Lessons({
             )}
             {next}
           </div>
-        ) : (
-          <button
-            type="button"
-            className="lesson-dismiss"
-            onClick={onDismiss}
-            aria-label="Dismiss lesson"
-          >
-            ✕
-          </button>
         )}
       </div>
       <h2 className="lesson-title">
@@ -139,14 +151,14 @@ function Lessons({
           </span>
         )}
       </h2>
-      {completed && !reopened ? (
+      {view === 'celebrating' ? (
         <p className="lesson-celebration">
           Locked in — goal complete. Keep it running and make it yours.
         </p>
       ) : (
         <p className="lesson-intro">
           {lesson.intro}
-          {canShowMe && !completed && (
+          {canShowMe && view === 'working' && (
             <>
               {' '}
               <button type="button" className="lesson-link lesson-show-me" onClick={onShowMe}>
@@ -156,24 +168,22 @@ function Lessons({
           )}
         </p>
       )}
-      <ul className="lesson-chips" aria-label="Goal progress">
-        {chips.map((chip, i) => {
-          // Completion is latched, so an earned card reads as a finished
-          // checklist even after the beat has moved on.
-          const met = completed || chip.met
-          return (
-            <li key={i} className={met ? 'lesson-chip is-met' : 'lesson-chip'}>
-              {met && (
+      {/* An earned lesson says it is done; its chips step aside. */}
+      {view === 'working' && (
+        <ul className="lesson-chips" aria-label="Goal progress">
+          {chips.map((chip, i) => (
+            <li key={i} className={chip.met ? 'lesson-chip is-met' : 'lesson-chip'}>
+              {chip.met && (
                 <span className="lesson-chip-check" aria-hidden="true">
                   ✓
                 </span>
               )}
               {chip.text}
-              {met && <span className="visually-hidden">, done</span>}
+              {chip.met && <span className="visually-hidden">, done</span>}
             </li>
-          )
-        })}
-      </ul>
+          ))}
+        </ul>
+      )}
     </aside>
   )
 }

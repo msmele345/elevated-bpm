@@ -403,8 +403,10 @@ export default function App() {
 
   usePlayhead(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
-  const { requestScroll: requestSpotlightScroll, scrollNow: showSpotlight } =
-    useSpotlightScroll(deckRef)
+  const { requestSpotlightScroll, showSpotlight } = useSpotlightScroll(
+    deckRef,
+    canShowMe && !lessonChips.every((chip) => chip.met),
+  )
 
   // Hydrate from IndexedDB once on mount: a returning user gets their saved
   // beat back, a first-time one gets the demo groove so the deck is never
@@ -543,12 +545,13 @@ export default function App() {
   }, [goalContext, lessonChips, activeArc, activeLesson, lessonCompleted, hydrated, sharePreview])
 
   // A celebration has its moment, then the card shrinks to the completed strip.
+  // A capstone's finale covers the deck, so the moment starts once it closes.
   // A UI timer, not musical time — it has nothing to stay in step with.
   useEffect(() => {
-    if (celebratingLessonId === null) return
+    if (celebratingLessonId === null || finaleArcId !== null) return
     const timer = setTimeout(() => setCelebratingLessonId(null), CELEBRATION_MS)
     return () => clearTimeout(timer)
-  }, [celebratingLessonId])
+  }, [celebratingLessonId, finaleArcId])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.

@@ -40,15 +40,17 @@ learner is working.
       Next ▸ and "reopen"; reopening shows the full text — `LessonPanel` holds
       the celebration card for `CELEBRATION_MS` (2.4 s), then renders the strip:
       ✓, "Lesson complete", the title, **Reopen** (`aria-expanded`) and **Next ▸**
-      (named "Next lesson: <title>", or "Done" once the track has nothing left).
-      Reopen unfolds the intro, chips all ✓, with Collapse to fold it; the card is
+      (reading "Next: <title> ▸", or "Done" once the track has nothing left). No
+      earned card shows chips. Reopen unfolds the intro, with Collapse to fold it; the card is
       keyed by lesson so that state is session-only. The celebration is set in the
       same `continuing` branch as the completion announcement, so hydrating onto
-      an earned lesson lands straight on the strip. Mounted tests (`App.test.ts`,
+      an earned lesson lands straight on the strip; behind a capstone's finale the
+      celebration's clock starts only once the finale closes. Mounted tests (`App.test.ts`,
       "completed strip"); Playwright measures the strip at ≤48px
       (`e2e/lessonCard.spec.ts`); measured 44px in-browser at 1280×720
-- [x] The path does not advance until Next ▸ is pressed — Next ▸ is
-      `handleDismissLesson`, the existing put-away-and-advance action, and the only
+- [x] The path does not advance until Next ▸ is pressed — Next ▸
+      (`handleNextLesson`) requests the scroll and calls `handleDismissLesson`, the
+      existing put-away-and-advance action; it is the only
       control on an earned card that moves the path (the ✕ is unearned-only).
       Mounted: edits on the strip leave lesson 1 in place; Next ▸ enters Offbeat Hats
 - [x] Entering a lesson whose spotlight is off-screen scrolls it into view below
@@ -57,7 +59,9 @@ learner is working.
       `scrollIntoView({ block: 'center' })` (cleared by `scroll-padding-top`) only
       when `spotlightNeedsScroll` (`src/model/spotlightScroll.ts`, unit-tested) says
       it is not wholly inside the band below the strip; a target inside the strip
-      never scrolls. Triggered by picking on the path, Next ▸ and Resume. Mounted
+      never scrolls, and neither does entering a lesson whose goal is already met (it
+      is earned on arrival and its ring rests). Triggered by picking on the path,
+      Next ▸ and Resume. Mounted
       tests cover each trigger, the visible case and the in-strip case
 - [x] No scroll on load/hydration or on any edit while the lesson is open
       (mounted test with scrolling mocked) — the request is a ref set only by the

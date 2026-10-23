@@ -372,6 +372,13 @@ spotlight) have shipped.
 - **Completed (earned).** Completion recorded in `lessonProgress`. It is latched, so undoing
   the work never takes it back. Code: `LessonProgress.completed`,
   `detectLessonCompletion`.
+- **Completed strip.** What an earned lesson card becomes once its celebration is
+  over: one row of about 44px with ✓, "Lesson complete", the title, **Reopen** and
+  **Next ▸**, and no Progress chips. Reopen unfolds the intro again (Collapse folds
+  it); that is session-only and resets on the next lesson. The celebration lasts
+  `CELEBRATION_MS`, counted from when any finale closes, and plays only for an edit
+  the learner just made, so hydrating or walking onto an earned lesson lands straight
+  on the strip. Code: `LessonPanel`, `CELEBRATION_MS`.
 - **Curriculum.** Every arc together, behind the track selector.
 - **Curriculum line.** The compact curriculum header, one line tall: track
   selector, a short progress meter with n/total, the current lesson's number and
@@ -385,9 +392,10 @@ spotlight) have shipped.
 - **Dismiss / resume / put away.** Dismiss (✕, on an unearned card) collapses the
   lesson card to a "Resume lesson" chip and leaves the deck playable. Putting a
   *completed* lesson away is what advances the path, and **Next ▸** is the only
-  control that does it (it reads "Done" once the track has nothing left to earn),
-  so a celebration is never cut short. Code: `LessonProgress.dismissed`,
-  `handleDismissLesson`.
+  control that does it. It reads "Next: <lesson> ▸" naming where it goes, or "Done"
+  once the track has nothing left to earn, so a celebration is never cut short.
+  Code: `LessonProgress.dismissed`, `handleDismissLesson` (put away), `handleNextLesson`
+  (Next ▸: put away, then scroll to spotlight).
 - **Finale (graduation moment).** The dialog raised on a capstone's incomplete →
   complete transition, never on reload or on revisiting the capstone. Its scale is `grand` (Techno, EB-01,
   16 lights) or `compact` (Sampling as SP-04; [v3 spec] Acid as BL-303; 8 lights).
@@ -413,13 +421,8 @@ spotlight) have shipped.
   one means a JSON file plus one line in the arc's list. Founding term. Code: `Lesson`.
 - **Lesson card.** The lesson's panel on the Deck: position, title, intro and a
   row of Progress chips, plus a **Show me** link that scrolls to the spotlit
-  control on demand. When the learner earns it, it shows its celebration for
-  `CELEBRATION_MS`, then shrinks to the **completed strip**: one row of about 44px
-  with ✓, "Lesson complete", the title, **Reopen** and **Next ▸**. Reopen unfolds
-  the full text again (with Collapse to fold it); that state is session-only and
-  resets on the next lesson. Hydrating onto an already earned lesson lands
-  straight on the strip, never a replayed celebration. Code: `LessonPanel`,
-  `CELEBRATION_MS`.
+  control on demand. When the learner earns it, it shows its celebration, then
+  shrinks to the completed strip (see Completed strip). Code: `LessonPanel`.
 - **Path.** The numbered row of lessons for the active arc, folded behind the
   curriculum line's "Path ▸" until asked for. Every lesson can be entered, and the
   Deck is never gated. Navigation moves a marker and never touches the sandbox.
@@ -430,15 +433,14 @@ spotlight) have shipped.
   "Swing 50% → 54–70%", "Pad 1 start 0.70 s". Placement chips count wanted steps and
   extras and never say which steps are wrong; a sweep reads as a share of the travel
   asked for; range and value chips read the current value. An optional JSON `label`
-  overrides the noun. A met chip shows ✓ in run green, and every chip on an earned
-  card shows ✓, because completion is latched. The chips sit in one wrapping row
+  overrides the noun. A met chip shows ✓ in run green. The chips sit in one wrapping row
   (about 28px) as a list named "Goal progress". They are computed on the user-edit
   cadence, never the audio clock, from the same progress function completion reads,
   so the two can't disagree. One polite live region (`.lesson-announcer`, outside the
   deck) announces only a chip becoming met or the lesson completing, never a count
   change, and stays quiet on hydration, a shared beat arriving or leaving, and
-  walking onto a lesson. Chips are hidden on the completed strip (they show again,
-  all ✓, when it is reopened). Code: `ProgressChip`, `progressChips`, `chipsNewlyMet`.
+  walking onto a lesson. Chips show only while a lesson is unearned: an earned card
+  (celebration, completed strip, reopened) says it is done instead. Code: `ProgressChip`, `progressChips`, `chipsNewlyMet`.
 - **Scroll to spotlight.** When a lesson is *entered* (picked on the path,
   reached by Next ▸, or resumed), the first spotlit control is scrolled into view,
   but only if it is not already wholly visible below the transport strip. A control

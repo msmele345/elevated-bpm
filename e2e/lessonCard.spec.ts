@@ -46,7 +46,7 @@ test('an earned lesson opens as a slim strip with Next ▸ and Reopen', async ({
   await hydrated(page)
 
   const card = page.getByRole('complementary', { name: 'Lesson' })
-  await expect(card.getByRole('button', { name: 'Next lesson: Offbeat Hats' })).toBeVisible()
+  await expect(card.getByRole('button', { name: 'Next: Offbeat Hats' })).toBeVisible()
   await expect(card.getByRole('button', { name: 'Reopen lesson' })).toBeVisible()
   const box = await card.boundingBox()
   expect(box!.height).toBeLessThanOrEqual(48)

@@ -3,7 +3,7 @@ import { BassPanel } from './components/BassPanel'
 import { Knob } from './components/Knob'
 import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
-import { LessonPanel } from './components/LessonPanel'
+import { CELEBRATION_MS, LessonPanel } from './components/LessonPanel'
 import { PanelTitle } from './components/PanelTitle'
 import { ShareMenu } from './components/ShareMenu'
 import { ShareStrips } from './components/ShareStrips'
@@ -15,6 +15,7 @@ import { StepRow } from './components/StepRow'
 import { TransportStrip } from './components/TransportStrip'
 import { usePlayhead } from './hooks/usePlayhead'
 import { useRoomLight } from './hooks/useRoomLight'
+import { useSpotlightScroll } from './hooks/useSpotlightScroll'
 import {
   activeArcLesson,
   arcCompletion,
@@ -332,6 +333,18 @@ export default function App() {
   const lessonProgress = project.lessonProgress[activeLesson.id]
   const lessonCompleted = lessonProgress?.completed ?? false
   const lessonDismissed = lessonProgress?.dismissed ?? false
+  // Where Next ▸ goes from here, named on the button so the learner knows.
+  const nextLessonId = nextUnfinishedLessonId(
+    activeArc.lessons,
+    project.lessonProgress,
+    activeLesson.id,
+  )
+  const nextLessonTitle =
+    activeArc.lessons.find((lesson) => lesson.id === nextLessonId)?.title ?? null
+  // The lesson the learner just earned, while its celebration card is up.
+  // Session-only and set only for an edit the learner made, so hydrating onto
+  // an earned lesson lands straight on the completed strip.
+  const [celebratingLessonId, setCelebratingLessonId] = useState<string | null>(null)
 
   // What every goal is evaluated against right now. It changes on a document
   // edit, a knob move or a bigger chord — the user-edit cadence — and never on
@@ -386,9 +399,14 @@ export default function App() {
   const spotlitTarget = (target: string) =>
     !spotlitResting && spotlightsTarget(activeLesson, target)
   const spotlitSources = spotlitTarget('sampler:sources')
+  const canShowMe = !spotlitResting && activeLesson.spotlight.length > 0
 
   usePlayhead(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
+  const { requestSpotlightScroll, showSpotlight } = useSpotlightScroll(
+    deckRef,
+    canShowMe && !lessonChips.every((chip) => chip.met),
+  )
 
   // Hydrate from IndexedDB once on mount: a returning user gets their saved
   // beat back, a first-time one gets the demo groove so the deck is never
@@ -518,9 +536,22 @@ export default function App() {
     if (inheritedLessonsRef.current.has(activeLesson.id)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
     // Completion is said instead of the chip that completed it, never as well.
-    if (continuing) announce(lessonCompleteAnnouncement(activeLesson))
+    // The celebration is for the same moment, so it is gated the same way.
+    if (continuing) {
+      announce(lessonCompleteAnnouncement(activeLesson))
+      setCelebratingLessonId(activeLesson.id)
+    }
     if (completion.showFinale) setFinaleArcId(activeArc.id)
   }, [goalContext, lessonChips, activeArc, activeLesson, lessonCompleted, hydrated, sharePreview])
+
+  // A celebration has its moment, then the card shrinks to the completed strip.
+  // A capstone's finale covers the deck, so the moment starts once it closes.
+  // A UI timer, not musical time — it has nothing to stay in step with.
+  useEffect(() => {
+    if (celebratingLessonId === null || finaleArcId !== null) return
+    const timer = setTimeout(() => setCelebratingLessonId(null), CELEBRATION_MS)
+    return () => clearTimeout(timer)
+  }, [celebratingLessonId, finaleArcId])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -1110,9 +1141,20 @@ export default function App() {
     })
   }, [])
 
-  const handleSelectLesson = useCallback((lessonId: string) => {
-    setProject((p) => enterLesson(p, arcById(p.activeArcId).id, lessonId))
-  }, [])
+  // Entering a lesson — Next ▸, picking it on the path, resuming it — is the
+  // one moment the deck scrolls its spotlight into view.
+  const handleNextLesson = useCallback(() => {
+    requestSpotlightScroll()
+    handleDismissLesson()
+  }, [requestSpotlightScroll, handleDismissLesson])
+
+  const handleSelectLesson = useCallback(
+    (lessonId: string) => {
+      requestSpotlightScroll()
+      setProject((p) => enterLesson(p, arcById(p.activeArcId).id, lessonId))
+    },
+    [requestSpotlightScroll],
+  )
 
   /**
    * Bring the other track on screen. Pure marker movement: neither track's
@@ -1124,8 +1166,9 @@ export default function App() {
   }, [])
 
   const handleResumeLesson = useCallback(() => {
+    requestSpotlightScroll()
     setProject((p) => enterLesson(p, arcById(p.activeArcId).id, activeLessonOf(p).id))
-  }, [])
+  }, [requestSpotlightScroll])
 
   const removeShareFromAddress = () => {
     const url = new URL(window.location.href)
@@ -1393,12 +1436,19 @@ export default function App() {
         </button>
       ) : (
         <LessonPanel
+          // Keyed by lesson, so a reopened strip folds again on the next one.
+          key={activeLesson.id}
           lesson={activeLesson}
           position={here.position}
           total={arcDone.total}
           completed={lessonCompleted}
+          celebrating={celebratingLessonId === activeLesson.id}
+          nextTitle={nextLessonTitle}
           chips={lessonChips}
+          canShowMe={canShowMe}
           onDismiss={handleDismissLesson}
+          onNext={handleNextLesson}
+          onShowMe={showSpotlight}
         />
       )}
 

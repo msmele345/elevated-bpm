@@ -1300,7 +1300,8 @@ body::before {
   gap: 12px;
 }
 
-.lesson-dismiss {
+.lesson-dismiss,
+.lesson-next {
   padding: 2px 8px;
   border: 1px solid #000;
   border-radius: 4px;
@@ -1319,12 +1320,14 @@ body::before {
   background: var(--key-face-hover);
 }
 
-.lesson-dismiss:active {
+.lesson-dismiss:active,
+.lesson-next:active {
   transform: translateY(1px);
   box-shadow: var(--key-pressed);
 }
 
-.lesson-dismiss:focus-visible {
+.lesson-dismiss:focus-visible,
+.lesson-next:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -1423,6 +1426,96 @@ body::before {
   font-size: 0.78rem;
   line-height: 1.55;
   color: var(--ink);
+}
+
+/* The completed strip: one ~44px row once the celebration is over, so the Deck
+   comes back on screen. It also shows on reload, so nothing in it replays the
+   pop or the check-in. It may wrap on narrow screens but stays one row on desktop. */
+.lesson-panel.is-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 14px;
+  animation: none;
+}
+
+/* Reopening is re-reading, not earning it again: no second pop. */
+.lesson-panel.is-reopened,
+.lesson-panel.is-reopened .lesson-check {
+  animation: none;
+}
+
+.lesson-panel.is-strip .lesson-check {
+  margin-left: 0;
+  animation: none;
+}
+
+.lesson-panel.is-strip .lesson-title {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lesson-panel.is-strip .lesson-actions {
+  margin-left: auto;
+}
+
+.lesson-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Next ▸ — the dismiss key's steel (shared above), lettered in run green. */
+.lesson-next {
+  padding: 5px 12px;
+  color: var(--go);
+  font-family: var(--font-display);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.lesson-next:hover {
+  background: var(--key-face-hover);
+}
+
+/* Reopen, Collapse, Show me — quiet text buttons that stay out of the keys' way. */
+.lesson-link {
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--quad-2);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color 80ms ease;
+}
+
+.lesson-link:hover {
+  color: var(--ink);
+}
+
+.lesson-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* "Show me" rides at the end of the intro sentence. */
+.lesson-show-me {
+  margin-left: 4px;
+  vertical-align: baseline;
 }
 
 @keyframes lesson-complete-pop {

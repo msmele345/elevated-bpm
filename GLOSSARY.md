@@ -5,7 +5,8 @@ conversations use, and exactly what each one means here. Last reviewed
 2026-10-23: v2 (the SP-04 sampler release) is shipped, v3 is specified in
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
-layout, EB3-04a progress chips) have shipped.
+layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
+spotlight) have shipped.
 
 ## How to use and maintain this file
 
@@ -371,6 +372,13 @@ layout, EB3-04a progress chips) have shipped.
 - **Completed (earned).** Completion recorded in `lessonProgress`. It is latched, so undoing
   the work never takes it back. Code: `LessonProgress.completed`,
   `detectLessonCompletion`.
+- **Completed strip.** What an earned lesson card becomes once its celebration is
+  over: one row of about 44px with ✓, "Lesson complete", the title, **Reopen** and
+  **Next ▸**, and no Progress chips. Reopen unfolds the intro again (Collapse folds
+  it); that is session-only and resets on the next lesson. The celebration lasts
+  `CELEBRATION_MS`, counted from when any finale closes, and plays only for an edit
+  the learner just made, so hydrating or walking onto an earned lesson lands straight
+  on the strip. Code: `LessonPanel`, `CELEBRATION_MS`.
 - **Curriculum.** Every arc together, behind the track selector.
 - **Curriculum line.** The compact curriculum header, one line tall: track
   selector, a short progress meter with n/total, the current lesson's number and
@@ -381,10 +389,13 @@ layout, EB3-04a progress chips) have shipped.
   On any lane a lesson asserts, the demo places only steps that lesson also
   wants (the open hat is the one deliberate exception). [v3 spec] No slot of the opening deck
   satisfies any lesson in any arc. It is enforced by the shipped-lesson tests.
-- **Dismiss / resume / put away.** Dismiss collapses the lesson card to a
-  "Resume lesson" chip and leaves the deck playable. Putting a *completed* lesson away is
-  what advances the path ([v3 spec] the **Next ▸** button), so a celebration is never cut
-  short. Code: `LessonProgress.dismissed`.
+- **Dismiss / resume / put away.** Dismiss (✕, on an unearned card) collapses the
+  lesson card to a "Resume lesson" chip and leaves the deck playable. Putting a
+  *completed* lesson away is what advances the path, and **Next ▸** is the only
+  control that does it. It reads "Next: <lesson> ▸" naming where it goes, or "Done"
+  once the track has nothing left to earn, so a celebration is never cut short.
+  Code: `LessonProgress.dismissed`, `handleDismissLesson` (put away), `handleNextLesson`
+  (Next ▸: put away, then scroll to spotlight).
 - **Finale (graduation moment).** The dialog raised on a capstone's incomplete →
   complete transition, never on reload or on revisiting the capstone. Its scale is `grand` (Techno, EB-01,
   16 lights) or `compact` (Sampling as SP-04; [v3 spec] Acid as BL-303; 8 lights).
@@ -408,9 +419,10 @@ layout, EB3-04a progress chips) have shipped.
   `GoalContext`, `goalContextFor`.
 - **Lesson.** In-app JSON: `{ id, title, intro, spotlight[], goal[] }`. Adding
   one means a JSON file plus one line in the arc's list. Founding term. Code: `Lesson`.
-- **Lesson card.** The lesson's panel on the Deck: position, title, intro (or the
-  celebration once earned) and a row of Progress chips. [v3 spec] Once earned, it
-  collapses to a strip of about 44px with ✓ and Next ▸. Code: `LessonPanel`.
+- **Lesson card.** The lesson's panel on the Deck: position, title, intro and a
+  row of Progress chips, plus a **Show me** link that scrolls to the spotlit
+  control on demand. When the learner earns it, it shows its celebration, then
+  shrinks to the completed strip (see Completed strip). Code: `LessonPanel`.
 - **Path.** The numbered row of lessons for the active arc, folded behind the
   curriculum line's "Path ▸" until asked for. Every lesson can be entered, and the
   Deck is never gated. Navigation moves a marker and never touches the sandbox.
@@ -421,21 +433,25 @@ layout, EB3-04a progress chips) have shipped.
   "Swing 50% → 54–70%", "Pad 1 start 0.70 s". Placement chips count wanted steps and
   extras and never say which steps are wrong; a sweep reads as a share of the travel
   asked for; range and value chips read the current value. An optional JSON `label`
-  overrides the noun. A met chip shows ✓ in run green, and every chip on an earned
-  card shows ✓, because completion is latched. The chips sit in one wrapping row
+  overrides the noun. A met chip shows ✓ in run green. The chips sit in one wrapping row
   (about 28px) as a list named "Goal progress". They are computed on the user-edit
   cadence, never the audio clock, from the same progress function completion reads,
   so the two can't disagree. One polite live region (`.lesson-announcer`, outside the
   deck) announces only a chip becoming met or the lesson completing, never a count
   change, and stays quiet on hydration, a shared beat arriving or leaving, and
-  walking onto a lesson. [v3 spec] Chips are hidden on an earned lesson's slim strip
-  (EB3-04b). Code: `ProgressChip`, `progressChips`, `chipsNewlyMet`.
+  walking onto a lesson. Chips show only while a lesson is unearned: an earned card
+  (celebration, completed strip, reopened) says it is done instead. Code: `ProgressChip`, `progressChips`, `chipsNewlyMet`.
+- **Scroll to spotlight.** When a lesson is *entered* (picked on the path,
+  reached by Next ▸, or resumed), the first spotlit control is scrolled into view,
+  but only if it is not already wholly visible below the transport strip. A control
+  inside the strip counts as always visible. Never on page load or hydration, never
+  on an edit while the lesson is worked on; smooth, or instant under reduced
+  motion. "Show me" on the lesson card does the same on demand. Code:
+  `useSpotlightScroll`, `spotlightNeedsScroll`.
 - **Spotlight (spotlight target).** A `kind:id` string in lesson JSON that puts
   an amber ring on a control: `lane:`, `noteLane:`, `knob:`, `pad:`, plus the
   single targets `transport:tempo`, `keyboard:stab` and `sampler:sources`. [v3 spec] It adds
-  `accentRow:bass` and `slideRow:bass`, and scrolls the first spotlit control into
-  view when a lesson is entered (never on page load). Code: `SpotlightTarget`,
-  `spotlightsTarget`.
+  `accentRow:bass` and `slideRow:bass`. Code: `SpotlightTarget`, `spotlightsTarget`.
 - **Track (curriculum track).** The learner-facing name for an Arc on the track
   selector. See the first section.
 
@@ -458,7 +474,8 @@ layout, EB3-04a progress chips) have shipped.
 - **Layout seam.** Seam 6 in the v3 spec's Testing Decisions: the facts jsdom
   cannot measure, checked in a real browser. It runs as the Playwright suite in
   `e2e/`, against the production build, in the `e2e` CI job. It holds the smoke
-  check, the fold check and the pinned-transport check; the sideways-scroll and
+  check, the fold check, the pinned-transport check and the lesson card checks
+  (the completed strip's height, scroll to spotlight clearing the strip); the sideways-scroll and
   two-column checks arrive with EB3-05 and EB3-06. Code: `playwright.config.ts`.
 - **Performance rule.** React re-renders on user edits only, never on the audio
   clock. The playhead, meters, LEDs and room light animate from rAF reading the

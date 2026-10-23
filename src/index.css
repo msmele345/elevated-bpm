@@ -343,7 +343,9 @@ body::before {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 6;
+  /* Above the header (7) and the sticky transport strip (5): a focused
+     skip link must never be painted over. */
+  z-index: 8;
 }
 
 .skip-link {
@@ -662,7 +664,7 @@ body::before {
 }
 
 /* The strips sit in the deck's own rhythm; only a second strip needs a gap. */
-.share-notices .share-notice:first-child {
+.share-strips .share-notice:first-child {
   margin-top: 0;
 }
 
@@ -749,10 +751,10 @@ body::before {
   flex: 1;
   display: flex;
   align-items: center;
-  /* One row on desktop; a narrow screen may take a second (EB3-06 owns
-     the phone layout proper). */
-  flex-wrap: wrap;
-  gap: 8px 16px;
+  /* Always one row: --transport-strip-h, and so every scroll target's
+     clearance, assumes it. The two-row phone strip (EB3-06) must raise
+     that height with it. */
+  gap: 16px;
 }
 
 .transport-play {

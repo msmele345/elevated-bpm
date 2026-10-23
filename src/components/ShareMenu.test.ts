@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ShareMenu } from './ShareMenu'
-import { ShareNotices } from './ShareNotices'
+import { ShareStrips } from './ShareStrips'
 
 function renderMenu(overrides: Partial<Parameters<typeof ShareMenu>[0]> = {}) {
   return render(
@@ -82,6 +82,27 @@ describe('ShareMenu', () => {
     expect(document.activeElement).toBe(trigger())
   })
 
+  it('steps aside when a share strip appears, so the menu never covers a decision', () => {
+    // A failed share or export lands as a full-width strip right where the
+    // open plate hangs; the strip is what the user has to answer.
+    const props = {
+      shareReady: true,
+      isSharing: false,
+      isBundling: false,
+      sharedUrl: null,
+      copied: false,
+      onShare: () => undefined,
+      onExportBundle: () => undefined,
+      onOpenBundle: () => undefined,
+    }
+    const view = render(createElement(ShareMenu, { ...props, stripShown: false }))
+    fireEvent.click(trigger())
+
+    view.rerender(createElement(ShareMenu, { ...props, stripShown: true }))
+
+    expect(trigger().getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('puts itself away when the user presses anywhere else, but not inside it', () => {
     renderMenu()
     fireEvent.click(trigger())
@@ -94,10 +115,10 @@ describe('ShareMenu', () => {
   })
 })
 
-describe('ShareNotices', () => {
+describe('ShareStrips', () => {
   it('makes a shared beat an explicit preview with keep and restore choices', () => {
     const markup = renderToStaticMarkup(
-      createElement(ShareNotices, {
+      createElement(ShareStrips, {
         previewing: true,
         errorMessage: null,
         degradedNotice: '2 sounds could not travel.',
@@ -118,7 +139,7 @@ describe('ShareNotices', () => {
 
   it('takes no room on the deck when there is nothing to decide', () => {
     const markup = renderToStaticMarkup(
-      createElement(ShareNotices, {
+      createElement(ShareStrips, {
         previewing: false,
         errorMessage: null,
         degradedNotice: null,

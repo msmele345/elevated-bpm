@@ -65,7 +65,7 @@ leaving 04a to discover it.
       pinned at the top and Play responds — `e2e/fold.spec.ts`, strip measured
       at y=0 before the click; the keyboard stays in view after it
 - [x] Share ▾ menu holds Share link / Export / Open; incoming-share and error
-      strips still appear full-width — `ShareMenu`, `ShareNotices`
+      strips still appear full-width — `ShareMenu`, `ShareStrips`
       (`ShareMenu.test.ts`, the sharing and bundle suites in `App.test.ts`)
 - [x] Curriculum line collapses the path to one line; "Path ▸" reveals it and
       every lesson is still one click away — `LessonArc`; `App.test.ts`
@@ -97,3 +97,17 @@ Measured at 1280×720 on a wiped IndexedDB with lesson 1's card open:
 56px of margin, so none of the three levers was needed, and EB3-04a's ~28px
 chip row fits with ~28px to spare. The projection's drum-panel figure (337px
 to lane 5) came in at 317px.
+
+## Notes for later slices
+
+- **Swing is the compact dial.** The spec calls for "a standard Knob"; a
+  full-size knob (label, 58px dial, readout) does not fit a 52px strip, so
+  Swing uses the Level knob's `size="small"` with its name printed beside it.
+  Same component, id, readout and keyboard behaviour; `knob:swing` still
+  spotlights it.
+- **Menu labels keep their names.** The menu holds "Share beat", "Export
+  bundle" and "Open a bundle" — the labels these controls already had — not
+  the spec's "Share link / Open bundle" wording.
+- **The strip is one row by contract.** `--transport-strip-h` (52px) is what
+  every scroll target clears, so EB3-06's two-row phone strip and EB3-07a's
+  bank controls must keep that variable in step with the strip's real height.

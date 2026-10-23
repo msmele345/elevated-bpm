@@ -9,6 +9,8 @@ interface ShareMenuProps {
   isBundling: boolean
   sharedUrl: string | null
   copied: boolean
+  /** A share strip (an incoming preview or an error) is on the deck. */
+  stripShown?: boolean
   onShare: () => void
   onExportBundle: () => void
   onOpenBundle: (file: File) => void
@@ -29,6 +31,7 @@ export function ShareMenu({
   isBundling,
   sharedUrl,
   copied,
+  stripShown = false,
   onShare,
   onExportBundle,
   onOpenBundle,
@@ -37,6 +40,12 @@ export function ShareMenu({
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
+
+  // A strip is a decision the user must make, and the open plate hangs right
+  // over where strips land — so a strip arriving puts the menu away.
+  useEffect(() => {
+    if (stripShown) setOpen(false)
+  }, [stripShown])
 
   useEffect(() => {
     if (!open) return
@@ -114,11 +123,7 @@ export function ShareMenu({
                     // Clear the control either way, so choosing the same file again
                     // is still a change the browser will report.
                     event.target.value = ''
-                    if (!file) return
-                    // The beat arrives as a preview strip that asks for a decision;
-                    // the menu steps aside so that strip is what the user sees.
-                    setOpen(false)
-                    onOpenBundle(file)
+                    if (file) onOpenBundle(file)
                   }}
                 />
               </label>

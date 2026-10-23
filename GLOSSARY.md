@@ -342,18 +342,22 @@ layout) have shipped.
   Audio never travels, so pads arrive silent with a notice to ask for a bundle.
   [v3 spec] Over 2,000 characters, a link carries only the playing slot and says so.
   Code: `sharedAudioNotice`.
-- **Share menu (Share ▾).** The header button that unfolds the three ways a
-  beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,
-  with the copy explaining each. A disclosure, not an ARIA menu; Escape or a
-  press outside puts it away. It stays disabled until the deck has hydrated.
-  Incoming-share choices and share errors are never in it: they are full-width
-  share strips under the header. Code: `ShareMenu`, `ShareNotices`.
 - **Preview (preview-and-confirm).** An incoming link or bundle plays in memory
   with autosave suspended. **Keep this beat** saves it; **Back to my project**
   restores the recipient's document exactly. Code: `projectWithSharedBeat`.
 - **Share link (share payload).** `?p=` carrying ProjectState as JSON, then gzip, then
   base64url, kept under 2,000 characters. Recipient-owned fields (progress, prefs) are
   blanked. Code: `createShareUrl`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
+- **Share menu (Share ▾).** The header button that unfolds the three ways a
+  beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,
+  with the copy explaining each. A disclosure, not an ARIA menu; Escape or a
+  press outside puts it away. It stays disabled until the deck has hydrated.
+  Incoming-share choices and share errors are never in it: they are share
+  strips, and a strip appearing puts the menu away. Code: `ShareMenu`.
+- **Share strip.** A full-width strip under the header that asks for a
+  decision about sharing: the incoming beat's Keep this beat / Back to my
+  project, or a link, bundle or save error with Dismiss. Event-driven, never
+  permanent, never folded into the Share menu. Code: `ShareStrips`.
 - **Share validator.** The one check that both links and bundles pass. Every
   version bump updates it. Code: `isSharedProject`.
 
@@ -432,9 +436,8 @@ layout) have shipped.
   from the first click. Nothing (login, setup, a lesson) gates the instrument.
 - **Fold / fold budget.** The fold is what is visible without scrolling. The v3 budget:
   at 1280×720, on a fresh project with lesson 1's card open, Play and the tempo
-  are in view and the bottom of the fifth drum lane sits at or above 720px. It
-  measured 664px when EB3-03b shipped, leaving room for EB3-04a's ~28px chip
-  row. Checked by `e2e/fold.spec.ts`.
+  are in view and the bottom of the fifth drum lane sits at or above 720px.
+  Checked by `e2e/fold.spec.ts`.
 - **Issue track.** A release's ordered set of issue files, sliced from its spec.
   Not a curriculum track.
 - **Layout seam.** Seam 6 in the v3 spec's Testing Decisions: the facts jsdom

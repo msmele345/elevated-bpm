@@ -6,7 +6,7 @@ import { LessonArc } from './components/LessonArc'
 import { LessonPanel } from './components/LessonPanel'
 import { PanelTitle } from './components/PanelTitle'
 import { ShareMenu } from './components/ShareMenu'
-import { ShareNotices } from './components/ShareNotices'
+import { ShareStrips } from './components/ShareStrips'
 import { SamplerPanel } from './components/SamplerPanel'
 import { SkipLinks } from './components/SkipLinks'
 import { SpectrumScope } from './components/SpectrumScope'
@@ -1276,13 +1276,16 @@ export default function App() {
           isBundling={isBundling}
           sharedUrl={sharedUrl}
           copied={shareCopied}
+          stripShown={
+            sharePreview !== null || incomingShareError !== null || outgoingShareError !== null
+          }
           onShare={handleShare}
           onExportBundle={handleExportBundle}
           onOpenBundle={handleOpenBundle}
         />
       </header>
 
-      <ShareNotices
+      <ShareStrips
         previewing={sharePreview !== null}
         errorMessage={incomingShareError ?? outgoingShareError}
         // Counted from the pads that landed silent, so a bundle — which carries

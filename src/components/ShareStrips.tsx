@@ -1,4 +1,4 @@
-interface ShareNoticesProps {
+interface ShareStripsProps {
   previewing: boolean
   errorMessage: string | null
   /** What an incoming beat could not bring with it, when anything could not. */
@@ -14,17 +14,17 @@ interface ShareNoticesProps {
  * never folded into the Share menu — a choice the user must make is never
  * hidden behind a click.
  */
-export function ShareNotices({
+export function ShareStrips({
   previewing,
   errorMessage,
   degradedNotice,
   onKeep,
   onRestore,
   onDismissError,
-}: ShareNoticesProps) {
+}: ShareStripsProps) {
   if (!previewing && !errorMessage) return null
   return (
-    <div className="share-notices">
+    <div className="share-strips">
       {previewing && (
         <div className="share-notice is-preview" role="status">
           <div>

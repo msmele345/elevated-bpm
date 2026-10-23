@@ -6,7 +6,7 @@ conversations use, and exactly what each one means here. Last reviewed
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
-spotlight) have shipped.
+spotlight, EB3-05 sampler compaction and two columns) have shipped.
 
 ## How to use and maintain this file
 
@@ -83,7 +83,12 @@ spotlight) have shipped.
 - **Deck.** The whole instrument surface: every panel, the transport strip,
   the Master strip, and the curriculum UI woven through them. Top to bottom:
   header (with the Share menu), any share strip, transport strip, curriculum
-  line, lesson card, Drums, Sampler, Bass, Stab, Master. Founding term.
+  line, lesson card, Drums, Sampler, Bass, Stab, Master. At a viewport width
+  of 1600px or more the instruments split into two columns, Drums and Sampler
+  on the left and Bass and Stab on the right, with everything else spanning
+  the width; below that it is one column. The order stays the same either way,
+  so skip links and headings follow the screen. Founding term. Code:
+  `.deck-instruments`, `.deck-column`.
 - **Deck section.** A block of the Deck with an id, a heading and a skip link.
   This one list drives all three, in the order the Deck stacks them
   (transport, curriculum, drums, sampler, bass, stabs, master); adding a panel
@@ -277,6 +282,13 @@ spotlight) have shipped.
 - **Pad.** One of four sampler pads, numbered 1–4 so that the label is the key
   that plays it. A pad holds a region reference, Tune, Fit and a name. Code:
   `PadSettings`, `PAD_LANES`.
+- **Pad card ("Load a sound" card).** What a pad with no sound and no
+  programming shows instead of its full strip and step lane: its number, a
+  source picker and a "From file" control, and it still takes a dropped file.
+  The lane appears as soon as the pad has a region or any step is on (the
+  sound-or-steps rule), so a pad that lost its audio keeps its programming in
+  view. Clearing the last step of a soundless pad folds it back into a card
+  and moves focus to the card's picker. Code: `padLaneShown`.
 - **Pad audio state.** One of four states:
   - `empty`: no region.
   - `ready`.
@@ -475,8 +487,8 @@ spotlight) have shipped.
   cannot measure, checked in a real browser. It runs as the Playwright suite in
   `e2e/`, against the production build, in the `e2e` CI job. It holds the smoke
   check, the fold check, the pinned-transport check and the lesson card checks
-  (the completed strip's height, scroll to spotlight clearing the strip); the sideways-scroll and
-  two-column checks arrive with EB3-05 and EB3-06. Code: `playwright.config.ts`.
+  (the completed strip's height, scroll to spotlight clearing the strip) and the two-column check at
+  1600 and 1599px wide (`e2e/wide.spec.ts`); the sideways-scroll checks arrive with EB3-06. Code: `playwright.config.ts`.
 - **Performance rule.** React re-renders on user edits only, never on the audio
   clock. The playhead, meters, LEDs and room light animate from rAF reading the
   engine directly.

@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import type { ProjectState } from '../../src/model/projectState'
 import { DB_NAME, DB_VERSION, STORES } from '../../src/storage/db'
 import { CURRENT_KEY } from '../../src/storage/projectStore'
@@ -14,6 +14,17 @@ import { CURRENT_KEY } from '../../src/storage/projectStore'
 
 /** A file the production build serves from the app's origin, which never runs the app. */
 const QUIET_PATH = '/samples/kick-909.wav'
+
+/** Open a fresh project and wait until it is the hydrated deck, fonts and all. */
+export async function openFreshDeck(page: Page): Promise<void> {
+  await wipeProjectStorage(page)
+  await page.goto('/')
+  // The Share menu opens only once the stored project has replaced the
+  // placeholder, so an enabled trigger means the deck is the real one.
+  await expect(page.getByRole('button', { name: 'Share', exact: true })).toBeEnabled()
+  // Line wraps depend on the webfonts; measure after they have swapped in.
+  await page.evaluate(() => document.fonts.ready)
+}
 
 /** Empty the database, so the next load of the app starts a fresh project. */
 export async function wipeProjectStorage(page: Page): Promise<void> {

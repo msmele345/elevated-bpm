@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type DragEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { INTAKE_LIMITS_HINT } from '../model/intake'
 import {
@@ -12,6 +12,7 @@ import {
   PAD_LANES,
   formatPadRate,
   padAudioState,
+  padLaneShown,
   padsUsingSource,
   padPlaybackRate,
   samplerParamForPad,
@@ -168,6 +169,28 @@ function SamplerInstrument({
   // leaves the panel.
   const [dropTarget, setDropTarget] = useState<PadLaneId | 'panel' | null>(null)
 
+  // The sound-or-steps rule: a pad with neither is a "Load a sound" card, and
+  // its lane is not drawn at all.
+  const shownLanes = lanes.filter((lane) => padLaneShown(settings[lane.id], lane.steps))
+  const shownSignature = shownLanes.map((lane) => lane.id).join(',')
+
+  // Clearing the last step of a soundless pad folds its lane into a card, and
+  // takes the step button the user just pressed with it. Focus would fall to
+  // the page, 160 Tab stops from here, so it lands on the card instead.
+  const focusInSequencer = useRef(false)
+  const previouslyShown = useRef(shownSignature)
+  useLayoutEffect(() => {
+    const before = previouslyShown.current.split(',')
+    previouslyShown.current = shownSignature
+    const lost = document.activeElement === null || document.activeElement === document.body
+    if (!lost || !focusInSequencer.current) return
+    const folded = before.find((id) => id !== '' && !shownSignature.split(',').includes(id))
+    if (!folded) return
+    panelRef.current
+      ?.querySelector<HTMLSelectElement>(`[data-card-pad-id="${folded}"] .sampler-assign`)
+      ?.focus()
+  }, [shownSignature])
+
   const handleDragOver = (target: PadLaneId | 'panel') => (event: DragEvent) => {
     // Without this the browser refuses the drop and navigates to the file.
     event.preventDefault()
@@ -266,6 +289,10 @@ function SamplerInstrument({
       onDragOver={handleDragOver('panel')}
       onDragLeave={() => setDropTarget(null)}
       onDrop={handleDrop(null)}
+      onFocus={(event) => {
+        focusInSequencer.current =
+          event.target instanceof Element && event.target.closest('.sampler-sequencer') !== null
+      }}
     >
       <PanelTitle sectionId={DECK_SECTION_IDS.sampler} name="Sampler" model="4-PAD SAMPLER · SP-04" />
 
@@ -425,15 +452,72 @@ function SamplerInstrument({
             ? padPlaybackRate(settingsForPad, region.duration, secondsPerStep(bpm))
             : 1
           const state = padAudioState(settingsForPad, audio)
+          const dropProps = {
+            'data-spotlit': spotlitPads.includes(pad.id) || undefined,
+            'data-drop-active': dropTarget === pad.id || undefined,
+            onDragOver: handleDragOver(pad.id),
+            onDragLeave: () => setDropTarget(null),
+            onDrop: handleDrop(pad.id),
+          }
+          const assign = (placeholder: string) => (
+            <select
+              className="sampler-assign"
+              aria-label={`${pad.label} sound source`}
+              value={region?.sourceId ?? ''}
+              onChange={(event) => onAssign(pad.id, event.target.value)}
+            >
+              {/* Present so an empty pad has something to show; clearing a
+                  pad is storage lifecycle work, not an assignment. */}
+              <option value="" disabled>
+                {placeholder}
+              </option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
+                </option>
+              ))}
+            </select>
+          )
+          const lane = lanes.find((candidate) => candidate.id === pad.id)
+          if (lane && !padLaneShown(settingsForPad, lane.steps)) {
+            // Nothing to tune, fit or chop yet: only the ways a sound arrives.
+            return (
+              <div
+                className="sampler-pad-strip sampler-pad-card"
+                key={pad.id}
+                role="group"
+                aria-label={`${pad.label}: load a sound`}
+                data-card-pad-id={pad.id}
+                {...dropProps}
+              >
+                <span className="sampler-pad-number" aria-hidden="true">
+                  {pad.keyLabel}
+                </span>
+                <span className="sampler-pad-card-title" aria-hidden="true">
+                  Load a sound
+                </span>
+                {assign('Pick a source')}
+                <label className="sampler-pad-card-file">
+                  <span>
+                    From file<span className="visually-hidden"> onto {pad.label}</span>
+                  </span>
+                  <input
+                    type="file"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0]
+                      event.target.value = ''
+                      if (file) onLoadFile(file, pad.id)
+                    }}
+                  />
+                </label>
+              </div>
+            )
+          }
           return (
             <div
               className="sampler-pad-strip"
               key={pad.id}
-              data-spotlit={spotlitPads.includes(pad.id) || undefined}
-              data-drop-active={dropTarget === pad.id || undefined}
-              onDragOver={handleDragOver(pad.id)}
-              onDragLeave={() => setDropTarget(null)}
-              onDrop={handleDrop(pad.id)}
+              {...dropProps}
             >
               <SamplerPad
                 pad={pad}
@@ -447,23 +531,7 @@ function SamplerInstrument({
                 spotlit={spotlitParams.includes(samplerParamForPad(pad.id).id)}
                 onChange={onTuneChange}
               />
-              <select
-                className="sampler-assign"
-                aria-label={`${pad.label} sound source`}
-                value={region?.sourceId ?? ''}
-                onChange={(event) => onAssign(pad.id, event.target.value)}
-              >
-                {/* Present so an empty pad has something to show; clearing a
-                    pad is storage lifecycle work, not an assignment. */}
-                <option value="" disabled>
-                  No sound
-                </option>
-                {sources.map((source) => (
-                  <option key={source.id} value={source.id}>
-                    {source.name}
-                  </option>
-                ))}
-              </select>
+              {assign('No sound')}
               <select
                 className="sampler-fit"
                 aria-label={`${pad.label} fit to steps`}
@@ -518,7 +586,7 @@ function SamplerInstrument({
       </div>
 
       <div className="sampler-sequencer">
-        {lanes.map((lane) => {
+        {shownLanes.map((lane) => {
           const mix = voiceMix(mixer, lane.id)
           return (
             <StepRow

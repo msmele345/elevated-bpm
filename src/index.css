@@ -1354,6 +1354,45 @@ body::before {
   color: var(--silkscreen);
 }
 
+/* ── Progress chips ────────────────────────────────────────────────────
+   One recessed readout per goal assertion, in a single wrapping row (~28px
+   with its margin) so the card still clears the fold. A met chip lights in
+   the deck's run green, the same LED every earned thing on the deck wears. */
+.lesson-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid #000;
+  border-radius: 11px;
+  background: var(--well-bg);
+  box-shadow: var(--well-shadow);
+  color: var(--silkscreen);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.lesson-chip.is-met {
+  color: var(--go);
+  border-color: color-mix(in srgb, var(--go) 45%, #000);
+}
+
+.lesson-chip-check {
+  text-shadow: 0 0 6px color-mix(in srgb, var(--go) 70%, transparent);
+}
+
 /* ── Lesson completion celebration ─────────────────────────────────── */
 .lesson-panel.is-complete {
   border-left-color: var(--go);

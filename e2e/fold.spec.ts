@@ -26,8 +26,10 @@ test('a fresh project shows Play, the tempo and all five drum lanes above the fo
 }) => {
   await openFreshDeck(page)
 
-  // The fresh-project scenario the budget was measured in: lesson 1's card open.
+  // The fresh-project scenario the budget was measured in: lesson 1's card
+  // open, its progress chips included (EB3-04a).
   await expect(page.getByRole('complementary', { name: 'Lesson' })).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Goal progress' })).toBeVisible()
 
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeInViewport()
   await expect(page.getByRole('slider', { name: 'Tempo in beats per minute' })).toBeInViewport()

@@ -101,6 +101,14 @@ import { clampRegionToSource } from './model/region'
 import { SWING_PARAM, swingFromPercent, type TransportParamId } from './model/transport'
 import { RegionEditor } from './components/RegionEditor'
 import type { Lesson } from './model/lesson'
+import {
+  chipMetAnnouncement,
+  chipsNewlyMet,
+  lessonCompleteAnnouncement,
+  progressChips,
+  sameChips,
+  type ProgressChip,
+} from './model/progressChip'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
@@ -325,6 +333,35 @@ export default function App() {
   const lessonCompleted = lessonProgress?.completed ?? false
   const lessonDismissed = lessonProgress?.dismissed ?? false
 
+  // What every goal is evaluated against right now. It changes on a document
+  // edit, a knob move or a bigger chord — the user-edit cadence — and never on
+  // the audio clock. The whole document, so a goal about the sampler reads the
+  // sampler: one builder, because a caller that quietly left half the deck out
+  // would make assertions unmeetable rather than fail loudly.
+  const goalContext = useMemo(
+    () => goalContextFor(project, { motion: paramMotion, chord: chordPlay }),
+    [project, paramMotion, chordPlay],
+  )
+  // One Progress chip per assertion, handed back as the same array while
+  // nothing on it changed, so a knob drag that moves no chip leaves the lesson
+  // card alone.
+  const shownChipsRef = useRef<ProgressChip[]>([])
+  const lessonChips = useMemo(() => {
+    const next = progressChips(activeLesson, goalContext)
+    if (!sameChips(next, shownChipsRef.current)) shownChipsRef.current = next
+    return shownChipsRef.current
+  }, [activeLesson, goalContext])
+  // What the lesson live region last said. Keyed, so the same words said again
+  // are a new node and are heard again.
+  const [announcement, setAnnouncement] = useState<{ id: number; text: string } | null>(null)
+  // The chips the last edit left on the card, and the document they were read
+  // from. Null until the deck has hydrated: the placeholder deck is not work.
+  const chipBaselineRef = useRef<{
+    lessonId: string
+    preview: typeof sharePreview
+    chips: readonly ProgressChip[]
+  } | null>(null)
+
   // Spotlight guides toward the goal, so it rests once the goal is met or
   // the lesson is put away.
   const spotlitResting = lessonCompleted || lessonDismissed
@@ -443,27 +480,47 @@ export default function App() {
   // move — and never on the audio clock. Completion is latched in the
   // document, so undoing the work later doesn't revoke it and the earned
   // lesson survives a reload.
+  //
+  // The lesson live region speaks from here too, and only for a change the
+  // learner just made: a chip becoming met, or the lesson completing — never
+  // a count. Hydrating, a shared beat arriving or leaving, and walking onto a
+  // lesson all change the card without the learner finishing anything, so
+  // each starts a fresh baseline instead of an announcement.
   useEffect(() => {
+    const baseline = chipBaselineRef.current
+    chipBaselineRef.current = hydrated
+      ? { lessonId: activeLesson.id, preview: sharePreview, chips: lessonChips }
+      : null
+    const continuing =
+      baseline !== null && baseline.lessonId === activeLesson.id && baseline.preview === sharePreview
+    const announce = (text: string) =>
+      setAnnouncement((last) => ({ id: (last?.id ?? 0) + 1, text }))
+
     const completion = detectLessonCompletion(
       activeArc.lessons,
       activeLesson,
       lessonCompleted,
-      // The whole document, so a goal about the sampler reads the sampler: one
-      // builder, because a caller that quietly left half the deck out would
-      // make assertions unmeetable rather than fail loudly.
-      goalContextFor(project, { motion: paramMotion, chord: chordPlay }),
+      goalContext,
     )
     if (!completion.justCompleted) {
       // The goal is not met right now, so whatever the shared beat brought
       // with it is gone: from here the lesson is the user's to earn.
       inheritedLessonsRef.current.delete(activeLesson.id)
+      // An earned card already reads as a finished checklist; saying one of
+      // its chips is done again would be chatter.
+      if (continuing && !lessonCompleted) {
+        const met = chipsNewlyMet(baseline.chips, lessonChips)
+        if (met.length > 0) announce(chipMetAnnouncement(met))
+      }
       return
     }
     // Met, but only because the beat arrived that way — hold the credit.
     if (inheritedLessonsRef.current.has(activeLesson.id)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
+    // Completion is said instead of the chip that completed it, never as well.
+    if (continuing) announce(lessonCompleteAnnouncement(activeLesson))
     if (completion.showFinale) setFinaleArcId(activeArc.id)
-  }, [project, paramMotion, chordPlay, activeArc, activeLesson, lessonCompleted])
+  }, [goalContext, lessonChips, activeArc, activeLesson, lessonCompleted, hydrated, sharePreview])
 
   // Keep the audio engine pointed at the latest pattern; playback reads it
   // live on each scheduled 16th, so edits are audible immediately.
@@ -1255,6 +1312,13 @@ export default function App() {
         <div className="room-beam room-beam-b" />
       </div>
 
+      {/* The deck's one lesson live region. Outside the deck, because the deck
+          is hidden from assistive tech while the finale is up, and always
+          mounted, because the lesson card it speaks for can be put away. */}
+      <div className="visually-hidden lesson-announcer" aria-live="polite" aria-atomic="true">
+        {announcement && <span key={announcement.id}>{announcement.text}</span>}
+      </div>
+
       <main
         className="deck"
         ref={deckRef}
@@ -1333,6 +1397,7 @@ export default function App() {
           position={here.position}
           total={arcDone.total}
           completed={lessonCompleted}
+          chips={lessonChips}
           onDismiss={handleDismissLesson}
         />
       )}

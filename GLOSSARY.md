@@ -5,7 +5,7 @@ conversations use, and exactly what each one means here. Last reviewed
 2026-10-23: v2 (the SP-04 sampler release) is shipped, v3 is specified in
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
-layout) have shipped.
+layout, EB3-04a progress chips) have shipped.
 
 ## How to use and maintain this file
 
@@ -399,22 +399,37 @@ layout) have shipped.
   - observation: `paramSwept` and `chordPlayed`;
   - sampler value: `regionStartsWithin`, `regionShorterThan`, `fitTargetSet` and `padTuned`.
 
-  Code: `GoalAssertion`, `isGoalMet`, `parseLesson`.
+  Any goal may carry an optional `label` (non-empty) naming its Progress chip.
+  Every type has a progress function, and met is read from it, so a lesson is
+  met exactly when every assertion's progress says met. Code: `GoalAssertion`,
+  `assertionProgress`, `AssertionProgress`, `isGoalMet`, `parseLesson`.
 - **Goal context.** The curated view a goal is evaluated against: pattern, bpm,
   swing, motion, chord and sampler. It is not the whole ProjectState. Code:
   `GoalContext`, `goalContextFor`.
 - **Lesson.** In-app JSON: `{ id, title, intro, spotlight[], goal[] }`. Adding
   one means a JSON file plus one line in the arc's list. Founding term. Code: `Lesson`.
-- **Lesson card.** The lesson's panel on the Deck. [v3 spec] Once earned, it collapses to
-  a strip of about 44px with ✓ and Next ▸.
+- **Lesson card.** The lesson's panel on the Deck: position, title, intro (or the
+  celebration once earned) and a row of Progress chips. [v3 spec] Once earned, it
+  collapses to a strip of about 44px with ✓ and Next ▸. Code: `LessonPanel`.
 - **Path.** The numbered row of lessons for the active arc, folded behind the
   curriculum line's "Path ▸" until asked for. Every lesson can be entered, and the
   Deck is never gated. Navigation moves a marker and never touches the sandbox.
   Code: `LessonArc`, `ArcEntry`.
-- **Progress chip** [v3 spec]. One assertion's progress on the lesson card (for example,
-  "Kick 3/4"), shown with ✓ when met and hidden once the lesson is earned. An optional JSON
-  `label` overrides the noun. Lesson completion is derived from the same progress
-  function, so the two can't disagree.
+- **Progress chip.** One goal assertion's progress on the lesson card, as text
+  generated from the goal type and the lane's, knob's or pad's display label:
+  "Kick 3/4 · 1 extra", "Bass notes 2/4", "Cutoff sweep 60%", "Tempo 130 → 138–145",
+  "Swing 50% → 54–70%", "Pad 1 start 0.70 s". Placement chips count wanted steps and
+  extras and never say which steps are wrong; a sweep reads as a share of the travel
+  asked for; range and value chips read the current value. An optional JSON `label`
+  overrides the noun. A met chip shows ✓ in run green, and every chip on an earned
+  card shows ✓, because completion is latched. The chips sit in one wrapping row
+  (about 28px) as a list named "Goal progress". They are computed on the user-edit
+  cadence, never the audio clock, from the same progress function completion reads,
+  so the two can't disagree. One polite live region (`.lesson-announcer`, outside the
+  deck) announces only a chip becoming met or the lesson completing, never a count
+  change, and stays quiet on hydration, a shared beat arriving or leaving, and
+  walking onto a lesson. [v3 spec] Chips are hidden on an earned lesson's slim strip
+  (EB3-04b). Code: `ProgressChip`, `progressChips`, `chipsNewlyMet`.
 - **Spotlight (spotlight target).** A `kind:id` string in lesson JSON that puts
   an amber ring on a control: `lane:`, `noteLane:`, `knob:`, `pad:`, plus the
   single targets `transport:tempo`, `keyboard:stab` and `sampler:sources`. [v3 spec] It adds

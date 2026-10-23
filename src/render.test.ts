@@ -19,6 +19,7 @@ const recorded = vi.hoisted(() => ({
   stepRow: [] as Record<string, unknown>[],
   noteRow: [] as Record<string, unknown>[],
   panel: [] as { name: string; props: Record<string, unknown> }[],
+  lessonPanel: [] as Record<string, unknown>[],
 }))
 
 vi.mock('./components/StepRow', async () => {
@@ -107,6 +108,23 @@ vi.mock('./components/StabKeyboard', async () => {
   }
 })
 
+/**
+ * The lesson card, kept apart from `panel` so the instrument-panel counts
+ * below stay about instruments. Its chips are recomputed on every edit, and
+ * must come back as the same array whenever nothing on them changed.
+ */
+vi.mock('./components/LessonPanel', async () => {
+  const actual = await vi.importActual<typeof import('./components/LessonPanel')>(
+    './components/LessonPanel',
+  )
+  return {
+    LessonPanel: memo((props: Record<string, unknown>) => {
+      recorded.lessonPanel.push(props)
+      return createElement(actual.LessonPanel as never, props as never)
+    }),
+  }
+})
+
 vi.mock('./components/SamplerPanel', async () => {
   const actual = await vi.importActual<typeof import('./components/SamplerPanel')>(
     './components/SamplerPanel',
@@ -182,6 +200,7 @@ beforeEach(() => {
   recorded.stepRow.length = 0
   recorded.noteRow.length = 0
   recorded.panel.length = 0
+  recorded.lessonPanel.length = 0
   vi.stubGlobal('indexedDB', indexedDB)
   vi.stubGlobal('requestAnimationFrame', () => 1)
   vi.stubGlobal('cancelAnimationFrame', () => undefined)
@@ -193,7 +212,42 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Props of the lesson card that changed since `mark`, across every render after it. */
+function changedLessonProps(mark: number): string[] {
+  const before = recorded.lessonPanel[mark - 1]
+  expect(before, 'the lesson card never rendered').toBeDefined()
+  return [
+    ...new Set(
+      recorded.lessonPanel
+        .slice(mark)
+        .flatMap((props) => Object.keys(props).filter((key) => !Object.is(props[key], before[key]))),
+    ),
+  ]
+}
+
 describe('deck render cost', () => {
+  it('leaves the lesson card and its chips on identical props when a knob moves mid-playback', async () => {
+    await renderReadyDeck()
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const mark = recorded.lessonPanel.length
+    const masterFilter = screen.getByRole('slider', { name: 'Filter' })
+    fireEvent.keyDown(masterFilter, { key: 'ArrowDown' })
+    fireEvent.keyDown(masterFilter, { key: 'ArrowDown' })
+
+    expect(changedLessonProps(mark)).toEqual([])
+  })
+
+  it('hands the lesson card new chips only when an edit moves one', async () => {
+    await renderReadyDeck()
+
+    const mark = recorded.lessonPanel.length
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+
+    expect(changedLessonProps(mark)).toEqual(['chips'])
+  })
+
   it('leaves every drum and note lane on identical props when a master knob moves mid-playback', async () => {
     await renderReadyDeck()
     fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))

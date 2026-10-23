@@ -304,7 +304,8 @@ export interface GoalContext {
  * - `extra`: for exact-placement goals, steps that hold but were not wanted.
  *   A count, never a position — progress must not give away which steps.
  * - `current`: for range and value goals, the value the deck holds now, when
- *   it means something (absent with no chop, no fit, or no transport).
+ *   it means something (absent with no chop, no fit, or no transport; a pad
+ *   with no tune reads 0, its neutral).
  */
 export interface AssertionProgress {
   met: boolean

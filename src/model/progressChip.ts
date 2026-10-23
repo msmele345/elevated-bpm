@@ -93,6 +93,15 @@ function seconds(value: number | undefined): string {
   return value === undefined ? '—' : `${value.toFixed(2)} s`
 }
 
+/**
+ * A tempo as the goal judges it. A whole BPM reads whole; a fractional one (a
+ * hand-edited document, say) keeps a decimal, so 137.6 never reads as an
+ * in-range 138 while the goal is still unmet.
+ */
+function tempo(bpm: number): string {
+  return Number.isInteger(bpm) ? `${bpm}` : bpm.toFixed(1)
+}
+
 /** Semitones signed the way a tune knob reads, with a true minus sign. */
 function signed(value: number): string {
   if (value > 0) return `+${value}`
@@ -119,7 +128,7 @@ function reading(goal: GoalAssertion, progress: AssertionProgress): string {
       // Floored, so a sweep a hair short never reads as full.
       return `${progress.met ? 100 : Math.floor((done / total) * 100)}%`
     case 'bpmInRange':
-      return `${current === undefined ? '—' : Math.round(current)} → ${goal.min}–${goal.max}`
+      return `${current === undefined ? '—' : tempo(current)} → ${goal.min}–${goal.max}`
     case 'swingInRange':
       return `${current === undefined ? '—' : `${current}%`} → ${goal.min}–${goal.max}%`
     case 'regionStartsWithin':
@@ -169,10 +178,12 @@ export function chipsNewlyMet(
   return next.filter((chip, i) => chip.met && !previous[i].met)
 }
 
+/** What the live region says for chips just met: "Kick 4/4 done". */
 export function chipMetAnnouncement(chips: readonly ProgressChip[]): string {
   return chips.map((chip) => `${chip.text} done`).join('. ')
 }
 
+/** What the live region says, instead of any chip, when the lesson completes. */
 export function lessonCompleteAnnouncement(lesson: Lesson): string {
   return `Lesson complete: ${lesson.title}`
 }

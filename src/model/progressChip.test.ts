@@ -98,6 +98,11 @@ describe('progressChip — ranges', () => {
   it('reads the current tempo against the range', () => {
     const goal: GoalAssertion = { type: 'bpmInRange', min: 138, max: 145 }
     expect(text(goal, { ...empty, bpm: 130 })).toBe('Tempo 130 → 138–145')
+    // Never rounded into the range while the goal still says no.
+    expect(progressChip(goal, { ...empty, bpm: 137.6 })).toEqual({
+      text: 'Tempo 137.6 → 138–145',
+      met: false,
+    })
     expect(progressChip(goal, { ...empty, bpm: 140 })).toEqual({
       text: 'Tempo 140 → 138–145',
       met: true,

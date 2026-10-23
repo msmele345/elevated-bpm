@@ -2037,12 +2037,16 @@ describe('App progress chips', () => {
 
     kick(13)
     expect(announcer().textContent).toBe('Kick 4/4 done')
+    const firstSaid = announcer().firstElementChild
 
     kick(2)
+    expect(announcer().firstElementChild).toBe(firstSaid)
     kick(2)
     kick(2)
-    // Undone and redone: met again, said again.
+    // Undone and redone: met again, said again — as a new node, so the same
+    // words are heard a second time rather than left unchanged.
     expect(announcer().textContent).toBe('Kick 4/4 done')
+    expect(announcer().firstElementChild).not.toBe(firstSaid)
   })
 
   it('announces the lesson completing once, instead of the chip that completed it', async () => {

@@ -59,6 +59,31 @@ export function bankWithSlots(patterns: readonly Pattern[]): Pattern[] {
   })
 }
 
+/**
+ * `target` holding a deep copy of `source`'s programming: every lane and every
+ * step is a fresh object, so editing either slot afterwards never reaches the
+ * other. The target keeps its own id and letter — it is still the same slot.
+ */
+export function withProgrammingOf(target: Pattern, source: Pattern): Pattern {
+  return {
+    ...target,
+    lanes: source.lanes.map((lane) => ({ ...lane, steps: lane.steps.map((step) => ({ ...step })) })),
+    padLanes: source.padLanes.map((lane) => ({
+      ...lane,
+      steps: lane.steps.map((step) => ({ ...step })),
+    })),
+    noteLanes: source.noteLanes.map((lane) => ({
+      ...lane,
+      steps: lane.steps.map((step) => ({ ...step })),
+    })),
+  }
+}
+
+/** `pattern` with every lane started over, keeping its id and letter. */
+export function emptiedPattern(pattern: Pattern): Pattern {
+  return withProgrammingOf(pattern, createInitialPattern())
+}
+
 /** A bank with `pattern` in slot A — keeping its id — and B–D empty. */
 export function createBank(pattern: Pattern): Pattern[] {
   return bankWithSlots([{ ...pattern, name: 'A' }])

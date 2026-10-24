@@ -4,6 +4,7 @@ import { DEFAULT_FX_SETTINGS, FX_PARAMS } from './fx'
 import { DEFAULT_MASTER_SETTINGS, MASTER_PARAMS } from './master'
 import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
 import { createBank, isPatternEmpty } from './bank'
+import type { Pattern } from './types'
 import { createDemoPattern, createInitialPattern } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -17,6 +18,8 @@ import {
   activeLessonIdFor,
   activePattern,
   addSource,
+  clearSlot,
+  copySlot,
   selectArc,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
@@ -47,6 +50,7 @@ import {
   toggleVoiceSolo,
   transposeActivePatternNote,
   updateLessonProgress,
+  type ProjectState,
 } from './projectState'
 
 describe('createInitialProjectState', () => {
@@ -249,6 +253,125 @@ describe('selectSlot', () => {
     const state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[3].id)
     const reloaded = migrateProjectState(JSON.parse(JSON.stringify(state)))!
     expect(activePattern(reloaded).name).toBe('D')
+  })
+})
+
+describe('copySlot', () => {
+  /** The demo in A, with a bass note transposed and stretched so every field is exercised. */
+  function programmed(): ProjectState {
+    let state = toggleActivePatternNoteStep(createDemoProjectState(), 'bass', 2)
+    state = transposeActivePatternNote(state, 'bass', 2, 5)
+    return resizeActivePatternNote(state, 'bass', 2, 1)
+  }
+
+  it("copies the selected slot's lanes onto the target, which keeps its own id and letter", () => {
+    const state = programmed()
+    const [a, b] = state.patterns
+
+    const copied = copySlot(state, b.id)
+
+    expect(copied.patterns[1].id).toBe(b.id)
+    expect(copied.patterns[1].name).toBe('B')
+    expect(copied.patterns[1].lanes).toEqual(a.lanes)
+    expect(copied.patterns[1].padLanes).toEqual(a.padLanes)
+    expect(copied.patterns[1].noteLanes).toEqual(a.noteLanes)
+  })
+
+  it('selects the target, so the variation is ready to change', () => {
+    const state = programmed()
+    const copied = copySlot(state, state.patterns[2].id)
+    expect(copied.activePatternId).toBe(state.patterns[2].id)
+  })
+
+  it('makes a deep copy: editing either slot afterwards never changes the other', () => {
+    const state = programmed()
+    const copied = copySlot(state, state.patterns[1].id)
+
+    // Edit the copy in B — kick, accent and a bass note's pitch and length.
+    let editedB = cycleActivePatternStep(copied, 'kick', 0)
+    editedB = transposeActivePatternNote(editedB, 'bass', 2, 2)
+    editedB = resizeActivePatternNote(editedB, 'bass', 2, 1)
+    expect(editedB.patterns[0]).toEqual(state.patterns[0])
+
+    // And the original in A.
+    const editedA = cycleActivePatternStep(selectSlot(copied, copied.patterns[0].id), 'closedHat', 2)
+    expect(editedA.patterns[1].lanes).toEqual(state.patterns[0].lanes)
+
+    // No step object is shared between the two slots.
+    const steps = (pattern: Pattern): object[] => [
+      ...pattern.lanes.flatMap((lane) => lane.steps),
+      ...pattern.padLanes.flatMap((lane) => lane.steps),
+      ...pattern.noteLanes.flatMap((lane) => lane.steps),
+    ]
+    const bSteps = new Set<object>(steps(copied.patterns[1]))
+    expect(steps(copied.patterns[0]).some((step) => bSteps.has(step))).toBe(false)
+  })
+
+  it('overwrites programming already in the target', () => {
+    let state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id)
+    state = cycleActivePatternStep(state, 'kick', 0)
+    state = selectSlot(state, state.patterns[0].id)
+
+    const copied = copySlot(state, state.patterns[1].id)
+
+    expect(copied.patterns[1].lanes[0].steps[0].on).toBe(false)
+    expect(copied.patterns[1].lanes).toEqual(state.patterns[0].lanes)
+  })
+
+  it('leaves the other slots and the sound of the Deck alone', () => {
+    const state = setTransportSwing(toggleVoiceMute(programmed(), 'perc'), 0.6)
+
+    const copied = copySlot(state, state.patterns[3].id)
+
+    expect(copied.patterns[0]).toBe(state.patterns[0])
+    expect(copied.patterns[1]).toBe(state.patterns[1])
+    expect(copied.patterns[2]).toBe(state.patterns[2])
+    expect(copied.transport).toBe(state.transport)
+    expect(copied.mixer).toBe(state.mixer)
+    expect(copied.instrumentSettings).toBe(state.instrumentSettings)
+    expect(copied.sources).toBe(state.sources)
+    expect(copied.lessonProgress).toBe(state.lessonProgress)
+  })
+
+  it('does nothing when copying onto the selected slot itself, or onto a slot the bank does not have', () => {
+    const state = programmed()
+    expect(copySlot(state, state.activePatternId)).toBe(state)
+    expect(copySlot(state, 'no-such-slot')).toBe(state)
+  })
+})
+
+describe('clearSlot', () => {
+  it('empties the selected slot, which keeps its id and letter', () => {
+    const state = toggleActivePatternNoteStep(createDemoProjectState(), 'bass', 0)
+    const a = state.patterns[0]
+
+    const cleared = clearSlot(state)
+
+    expect(isPatternEmpty(cleared.patterns[0])).toBe(true)
+    expect(cleared.patterns[0].id).toBe(a.id)
+    expect(cleared.patterns[0].name).toBe('A')
+    expect(cleared.activePatternId).toBe(a.id)
+    expect(cleared.patterns).toHaveLength(4)
+  })
+
+  it('empties only the selected slot', () => {
+    let state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id)
+    state = cycleActivePatternStep(state, 'kick', 0)
+
+    const cleared = clearSlot(state)
+
+    expect(isPatternEmpty(cleared.patterns[1])).toBe(true)
+    expect(cleared.patterns[0]).toBe(state.patterns[0])
+    expect(cleared.patterns[2]).toBe(state.patterns[2])
+    expect(cleared.patterns[3]).toBe(state.patterns[3])
+    expect(cleared.transport).toBe(state.transport)
+    expect(cleared.mixer).toBe(state.mixer)
+    expect(cleared.instrumentSettings).toBe(state.instrumentSettings)
+  })
+
+  it('hands an already empty slot back unchanged', () => {
+    const state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[2].id)
+    expect(clearSlot(state)).toBe(state)
   })
 })
 

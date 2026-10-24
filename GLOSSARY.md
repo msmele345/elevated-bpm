@@ -7,7 +7,7 @@ conversations use, and exactly what each one means here. Last reviewed
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
 spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow,
-EB3-07a the pattern bank's slots and queued switching) have shipped.
+EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear) have shipped.
 
 ## How to use and maintain this file
 
@@ -138,7 +138,11 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
   targets clear it through `scroll-padding-top`. The pattern bank's slots A–D
   sit at its right-hand end on desktop and on the second row beside Swing on a
   phone, and the "Editing B · hearing A" notice hangs under it while a switch
-  is queued. [v3 spec] Copy and Clear join the slots (EB3-07b). Code:
+  is queued. Copy and Clear sit after the slots, and their inline confirm
+  takes the bank's place so the strip never grows (on a phone it hides Swing for
+  the moment it is asking). On a phone the two rows are flex rows, not a grid:
+  Play, tempo and BPM, then Swing and the bank. Swing's name stacks over its
+  readout beside the dial, and below 360px its printed name is hidden. Code:
   `TransportStrip`, `PatternBank`.
 
 ## Patterns, lanes and time
@@ -160,10 +164,20 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
   `bankWithSlots`.
 - **Choke.** One lane cutting another's still-ringing sample: the closed hat
   chokes the open hat, as on a 909. Code: `CHOKES`, `resolveStep`.
-- **Copy / Clear** [v3 spec]. Copy deep-copies the selected slot's lanes onto the next
-  slot pressed and then selects that slot. Clear empties the selected slot. Both ask
-  with an inline confirm before overwriting programming, never a browser
-  dialog.
+- **Copy / Clear.** Two keys after slots A–D in the transport strip. Copy arms
+  copy mode: the other slots pulse an amber ring (steady under reduced motion) and
+  the next slot pressed receives a deep copy of the selected slot's lanes (drum,
+  pad and note, every step a fresh object). The target keeps its own id and letter
+  and becomes the selected slot, so while playing it queues like any slot press.
+  An empty target is copied at once. A target with programming asks first with an
+  inline "Overwrite B?" (Overwrite / Cancel). Escape or pressing Copy again
+  cancels an armed copy, and pressing the selected slot does nothing and disarms.
+  Clear empties the selected slot (id and letter kept) after an inline "Clear A?"
+  (Clear / Cancel); on an empty slot it does nothing and is `aria-disabled`.
+  Focus goes to Cancel when a confirm opens and back to the key asked about when
+  it closes. Never a browser dialog. Whether copy is armed is local to the bank,
+  never saved or shared. Code: `copySlot`, `clearSlot`, `withProgrammingOf`,
+  `PatternBank`.
 - **Drum lane.** A lane of on/off + accent steps that triggers one sample. Its
   ids are `kick`, `snare`, `closedHat`, `openHat` and `perc`. Code: `DrumLane`, `DrumLaneId`.
 - **Empty slot.** A slot with no step on in any lane. Pitch, length or flags left
@@ -396,7 +410,9 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
   every slot, and is held per slot: a lesson stays held in each slot it arrived met in until
   that slot stops meeting it, so selecting an empty slot and coming back is not taking the
   work apart, while the same lesson built in a slot of the learner's own earns at once.
-  Code: `slotsAlreadyMeeting`.
+  A copy of a held slot is held too, and a held slot overwritten by a copy of the
+  learner's own is released, so Copy can't launder credit.
+  Code: `slotsAlreadyMeeting`, `heldAfterCopy`.
 - **Link degradation.** A share link says plainly what it couldn't carry.
   Audio never travels, so pads arrive silent with a notice to ask for a bundle.
   [v3 spec] Over 2,000 characters, a link carries only the playing slot and says so.

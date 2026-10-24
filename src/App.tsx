@@ -25,6 +25,7 @@ import {
   detectLessonCompletion,
   goalContextFor,
   slotsAlreadyMeeting,
+  heldAfterCopy,
   nextUnfinishedLessonId,
 } from './model/arc'
 import type { BassParamId } from './model/bass'
@@ -54,6 +55,8 @@ import {
   activeLessonIdFor,
   activePattern,
   selectSlot,
+  copySlot,
+  clearSlot,
   addSource,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
@@ -661,6 +664,26 @@ export default function App() {
   // dragged knob — the dropped frame this deck must not have while playing.
   const handleSelectSlot = useCallback((slotId: string) => {
     setProject((p) => selectSlot(p, slotId))
+  }, [])
+
+  // A copy of a held shared slot is still the sender's work, so its hold goes
+  // with it; read from the ref, since the hold is not state.
+  const handleCopySlot = useCallback((targetId: string) => {
+    setProject((p) => {
+      const copied = copySlot(p, targetId)
+      if (copied !== p) {
+        inheritedLessonsRef.current = heldAfterCopy(
+          inheritedLessonsRef.current,
+          p.activePatternId,
+          targetId,
+        )
+      }
+      return copied
+    })
+  }, [])
+
+  const handleClearSlot = useCallback(() => {
+    setProject(clearSlot)
   }, [])
 
   const handleCycleStep = useCallback((laneId: LaneId, stepIndex: number) => {
@@ -1455,6 +1478,8 @@ export default function App() {
         slots={slots}
         selectedSlotId={selectedSlotId}
         onSelectSlot={handleSelectSlot}
+        onCopySlot={handleCopySlot}
+        onClearSlot={handleClearSlot}
       />
 
       <LessonArc

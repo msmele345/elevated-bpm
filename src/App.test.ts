@@ -1035,7 +1035,9 @@ describe('App pattern bank', () => {
 
   /** The bank's slot buttons, A to D. */
   function slots(): HTMLElement[] {
-    return within(screen.getByRole('group', { name: 'Pattern bank' })).getAllByRole('button')
+    return within(screen.getByRole('group', { name: 'Pattern bank' }))
+      .getAllByRole('button')
+      .filter((button) => button.hasAttribute('data-slot-id'))
   }
 
   it('puts four slots in the transport strip: A holds the demo and is selected, B–D are empty', async () => {
@@ -1175,6 +1177,214 @@ describe('App pattern bank', () => {
     await waitFor(() =>
       expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
     )
+  })
+
+  describe('Copy and Clear', () => {
+    const bankGroup = () => screen.getByRole('group', { name: 'Pattern bank' })
+    const closedHat3 = () =>
+      screen.getByRole('button', { name: 'Closed Hat step 3' }).getAttribute('aria-pressed')
+    const kick1 = () => screen.getByRole('button', { name: 'Kick step 1' }).getAttribute('aria-pressed')
+
+    /** The demo in A, a kick on step 1 of B, and A selected again. */
+    async function deckWithKickInB() {
+      await hydratedDeck()
+      fireEvent.click(slots()[1])
+      fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+      fireEvent.click(slots()[0])
+    }
+
+    let browserConfirm: ReturnType<typeof vi.spyOn>
+    beforeEach(() => {
+      browserConfirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    })
+    afterEach(() => {
+      // Never a browser dialog: it would block the session.
+      expect(browserConfirm).not.toHaveBeenCalled()
+      browserConfirm.mockRestore()
+    })
+
+    it('arms Copy, then copies the selected slot onto an empty slot and selects it', async () => {
+      await hydratedDeck()
+      const copy = screen.getByRole('button', { name: 'Copy slot A' })
+
+      fireEvent.click(copy)
+      expect(copy.getAttribute('aria-pressed')).toBe('true')
+      expect(bankGroup().hasAttribute('data-copy-armed')).toBe(true)
+
+      fireEvent.click(slots()[1])
+
+      expect(slots()[1].getAttribute('aria-pressed')).toBe('true')
+      expect(accessibleName(slots()[1])).toBe('Slot B, selected')
+      expect(closedHat3()).toBe('true')
+      expect(lastPatternHanded().name).toBe('B')
+      expect(lastPatternHanded().lanes[2].steps[2].on).toBe(true)
+      // Disarmed, and the Copy key now names the slot it would copy.
+      expect(bankGroup().hasAttribute('data-copy-armed')).toBe(false)
+      expect(
+        screen.getByRole('button', { name: 'Copy slot B' }).getAttribute('aria-pressed'),
+      ).toBe('false')
+    })
+
+    it('makes a copy that editing never reaches back through', async () => {
+      await hydratedDeck()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+      expect(kick1()).toBe('true')
+      fireEvent.click(slots()[0])
+      expect(kick1()).toBe('false')
+      expect(closedHat3()).toBe('true')
+    })
+
+    it('queues the copy while playing, like any other press', async () => {
+      await hydratedDeck()
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+      await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[2])
+
+      // Selected at once; the engine brings it in at the bar.
+      expect(slots()[2].getAttribute('aria-pressed')).toBe('true')
+      expect(lastPatternHanded().name).toBe('C')
+      expect(engineSpies.stop).not.toHaveBeenCalled()
+    })
+
+    it('asks inline before overwriting a slot with programming; Cancel leaves it intact', async () => {
+      await deckWithKickInB()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      const confirm = within(bankGroup()).getByRole('group', { name: 'Overwrite B?' })
+      expect(confirm.textContent).toContain('Overwrite B?')
+      const cancel = within(confirm).getByRole('button', { name: 'Cancel' })
+      // The safe answer has focus, so Enter never wipes a pattern by accident.
+      expect(document.activeElement).toBe(cancel)
+      // Nothing has happened yet.
+      expect(lastPatternHanded().name).toBe('A')
+
+      fireEvent.click(cancel)
+
+      expect(within(bankGroup()).queryByRole('group', { name: 'Overwrite B?' })).toBeNull()
+      expect(slots()[0].getAttribute('aria-pressed')).toBe('true')
+      expect(document.activeElement).toBe(slots()[1])
+      fireEvent.click(slots()[1])
+      expect(kick1()).toBe('true')
+      expect(closedHat3()).toBe('false')
+    })
+
+    it('overwrites the slot once the inline confirm is answered', async () => {
+      await deckWithKickInB()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Overwrite B' }))
+
+      expect(slots()[1].getAttribute('aria-pressed')).toBe('true')
+      expect(kick1()).toBe('false')
+      expect(closedHat3()).toBe('true')
+      expect(document.activeElement).toBe(slots()[1])
+    })
+
+    it('cancels an armed copy with Escape or by pressing Copy again', async () => {
+      await hydratedDeck()
+      const copy = screen.getByRole('button', { name: 'Copy slot A' })
+
+      fireEvent.click(copy)
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+      expect(copy.getAttribute('aria-pressed')).toBe('false')
+      // A slot pressed now is an ordinary press, not a copy.
+      fireEvent.click(slots()[1])
+      expect(accessibleName(slots()[1])).toBe('Slot B, selected, empty')
+
+      fireEvent.click(slots()[0])
+      fireEvent.click(copy)
+      fireEvent.click(copy)
+      expect(copy.getAttribute('aria-pressed')).toBe('false')
+      fireEvent.click(slots()[2])
+      expect(accessibleName(slots()[2])).toBe('Slot C, selected, empty')
+    })
+
+    it('cancels an open overwrite confirm with Escape', async () => {
+      await deckWithKickInB()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+
+      expect(within(bankGroup()).queryByRole('group', { name: 'Overwrite B?' })).toBeNull()
+      expect(slots()[0].getAttribute('aria-pressed')).toBe('true')
+      fireEvent.click(slots()[1])
+      expect(kick1()).toBe('true')
+    })
+
+    it('does nothing when the armed copy lands on its own slot', async () => {
+      await hydratedDeck()
+      const before = engineSpies.setBank.mock.calls.length
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+
+      fireEvent.click(slots()[0])
+
+      expect(engineSpies.setBank.mock.calls.length).toBe(before)
+      expect(within(bankGroup()).queryByRole('group')).toBeNull()
+      expect(bankGroup().hasAttribute('data-copy-armed')).toBe(false)
+      expect(slots()[0].getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('clears only the selected slot, after asking inline', async () => {
+      await deckWithKickInB()
+      fireEvent.click(slots()[1])
+      const clear = screen.getByRole('button', { name: 'Clear slot B' })
+
+      fireEvent.click(clear)
+      const confirm = within(bankGroup()).getByRole('group', { name: 'Clear B?' })
+      expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
+
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Clear B' }))
+
+      expect(kick1()).toBe('false')
+      expect(accessibleName(slots()[1])).toBe('Slot B, selected, empty')
+      expect(accessibleName(slots()[0])).toBe('Slot A')
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Clear slot B' }))
+      fireEvent.click(slots()[0])
+      expect(closedHat3()).toBe('true')
+    })
+
+    it('keeps the slot when Clear is cancelled, by button or by Escape', async () => {
+      await hydratedDeck()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear slot A' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(closedHat3()).toBe('true')
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Clear slot A' }))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear slot A' }))
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(within(bankGroup()).queryByRole('group', { name: 'Clear A?' })).toBeNull()
+      expect(closedHat3()).toBe('true')
+    })
+
+    it('carries a held shared slot’s hold onto its copy, so copying never earns credit', async () => {
+      await saveProjectState(createInitialProjectState())
+      const sender = createInitialProjectState()
+      let built = selectSlot(sender, sender.patterns[1].id)
+      for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+      const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
+      window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+
+      render(createElement(App))
+      await screen.findByText('Shared beat preview')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      // The sender's B, copied onto the empty C, is still the sender's work.
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot B' }))
+      fireEvent.click(slots()[2])
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      expect(accessibleName(slots()[2])).toBe('Slot C, selected')
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    })
   })
 })
 

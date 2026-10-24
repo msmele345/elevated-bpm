@@ -71,6 +71,28 @@ export function slotsAlreadyMeeting(
   return meeting
 }
 
+/**
+ * What is held back after the selected slot is copied onto another. A copy of
+ * a held slot is still the sender's work, so the target is held wherever the
+ * source was — otherwise copying a shared slot onto an empty one would launder
+ * credit. A target overwritten by a slot that was not held now holds nothing
+ * of the sender's, so it is released. Never edits `held` in place.
+ */
+export function heldAfterCopy(
+  held: ReadonlyMap<string, ReadonlySet<string>>,
+  sourceId: string,
+  targetId: string,
+): Map<string, Set<string>> {
+  const after = new Map<string, Set<string>>()
+  for (const [lessonId, slots] of held) {
+    const next = new Set(slots)
+    if (slots.has(sourceId)) next.add(targetId)
+    else next.delete(targetId)
+    if (next.size > 0) after.set(lessonId, next)
+  }
+  return after
+}
+
 /** One rung of the path as the arc UI renders it. */
 export interface ArcEntry {
   lesson: Lesson

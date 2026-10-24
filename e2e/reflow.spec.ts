@@ -219,6 +219,40 @@ for (const phone of PHONES) {
       await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeInViewport()
     })
 
+    test('the pattern bank, Copy, Clear and the inline confirm fit inside the strip', async ({
+      page,
+    }) => {
+      await openFreshDeck(page)
+      const strip = page.getByRole('region', { name: 'Transport' })
+      const bank = strip.getByRole('group', { name: 'Pattern bank' })
+      const reserved = await page.evaluate(() =>
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--transport-strip-h')),
+      )
+
+      /** The bank sits wholly inside the strip, and the strip still fits its height. */
+      const expectInside = async (state: string) => {
+        const outer = (await strip.boundingBox())!
+        const inner = (await bank.boundingBox())!
+        expect(inner.x, `${state}: bank left edge`).toBeGreaterThanOrEqual(outer.x)
+        expect(inner.x + inner.width, `${state}: bank right edge`).toBeLessThanOrEqual(
+          outer.x + outer.width,
+        )
+        expect(outer.height, `${state}: strip height`).toBeLessThanOrEqual(reserved + 1)
+        expect(await pageOverflow(page), `${state}: page overflow`).toBeLessThanOrEqual(0)
+      }
+
+      await expectInside('idle')
+      // Slot A holds the demo; copying it onto B makes B worth asking about.
+      await bank.getByRole('button', { name: 'Copy slot A' }).click()
+      await bank.getByRole('button', { name: /^Slot B/ }).click()
+      await bank.getByRole('button', { name: /^Slot A/ }).click()
+      await bank.getByRole('button', { name: 'Copy slot A' }).click()
+      await expectInside('armed')
+      await bank.getByRole('button', { name: /^Slot B/ }).click()
+      await expect(bank.getByRole('group', { name: 'Overwrite B?' })).toBeVisible()
+      await expectInside('confirming')
+    })
+
     test('the region editor fits the screen', async ({ page }) => {
       await openFreshDeck(page)
       await page.getByRole('button', { name: /^Chop / }).first().click()

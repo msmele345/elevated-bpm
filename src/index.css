@@ -959,8 +959,29 @@ body::before {
    amber blink — both written from rAF by useSlotLights, never React. */
 .bank {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+}
+
+.bank-slots,
+.bank-actions,
+.bank-confirm {
+  display: flex;
+  align-items: center;
+}
+
+.bank-slots {
+  gap: 5px;
+}
+
+.bank-slots[hidden] {
+  display: none;
+}
+
+.bank-actions,
+.bank-confirm {
+  gap: 4px;
 }
 
 .bank-slot {
@@ -1043,6 +1064,89 @@ body::before {
   }
 }
 
+/* Copy and Clear: the same steel keys, lettered rather than lit. Copy stays
+   lit amber while armed, and every slot it could land on pulses an amber ring
+   until one is pressed. The inline confirm takes the place of the slots and
+   both keys, so asking never makes the strip taller or wider. */
+.bank-key {
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink-dim);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.6rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 60ms ease, box-shadow 60ms ease;
+}
+
+.bank-key:hover {
+  background: var(--key-face-hover);
+}
+
+.bank-key:active {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+.bank-key:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.bank-key[aria-pressed='true'] {
+  color: var(--quad-2);
+  box-shadow:
+    var(--key-pressed),
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 60%, transparent);
+}
+
+.bank-key[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bank-key-danger {
+  color: var(--quad-0);
+}
+
+.bank-confirm-question {
+  padding: 0 4px;
+  color: var(--quad-2);
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.bank[data-copy-armed] .bank-slot:not([aria-pressed='true']) {
+  animation: bank-copy-armed 0.5s steps(1, end) infinite;
+}
+
+.bank-slot[data-copy-target] {
+  box-shadow:
+    var(--key-raised),
+    0 0 0 2px var(--quad-2);
+}
+
+@keyframes bank-copy-armed {
+  0% {
+    box-shadow:
+      var(--key-raised),
+      0 0 0 2px var(--quad-2);
+  }
+  50% {
+    box-shadow: var(--key-raised);
+  }
+}
+
 /* Editing one slot while another is heard: a tab hanging under the sticky
    strip says so wherever the page is scrolled, and every step grid carries a
    dashed edge — absolutely placed and an outline, so neither moves a pixel of
@@ -1080,6 +1184,14 @@ body::before {
   /* A steady amber instead of a blink: still distinct from playing green. */
   .bank-slot[data-queued] .bank-slot-led {
     animation: none;
+  }
+
+  /* An armed copy holds its rings steady instead of pulsing them. */
+  .bank[data-copy-armed] .bank-slot:not([aria-pressed='true']) {
+    animation: none;
+    box-shadow:
+      var(--key-raised),
+      0 0 0 2px color-mix(in srgb, var(--quad-2) 70%, transparent);
   }
 }
 
@@ -3763,31 +3875,68 @@ body::before {
   }
 
   /* Transport strip: two rows. Play, tempo and the BPM readout on the first;
-     Swing on the second, with room beside it for the pattern bank's slots
-     (EB3-07a). --transport-strip-h, set above, is its height. */
+     Swing and the pattern bank on the second. Two flex rows rather than one
+     grid, so the second row is not sized by the first: Play's column would
+     otherwise take the room the bank needs at 320px. The zero-height ::after
+     is the line break. --transport-strip-h, set above, is its height. */
   .transport-strip {
     padding: 6px 10px;
   }
 
   .transport {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      'play tempo bpm'
-      'swing bank bank';
-    gap: 6px 10px;
+    flex-wrap: wrap;
+    gap: 0 10px;
   }
 
+  .transport::after {
+    content: '';
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  .transport-swing,
   .bank {
-    grid-area: bank;
-    justify-self: end;
-    align-self: center;
+    order: 2;
+    margin-top: 6px;
   }
 
   /* The second row is sized to the Swing knob, so the keys sit lower there. */
-  .bank-slot {
+  .bank-slot,
+  .bank-key {
     height: 28px;
+  }
+
+  .bank-slot {
+    width: 25px;
     padding: 3px 0 2px;
+  }
+
+  /* Four slots and both keys share the row with Swing at 320px, so the
+     lettering tightens. */
+  .bank,
+  .bank-slots {
+    gap: 4px;
+  }
+
+  .bank-actions,
+  .bank-confirm {
+    gap: 3px;
+  }
+
+  .bank-key {
+    padding: 0 5px;
+    letter-spacing: 0.06em;
+  }
+
+  .bank-confirm-question {
+    padding: 0 2px;
+    letter-spacing: 0.06em;
+  }
+
+  /* An open confirm borrows Swing's place for the moment it is asking: the
+     question and its two answers need the whole second row at 320px. */
+  .transport:has(.bank-confirm) .transport-swing {
+    display: none;
   }
 
   .bank-notice {
@@ -3795,13 +3944,12 @@ body::before {
   }
 
   .transport-play {
-    grid-area: play;
     padding: 8px 12px;
     letter-spacing: 0.16em;
   }
 
   .transport-tempo {
-    grid-area: tempo;
+    flex: 1 1 0;
     min-width: 0;
   }
 
@@ -3811,19 +3959,42 @@ body::before {
   }
 
   .transport-bpm {
-    grid-area: bpm;
     gap: 4px;
     padding: 5px 8px;
   }
 
+  /* Swing's name stacks over its readout beside the dial, so the second row
+     keeps room for four slots and Copy and Clear at 320px. The slider role is
+     on the dial, so dissolving the knob's wrapper loses nothing. */
   .transport-swing {
-    grid-area: swing;
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-areas:
+      'dial label'
+      'dial readout';
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 1px;
   }
 
   .transport-swing .knob.is-small {
-    width: auto;
-    flex-direction: row;
-    gap: 6px;
+    display: contents;
+  }
+
+  .transport-swing .knob-dial {
+    grid-area: dial;
+  }
+
+  .transport-swing-label {
+    grid-area: label;
+    align-self: end;
+    font-size: 0.52rem;
+    letter-spacing: 0.14em;
+  }
+
+  .transport-swing .knob-readout {
+    grid-area: readout;
+    align-self: start;
   }
 
   /* Curriculum line and lesson card: let the text wrap inside the column. */
@@ -3852,5 +4023,14 @@ body::before {
   .knob-row {
     flex-wrap: wrap;
     gap: 16px 20px;
+  }
+}
+
+/* The narrowest phones: Swing drops its printed name, as tempo already has,
+   so four slots and Copy and Clear still fit beside it. The dial still says
+   "Swing" to assistive tech, and its readout still shows the amount. */
+@media (max-width: 359.98px) {
+  .transport-swing-label {
+    display: none;
   }
 }

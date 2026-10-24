@@ -8,6 +8,7 @@ import {
   isFinalArcLesson,
   lessonsAlreadyMet,
   slotsAlreadyMeeting,
+  heldAfterCopy,
   nextUnfinishedLessonId,
 } from './arc'
 import { parseLesson, type Lesson } from './lesson'
@@ -160,6 +161,35 @@ describe('goals and the pattern bank', () => {
       new Map(ARC.map((lesson) => [lesson.id, new Set([bank.patterns[1].id])])),
     )
     expect(slotsAlreadyMeeting(ARC, createInitialProjectState())).toEqual(new Map())
+  })
+
+  it("carries a held slot's hold to the slot it is copied onto", () => {
+    const held = new Map([
+      ['one', new Set(['b'])],
+      ['two', new Set(['b', 'd'])],
+    ])
+
+    const after = heldAfterCopy(held, 'b', 'c')
+
+    // A copy of the sender's work is still the sender's work.
+    expect(after).toEqual(
+      new Map([
+        ['one', new Set(['b', 'c'])],
+        ['two', new Set(['b', 'c', 'd'])],
+      ]),
+    )
+    // The hold being read is never edited in place.
+    expect(held.get('one')).toEqual(new Set(['b']))
+  })
+
+  it("releases a held slot overwritten by a copy of the learner's own slot", () => {
+    const held = new Map([
+      ['one', new Set(['b'])],
+      ['two', new Set(['b', 'd'])],
+    ])
+
+    // Copying the learner's own A over the shared B replaces the sender's work there.
+    expect(heldAfterCopy(held, 'a', 'b')).toEqual(new Map([['two', new Set(['d'])]]))
   })
 })
 

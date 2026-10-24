@@ -1,4 +1,4 @@
-import { createBank } from './bank'
+import { createBank, emptiedPattern, isPatternEmpty, withProgrammingOf } from './bank'
 import { clampParam } from './knob'
 import {
   createBassSettings,
@@ -201,6 +201,31 @@ export function activePattern(state: ProjectState): Pattern {
 export function selectSlot(state: ProjectState, patternId: string): ProjectState {
   if (!state.patterns.some((pattern) => pattern.id === patternId)) return state
   return { ...state, activePatternId: patternId }
+}
+
+/**
+ * Copy the selected slot onto another: the target gets a deep copy of its
+ * lanes, keeps its own id and letter, and becomes the selected slot, so the
+ * variation is ready to change — and, while playing, comes in at the bar like
+ * any other press. Copying a slot onto itself does nothing. Asking before
+ * overwriting programming is the strip's job; this just does it.
+ */
+export function copySlot(state: ProjectState, targetId: string): ProjectState {
+  if (targetId === state.activePatternId) return state
+  const target = state.patterns.find((pattern) => pattern.id === targetId)
+  if (!target) return state
+  const source = activePattern(state)
+  return {
+    ...state,
+    patterns: state.patterns.map((p) => (p === target ? withProgrammingOf(target, source) : p)),
+    activePatternId: targetId,
+  }
+}
+
+/** Start the selected slot over: every lane emptied, the slot itself kept. */
+export function clearSlot(state: ProjectState): ProjectState {
+  if (isPatternEmpty(activePattern(state))) return state
+  return editActivePattern(state, emptiedPattern)
 }
 
 /** Immutably advance one step of the active pattern (off → on → accent → off). */

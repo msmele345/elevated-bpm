@@ -25,6 +25,8 @@ interface TransportStripProps {
   slots: readonly BankSlot[]
   selectedSlotId: string
   onSelectSlot: (slotId: string) => void
+  onCopySlot: (targetId: string) => void
+  onClearSlot: () => void
 }
 
 /**
@@ -34,9 +36,10 @@ interface TransportStripProps {
  * own deck section, with a heading and a skip link like every other block.
  *
  * Kept to one slim row on desktop, with the pattern bank's slots at its
- * right-hand end. Being sticky, the strip is also where the deck says when the
- * slot being edited is not the one being heard: the notice hangs under it and
- * is written from rAF by `useSlotLights`, never rendered by React.
+ * right-hand end, with Copy and Clear beside them. Being sticky, the strip is
+ * also where the deck says when the slot being edited is not the one being
+ * heard: the notice hangs under it and is written from rAF by `useSlotLights`,
+ * never rendered by React.
  */
 function Transport({
   isPlaying,
@@ -51,6 +54,8 @@ function Transport({
   slots,
   selectedSlotId,
   onSelectSlot,
+  onCopySlot,
+  onClearSlot,
 }: TransportStripProps) {
   return (
     <section
@@ -109,7 +114,13 @@ function Transport({
             onChange={onSwingChange}
           />
         </div>
-        <PatternBank slots={slots} selectedId={selectedSlotId} onSelect={onSelectSlot} />
+        <PatternBank
+          slots={slots}
+          selectedId={selectedSlotId}
+          onSelect={onSelectSlot}
+          onCopy={onCopySlot}
+          onClear={onClearSlot}
+        />
       </div>
       <p className="bank-notice" data-bank-notice="" hidden />
     </section>

@@ -25,6 +25,7 @@ import {
   detectLessonCompletion,
   goalContextFor,
   slotsAlreadyMeeting,
+  heldAfterCopy,
   nextUnfinishedLessonId,
 } from './model/arc'
 import type { BassParamId } from './model/bass'
@@ -54,6 +55,8 @@ import {
   activeLessonIdFor,
   activePattern,
   selectSlot,
+  copySlot,
+  clearSlot,
   addSource,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
@@ -575,6 +578,11 @@ export default function App() {
   // slot are audible immediately and a newly selected slot comes in at the bar.
   const bank = project.patterns
   const selectedSlotId = project.activePatternId
+  // Mirrored for the copy handler, which must know the source slot before it
+  // edits the document: the hold it carries is a ref, not state, so it is
+  // written outside the state updater, which must stay pure.
+  const selectedSlotIdRef = useRef(selectedSlotId)
+  selectedSlotIdRef.current = selectedSlotId
   useEffect(() => {
     engine.setBank(bank, selectedSlotId)
   }, [bank, selectedSlotId])
@@ -661,6 +669,19 @@ export default function App() {
   // dragged knob — the dropped frame this deck must not have while playing.
   const handleSelectSlot = useCallback((slotId: string) => {
     setProject((p) => selectSlot(p, slotId))
+  }, [])
+
+  // A copy of a held shared slot is still the sender's work, so its hold goes
+  // with it.
+  const handleCopySlot = useCallback((targetId: string) => {
+    const sourceId = selectedSlotIdRef.current
+    if (targetId === sourceId) return
+    inheritedLessonsRef.current = heldAfterCopy(inheritedLessonsRef.current, sourceId, targetId)
+    setProject((p) => copySlot(p, targetId))
+  }, [])
+
+  const handleClearSlot = useCallback(() => {
+    setProject(clearSlot)
   }, [])
 
   const handleCycleStep = useCallback((laneId: LaneId, stepIndex: number) => {
@@ -1455,6 +1476,8 @@ export default function App() {
         slots={slots}
         selectedSlotId={selectedSlotId}
         onSelectSlot={handleSelectSlot}
+        onCopySlot={handleCopySlot}
+        onClearSlot={handleClearSlot}
       />
 
       <LessonArc

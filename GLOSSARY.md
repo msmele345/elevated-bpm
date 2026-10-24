@@ -2,7 +2,7 @@
 
 The project's shared language: the words specs, issues, PRs, code comments and
 conversations use, and exactly what each one means here. Last reviewed
-2026-10-23: v2 (the SP-04 sampler release) is shipped, v3 is specified in
+2026-10-24: v2 (the SP-04 sampler release) is shipped, v3 is specified in
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to

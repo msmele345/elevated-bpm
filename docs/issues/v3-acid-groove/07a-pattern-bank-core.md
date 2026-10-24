@@ -74,7 +74,9 @@ recipient). Bundles already carry all four.
       only at the next step 0; queued blinks, playing stays lit; re-pressing the
       playing slot cancels; pressing another replaces the queue — `resolveStep`
       moves the playing slot only on step 0 (`stepResolution.test.ts` "the queued
-      bank switch"); the engine records the switch on the audio clock so the LED
+      bank switch"); `engine.test.ts` covers cancel, replace ("replaces a queued
+      slot with the next one pressed") and stop; the engine records the switch
+      on the audio clock so the LED
       changes when the bar is heard (`engine.test.ts`); `useSlotLights` writes
       `data-playing`/`data-queued` and the spoken state from rAF (`App.test.ts`)
 - [x] Tempo, swing, mixer, patches, master, FX and pad sounds are unchanged by a
@@ -113,7 +115,9 @@ recipient). Bundles already carry all four.
       line; the queued blink showed within one frame (~15 ms); the LED moved when
       the audio clock reached the bar; over 3 s the transport advanced 1400 ticks
       against 1401 expected from the audio clock with no repeated sample; zero
-      console errors. `npm run test:e2e` (fold, reflow at 390 and 320, wide) green
+      console errors. `npm run test:e2e` (fold, reflow at 390 and 320, wide) green;
+      at 320×640 the queued notice measured 284px wide (13–297px), no sideways
+      scroll
 - [x] `GLOSSARY.md` updated — Bank, Slot, Selected slot, Playing slot, Queued
       switch, Empty slot shipped; Pattern, ProjectState (v13), Transport strip,
       Bundle, Share link, Share validator, Inheritance and Demo rule updated;

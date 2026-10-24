@@ -894,6 +894,27 @@ describe('the queued bank switch', () => {
     stopAll()
   })
 
+  it('replaces a queued slot with the next one pressed', async () => {
+    const bank = kickAndClapBank()
+    bank[2] = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'closedHat', i),
+      bank[2],
+    )
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+    const closedHat = tone.players[2]
+    closedHat.start.mockClear()
+
+    engine.setBank(bank, bank[1].id)
+    engine.setBank(bank, bank[2].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[2].id })
+
+    fire(0, 20)
+    expect(closedHat.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+    expect(kick.start).not.toHaveBeenCalled()
+    stopAll()
+  })
+
   it('owns up to a switch already scheduled: pressed in the look-ahead, the old slot is queued again', async () => {
     const bank = kickAndClapBank()
     const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)

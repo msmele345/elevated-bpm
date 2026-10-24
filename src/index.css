@@ -768,6 +768,11 @@ body::before {
   top: 0;
   z-index: 5;
   min-height: var(--transport-strip-h);
+  /* An explicit line-height, because `normal` comes from the font's own
+     metrics and Chrome reads those differently per platform: on Linux the
+     BPM readout's box grew 6px and pushed the phone strip past the
+     --transport-strip-h every scroll target clears. */
+  line-height: 1.2;
   display: flex;
   align-items: center;
   padding: 6px 14px;
@@ -802,6 +807,8 @@ body::before {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 0.82rem;
+  /* a button's UA `font` resets line-height to `normal`; take the strip's */
+  line-height: inherit;
   letter-spacing: 0.24em;
   text-transform: uppercase;
   cursor: pointer;

@@ -6,7 +6,8 @@ conversations use, and exactly what each one means here. Last reviewed
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
-spotlight, EB3-05 sampler compaction and two columns) have shipped.
+spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow) have
+shipped.
 
 ## How to use and maintain this file
 
@@ -130,10 +131,12 @@ spotlight, EB3-05 sampler compaction and two columns) have shipped.
 - **Transport strip.** The sticky bar pinned to the top of the viewport
   holding Play/Stop, the tempo fader with its BPM readout, and Swing (a compact
   Level-sized knob with its name printed beside it). It is its own deck section,
-  one row and 52px tall on desktop (`--transport-strip-h`); scroll targets clear
-  it through `scroll-padding-top`. [v3 spec] It gains slots A–D, Copy and Clear
-  (EB3-07a) in the room left at its right-hand end, and a two-row phone layout
-  (EB3-06). Code: `TransportStrip`.
+  one row and 52px tall on desktop and two rows and 86px tall below 600px, where
+  the tempo fader shares the first row with Play and the BPM readout and Swing
+  takes the second (`--transport-strip-h` carries whichever applies); scroll
+  targets clear it through `scroll-padding-top`. [v3 spec] It gains slots A–D,
+  Copy and Clear (EB3-07a), in the room left at its right-hand end on desktop
+  and on the second row beside Swing on a phone. Code: `TransportStrip`.
 
 ## Patterns, lanes and time
 
@@ -174,6 +177,15 @@ spotlight, EB3-05 sampler compaction and two columns) have shipped.
   Code: `PadLane`, `StepLane`.
 - **Pattern.** A first-class, ID'd 16-step loop holding every lane (drum, pad
   and note). Founding term. Code: `Pattern`. [v3 spec] There is one per slot.
+- **Phone reflow.** Below 600px nothing on the Deck scrolls sideways, down to
+  320px. Every step lane puts its label and its M, S and Level on a header line
+  and wraps its 16 steps into two rows of 8 (steps 1–8, then 9–16), each row
+  holding two whole quads with a thin spacer track between them. Every `.step-grid`
+  shares those tracks, so step *n* sits directly over step *n* + 8, and any
+  further row built on the same grid (the bass Accent and Slide rows, EB3-09)
+  lines up under its note for free. Bass and stab keep M, S and Level on their
+  panel plate, above the lane. The keyboard, Master, region editor and finale
+  fit 320px too. Held by `e2e/reflow.spec.ts`. Code: `.step-grid`, `.step-row`.
 - **Playhead.** The moving step highlight, animated from rAF reading the
   transport. It stays on the straight grid under swing (at most half a step from
   what is heard). Code: `usePlayhead`.
@@ -181,7 +193,8 @@ spotlight, EB3-05 sampler compaction and two columns) have shipped.
   selected slot only while a switch is queued, and it is driven from rAF and CSS, never
   React state.
 - **Quad.** A group of four steps (1–4, 5–8, 9–12, 13–16), each wearing its
-  909 colour. Phone reflow [v3 spec] keeps quads whole. Code: `--quad-0`…`--quad-3`.
+  909 colour. Phone reflow keeps quads whole: each row of 8 holds two of them.
+  Code: `--quad-0`…`--quad-3`.
 - **Queued switch** [v3 spec]. Pressing a slot while playing selects it at once, so the grid
   shows it, edits go to it and goals read it. The sound changes only when the
   engine reaches step 0 of the next bar. Stop clears the queue.
@@ -491,7 +504,10 @@ spotlight, EB3-05 sampler compaction and two columns) have shipped.
   `e2e/`, against the production build, in the `e2e` CI job. It holds the smoke
   check, the fold check, the pinned-transport check and the lesson card checks
   (the completed strip's height, scroll to spotlight clearing the strip) and the two-column check at
-  1600 and 1599px wide (`e2e/wide.spec.ts`); the sideways-scroll checks arrive with EB3-06. Code: `playwright.config.ts`.
+  1600 and 1599px wide (`e2e/wide.spec.ts`); the phone reflow checks (`e2e/reflow.spec.ts`: no sideways scroll at 390×844 and
+  320×640 on a fresh load, with the region editor open and with the finale open;
+  2×8 lanes with step *n* over step *n* + 8; the two-row sticky strip).
+  Code: `playwright.config.ts`.
 - **Performance rule.** React re-renders on user edits only, never on the audio
   clock. The playhead, meters, LEDs and room light animate from rAF reading the
   engine directly.

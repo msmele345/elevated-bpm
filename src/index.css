@@ -760,8 +760,9 @@ body::before {
 
 /* ── Transport strip ───────────────────────────────────────────────── */
 /* The deck's clock, pinned to the top of the screen. Opaque, because the
-   panels scroll underneath it; one row, so it never eats the screen; and
-   the free room at its right-hand end is where the pattern bank lands. */
+   panels scroll underneath it; one slim row (two on a phone, see the reflow
+   block at the end of the file) so it never eats the screen; and the free
+   room at its right-hand end is where the pattern bank lands. */
 .transport-strip {
   position: sticky;
   top: 0;
@@ -782,9 +783,9 @@ body::before {
   flex: 1;
   display: flex;
   align-items: center;
-  /* Always one row: --transport-strip-h, and so every scroll target's
-     clearance, assumes it. The two-row phone strip (EB3-06) must raise
-     that height with it. */
+  /* One row on desktop. --transport-strip-h, and so every scroll target's
+     clearance, is its height; the phone block lays this out as two rows and
+     raises the variable with it. */
   gap: 16px;
 }
 
@@ -1180,7 +1181,11 @@ body::before {
 
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(16, 1fr);
+  /* One row of 16 on desktop. Below 600px the phone reflow wraps the same 16
+     buttons into two rows of 8 on its own tracks. Any further row that lines
+     up under a lane (the bass Accent and Slide rows) is a .step-grid too, so
+     it inherits identical tracks and step n sits over step n. */
+  grid-template-columns: repeat(16, minmax(0, 1fr));
   gap: 6px;
   flex: 1;
 }
@@ -1302,16 +1307,6 @@ body::before {
   box-shadow:
     var(--key-raised),
     0 0 0 1px color-mix(in srgb, var(--led) 70%, transparent);
-}
-
-/* ── Narrow screens: keep all 16 steps visible, hide the label ─────── */
-@media (max-width: 640px) {
-  .lane-label {
-    display: none;
-  }
-  .step-grid {
-    gap: 4px;
-  }
 }
 
 /* ── Lesson panel ──────────────────────────────────────────────────── */
@@ -3523,4 +3518,186 @@ body::before {
   height: 100%;
   opacity: 0;
   cursor: pointer;
+}
+
+/* ── Phone reflow (EB3-06): nothing scrolls sideways from 320px up ─────
+   Below 600px the Deck is one narrow column. Every step lane puts its label
+   and mix strip on a header line and wraps its 16 steps into two rows of 8
+   (1–8, then 9–16), each row holding two whole quads. Kept last in the
+   file so it wins over the desktop rules it adjusts at equal specificity. */
+@media (max-width: 599.98px) {
+  /* 599.98 rather than 599: a fractional viewport width (a zoomed or scaled
+     phone) must fall on one side of 600 or the other, never in a gap. */
+  :root {
+    --deck-gap: 10px;
+    /* Two rows: 6 + play button (~36) + 6 row gap + swing knob (~26) + 6,
+       plus the border, measured at 86. The fixed height is what every
+       scroll target clears, so a taller strip would hide things under it. */
+    --transport-strip-h: 86px;
+  }
+
+  body {
+    padding: 12px;
+  }
+
+  .panel {
+    padding: 18px 12px 14px;
+  }
+
+  /* header line over the step grid */
+  .step-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .lane-label {
+    flex: none;
+    min-width: 0;
+    gap: 6px;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+  }
+
+  /* Two rows of 8: four steps, a thin spacer track, four steps. The spacer
+     is the quad gap (2px plus a 3px column gap either side, 8px like the
+     desktop indent), so all eight buttons in a row are the same width: an
+     indent taken out of one button's margin shrinks it, and its aspect-ratio
+     height with it. Every .step-grid shares these tracks, so step n sits
+     directly over step n+8, and over the same step in any further grid. */
+  .step-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 2px repeat(4, minmax(0, 1fr));
+    gap: 6px 3px;
+    /* A big phone or a small tablet in portrait would stretch eight keys
+       across ~550px; past this they stop growing and the lane stays a key bed. */
+    max-width: 440px;
+  }
+
+  /* Cancels the desktop quad indent, (0,3,0) on .step[data-quad='1']:nth-
+     child(4n + 1). The :nth-child(n) is not a filter: it lifts this rule to
+     (0,4,0), so it wins on specificity and not on source order alone. */
+  .step-grid .step[data-quad]:nth-child(n) {
+    margin-left: 0;
+  }
+
+  /* Steps 5–8 and 13–16 hop over the spacer; 1–4 and 9–12 flow into the
+     first four tracks, and the cursor wraps to the next row after track 9. */
+  .step-grid > :nth-child(8n + 5) {
+    grid-column: 6;
+  }
+
+  .step-grid > :nth-child(8n + 6) {
+    grid-column: 7;
+  }
+
+  .step-grid > :nth-child(8n + 7) {
+    grid-column: 8;
+  }
+
+  .step-grid > :nth-child(8n + 8) {
+    grid-column: 9;
+  }
+
+  /* Narrower keys than on desktop (~30px at 320): trim the LED's top padding
+     and the number to fit the shorter body. */
+  .step {
+    padding: 14% 0 8%;
+  }
+
+  .step-num {
+    font-size: 0.56rem;
+  }
+
+  /* Header: brand and Share menu keep their line; the model plate drops to
+     its own line rather than pushing the row wide. */
+  .deck-header {
+    gap: 6px 12px;
+  }
+
+  .deck-model {
+    order: 3;
+    flex-basis: 100%;
+    margin-right: 0;
+    letter-spacing: 0.2em;
+  }
+
+  .brand {
+    margin-right: auto;
+  }
+
+  /* Transport strip: two rows. Play, tempo and the BPM readout on the first;
+     Swing on the second, with room beside it for the pattern bank's slots
+     (EB3-07a). --transport-strip-h, set above, is its height. */
+  .transport-strip {
+    padding: 6px 10px;
+  }
+
+  .transport {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'play tempo bpm'
+      'swing swing swing';
+    gap: 6px 10px;
+  }
+
+  .transport-play {
+    grid-area: play;
+    padding: 8px 12px;
+    letter-spacing: 0.16em;
+  }
+
+  .transport-tempo {
+    grid-area: tempo;
+    min-width: 0;
+  }
+
+  /* The BPM readout names the fader's job well enough on a phone. */
+  .transport-tempo-label {
+    display: none;
+  }
+
+  .transport-bpm {
+    grid-area: bpm;
+    gap: 4px;
+    padding: 5px 8px;
+  }
+
+  .transport-swing {
+    grid-area: swing;
+  }
+
+  .transport-swing .knob.is-small {
+    width: auto;
+    flex-direction: row;
+    gap: 6px;
+  }
+
+  /* Curriculum line and lesson card: let the text wrap inside the column. */
+  .arc,
+  .lesson-panel {
+    min-width: 0;
+  }
+
+  .arc-here {
+    flex-basis: 100%;
+    order: 4;
+  }
+
+  .arc-tracks {
+    flex-wrap: wrap;
+  }
+
+  /* Plates: name and model share a line; an instrument's mixer strip wraps
+     under them instead of widening the plate. */
+  .panel-title,
+  .panel-title.has-controls {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .knob-row {
+    flex-wrap: wrap;
+    gap: 16px 20px;
+  }
 }

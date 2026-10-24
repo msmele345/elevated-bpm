@@ -5,6 +5,7 @@ import {
   addSource,
   assignSourceToSamplerPad,
   createDemoProjectState,
+  copySlot,
   selectSlot,
   commitRegionToSamplerPad,
   createInitialProjectState,
@@ -43,6 +44,7 @@ import {
   SENDABLE_BUNDLE_LIMIT,
 } from './bundle'
 import {
+  createShareLink,
   createShareUrl,
   PRACTICAL_SHARE_URL_LIMIT,
   projectWithSharedBeat,
@@ -87,6 +89,46 @@ function v6ShareDocument(
     activeLessonId: null,
     ...overrides,
   }
+}
+
+const DRUM_LANE_IDS: DrumLaneId[] = ['kick', 'snare', 'closedHat', 'openHat', 'perc']
+const PAD_LANE_IDS: PadLaneId[] = ['pad1', 'pad2', 'pad3', 'pad4']
+const NOTE_LANE_IDS: NoteLaneId[] = ['bass', 'stab']
+
+/**
+ * Fill the selected slot with dense programming that differs by seed — every
+ * lane busy, accents and pitches scattered — so two seeds share nothing gzip
+ * could fold together. The worst case a bank can put in a link.
+ */
+function programDensely(project: ProjectState, seed: number): ProjectState {
+  let state = seed
+  const next = () => (state = (state * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+  let source = project
+  for (const lane of [...DRUM_LANE_IDS, ...PAD_LANE_IDS]) {
+    for (let step = 0; step < 16; step += 1) {
+      const roll = next()
+      if (roll < 0.6) source = cycleActivePatternStep(source, lane, step)
+      if (roll < 0.3) source = cycleActivePatternStep(source, lane, step)
+    }
+  }
+  for (const lane of NOTE_LANE_IDS) {
+    for (let step = 0; step < 16; step += 1) {
+      if (next() >= 0.7) continue
+      source = toggleActivePatternNoteStep(source, lane, step)
+      source = transposeActivePatternNote(source, lane, step, Math.floor(next() * 12) - 5)
+      source = resizeActivePatternNote(source, lane, step, Math.floor(next() * 4))
+    }
+  }
+  return source
+}
+
+/** A bank with every slot densely programmed and unrelated: too big for a link. */
+function overLengthBank(): ProjectState {
+  let project = createInitialProjectState()
+  project.patterns.forEach((pattern, slot) => {
+    project = programDensely(selectSlot(project, pattern.id), slot + 1)
+  })
+  return selectSlot(project, project.patterns[0].id)
 }
 
 describe('share URL', () => {
@@ -230,13 +272,20 @@ describe('share URL', () => {
       2400,
     )
 
-    const shared = await readSharedBeat(await legacyShareUrl(6, v6ShareDocument(sender)))
+    // Before the bank, a pattern's name was free text.
+    const shared = await readSharedBeat(
+      await legacyShareUrl(
+        6,
+        v6ShareDocument(sender, { patterns: [{ ...activePattern(sender), name: 'Pattern 1' }] }),
+      ),
+    )
 
     if (shared.status !== 'ready') {
       throw new Error(`Expected an older link to open, got ${shared.status}`)
     }
     expect(shared.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(shared.project)).toEqual(activePattern(sender))
+    expect(shared.project.patterns.slice(1).every(isPatternEmpty)).toBe(true)
     expect(shared.project.transport.bpm).toBe(132)
     expect(shared.project.instrumentSettings.bass).toEqual(sender.instrumentSettings.bass)
     // The version it predates arrives at its neutral default, not missing.
@@ -264,6 +313,7 @@ describe('share URL', () => {
     }
     expect(shared.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(shared.project).lanes[0].steps[0].on).toBe(true)
+    expect(activePattern(shared.project).name).toBe('A')
     expect(shared.project.transport.bpm).toBe(125)
   })
 
@@ -488,22 +538,73 @@ describe('share URL', () => {
     }
   })
 
-  it('carries only the selected slot until links carry the bank, landing as slot A', async () => {
-    const sender = cycleActivePatternStep(
-      selectSlot(createDemoProjectState(), createDemoProjectState().patterns[2].id),
-      'kick',
-      0,
-    )
+  it('carries every slot with programming back to its own letter, filling the gaps empty', async () => {
+    // Four variations of one groove: A the demo, B and D variations of it, C empty.
+    let sender = cycleActivePatternStep(createDemoProjectState(), 'kick', 0)
+    const [, b, , d] = sender.patterns
+    sender = cycleActivePatternStep(copySlot(sender, b.id), 'kick', 8)
+    sender = cycleActivePatternStep(copySlot(selectSlot(sender, b.id), d.id), 'snare', 4)
+    sender = selectSlot(sender, b.id)
 
-    const shared = await readSharedBeat(await createShareUrl(sender, 'https://elevated-bpm.example/'))
+    const link = await createShareLink(sender, 'https://elevated-bpm.example/')
+    const shared = await readSharedBeat(link.url)
 
-    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    if (shared.status !== 'ready') throw new Error(`Expected a playable bank, got ${shared.status}`)
+    expect(link.onlySlot).toBeNull()
     const bank = shared.project.patterns
     expect(bank.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
-    expect(shared.project.activePatternId).toBe(bank[0].id)
-    expect(bank[0].lanes).toEqual(activePattern(sender).lanes)
-    expect(bank.slice(1).every(isPatternEmpty)).toBe(true)
+    for (const slot of [0, 1, 3]) {
+      expect(bank[slot]).toEqual(sender.patterns[slot])
+    }
+    expect(isPatternEmpty(bank[2])).toBe(true)
     expect(new Set(bank.map((pattern) => pattern.id)).size).toBe(4)
+    expect(activePattern(shared.project).name).toBe('B')
+  })
+
+  it('leaves empty slots out of the link, apart from the selected one', async () => {
+    const sender = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[2].id)
+
+    const empties = await createShareLink(sender, 'https://elevated-bpm.example/')
+    const shared = await readSharedBeat(empties.url)
+
+    if (shared.status !== 'ready') throw new Error(`Expected a playable bank, got ${shared.status}`)
+    // The recipient lands on the slot the sender was on, even an empty one.
+    expect(activePattern(shared.project).name).toBe('C')
+    expect(shared.project.patterns[0]).toEqual(sender.patterns[0])
+    // An empty slot is one the reader fills anyway, so it travels as nothing at all.
+    const withoutEmpties = await createShareLink(
+      { ...sender, patterns: [sender.patterns[0], sender.patterns[2]] },
+      'https://elevated-bpm.example/',
+    )
+    expect(empties.url).toBe(withoutEmpties.url)
+  })
+
+  it('falls back to the playing slot alone, under its letter, when the bank will not fit', async () => {
+    const sender = overLengthBank()
+    // A is selected and C is playing: a switch is queued, and C is what the sender hears.
+    const playing = sender.patterns[2]
+
+    const link = await createShareLink(sender, 'https://elevated-bpm.example/', playing.id)
+    const shared = await readSharedBeat(link.url)
+
+    expect(link.onlySlot).toBe('C')
+    expect(link.url.length).toBeLessThanOrEqual(PRACTICAL_SHARE_URL_LIMIT)
+    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    const bank = shared.project.patterns
+    expect(bank[2]).toEqual(playing)
+    expect(activePattern(shared.project).name).toBe('C')
+    expect([bank[0], bank[1], bank[3]].every(isPatternEmpty)).toBe(true)
+  })
+
+  it('falls back to the selected slot when nothing is playing', async () => {
+    const sender = selectSlot(overLengthBank(), overLengthBank().patterns[1].id)
+
+    const link = await createShareLink(sender, 'https://elevated-bpm.example/')
+    const shared = await readSharedBeat(link.url)
+
+    expect(link.onlySlot).toBe('B')
+    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    expect(activePattern(shared.project)).toEqual(sender.patterns[1])
   })
 
   it('opens a link written before the bank as slot A', async () => {
@@ -602,7 +703,6 @@ describe('share URL', () => {
       14,
     )
     const senderPattern = activePattern(sender)
-    senderPattern.name = 'Warehouse signal'
     const shared = await readSharedBeat(
       await createShareUrl(sender, 'https://elevated-bpm.example/'),
     )
@@ -610,8 +710,8 @@ describe('share URL', () => {
 
     const preview = projectWithSharedBeat(recipient, shared.project)
 
-    // A link carries the selected slot, and it lands as the recipient's slot A.
-    expect(activePattern(preview)).toEqual({ ...senderPattern, name: 'A' })
+    // The sender's selected slot lands in the same letter on the recipient's deck.
+    expect(activePattern(preview)).toEqual(senderPattern)
     expect(preview.transport).toEqual(sender.transport)
     expect(preview.instrumentSettings).toEqual(sender.instrumentSettings)
     expect(preview.sources).toEqual(sender.sources)
@@ -764,6 +864,16 @@ describe('beat bundle', () => {
     if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
     expect(opened.project.patterns).toEqual(sender.patterns)
     expect(opened.project.activePatternId).toBe(sender.patterns[2].id)
+  })
+
+  it('carries all four slots of a bank too big for a link', async () => {
+    const sender = overLengthBank()
+
+    const opened = await readBundle(await exportedBytes(sender, new Map()))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.patterns).toEqual(sender.patterns)
+    expect(opened.project.patterns.some(isPatternEmpty)).toBe(false)
   })
 
   it('carries swing so the groove arrives as it was sent', async () => {

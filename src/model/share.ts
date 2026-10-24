@@ -1,5 +1,5 @@
-import { bankWithSlots } from './bank'
-import { PROJECT_STATE_VERSION, type ProjectState } from './projectState'
+import { bankWithSlots, type SlotLetter } from './bank'
+import { activePattern, PROJECT_STATE_VERSION, type ProjectState } from './projectState'
 import { PAD_LANES, padAudioState, type AvailableAudio } from './sampler'
 import {
   base64UrlToBytes,
@@ -41,15 +41,53 @@ function malformedShare(): SharedProjectResult {
   return { status: 'error', code: 'malformed', message: MALFORMED_SHARE_MESSAGE }
 }
 
-/** Build a share URL without disturbing unrelated query parameters. */
-export async function createShareUrl(project: ProjectState, baseUrl: string): Promise<string> {
-  const compressed = await compressPayload(projectForLink(project))
+/**
+ * A link, and what it had to leave behind: `onlySlot` names the one slot it
+ * holds when the whole bank would not fit, and is null when it carries them all.
+ */
+export interface ShareLink {
+  url: string
+  onlySlot: SlotLetter | null
+}
+
+/** Encode a payload into `baseUrl` without disturbing unrelated query parameters. */
+async function linkFor(payload: ProjectState, baseUrl: string): Promise<string> {
+  const compressed = await compressPayload(payload)
   const url = new URL(baseUrl)
   url.searchParams.set(
     SHARE_QUERY_PARAM,
     `${PROJECT_STATE_VERSION}.${bytesToBase64Url(compressed)}`,
   )
   return url.toString()
+}
+
+/**
+ * Build a share link carrying the whole bank. A bank too big for the URL
+ * ceiling falls back to the one slot the sender is hearing — `playingSlotId`,
+ * the selected slot when stopped — and says so, so the sender can reach for a
+ * bundle instead of finding out from a friend that B–D never arrived.
+ */
+export async function createShareLink(
+  project: ProjectState,
+  baseUrl: string,
+  playingSlotId: string = project.activePatternId,
+): Promise<ShareLink> {
+  const url = await linkFor(projectForLink(project), baseUrl)
+  if (url.length <= PRACTICAL_SHARE_URL_LIMIT) return { url, onlySlot: null }
+  const fallback = projectForLink(project, playingSlotId)
+  return {
+    url: await linkFor(fallback, baseUrl),
+    onlySlot: activePattern(fallback).name as SlotLetter,
+  }
+}
+
+/** The URL alone, for a caller with no use for what it left behind. */
+export async function createShareUrl(
+  project: ProjectState,
+  baseUrl: string,
+  playingSlotId?: string,
+): Promise<string> {
+  return (await createShareLink(project, baseUrl, playingSlotId)).url
 }
 
 /**

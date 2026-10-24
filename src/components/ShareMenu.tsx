@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import type { SlotLetter } from '../model/bank'
 import { BUNDLE_FILE_EXTENSION } from '../model/bundle'
 
 interface ShareMenuProps {
@@ -8,6 +9,8 @@ interface ShareMenuProps {
   /** Assembling a bundle reads audio out of storage, so it is not instant. */
   isBundling: boolean
   sharedUrl: string | null
+  /** The one slot the link holds, when the whole bank would not fit in it. */
+  onlySlot?: SlotLetter | null
   copied: boolean
   /**
    * What the share strip on the deck is saying, if one is up (an incoming
@@ -34,6 +37,7 @@ export function ShareMenu({
   isSharing,
   isBundling,
   sharedUrl,
+  onlySlot = null,
   copied,
   strip = null,
   onShare,
@@ -160,6 +164,11 @@ export function ShareMenu({
                     onFocus={(event) => event.currentTarget.select()}
                   />
                 </label>
+              )}
+              {onlySlot && (
+                <p className="share-result-fallback">
+                  This link holds pattern {onlySlot} only — export a bundle to send all four.
+                </p>
               )}
             </div>
           )}

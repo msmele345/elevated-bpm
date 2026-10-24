@@ -6,7 +6,7 @@ import {
   type InstrumentSettings,
   type ProjectState,
 } from './projectState'
-import { bankWithSlots, isSlotLetter, SLOT_LETTERS } from './bank'
+import { bankWithSlots, isPatternEmpty, isSlotLetter, SLOT_LETTERS } from './bank'
 import { BASS_PARAMS } from './bass'
 import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
@@ -70,16 +70,24 @@ export function recipientOwnedBlanks(): Pick<
 }
 
 /**
- * The document a link carries: the selected slot, as slot A, and everything
- * shaping how it sounds. One slot only until links carry the bank (EB3-08);
- * the recipient's reader fills B–D empty.
+ * The document a link carries: every slot with programming, each under its own
+ * letter, plus the selected slot even when it is empty — the reader fills every
+ * letter left out, so an empty slot travels as nothing at all. Given
+ * `onlySlotId`, that one slot alone, selected: the fallback for a bank too big
+ * for a link.
  */
-export function projectForLink(project: ProjectState): ProjectState {
-  const pattern = activePattern(project)
+export function projectForLink(project: ProjectState, onlySlotId?: string): ProjectState {
+  const whole = projectForBundle(project)
+  if (onlySlotId !== undefined) {
+    const slot =
+      project.patterns.find((pattern) => pattern.id === onlySlotId) ?? activePattern(project)
+    return { ...whole, patterns: [slot], activePatternId: slot.id }
+  }
   return {
-    ...projectForBundle(project),
-    patterns: [{ ...pattern, name: 'A' }],
-    activePatternId: pattern.id,
+    ...whole,
+    patterns: project.patterns.filter(
+      (pattern) => pattern.id === project.activePatternId || !isPatternEmpty(pattern),
+    ),
   }
 }
 

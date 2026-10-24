@@ -519,12 +519,14 @@ The lesson card and drum panel heights were measured on a wiped IndexedDB, so th
 
 **Share-size measurements** (JSON plus gzip, as shipped):
 
-| Content | URL length |
-|---|---|
-| One dense pattern | ≈1,200 chars |
-| Four variations of one groove | ≈1,650 |
-| Two dense patterns, two empty | ≈1,900 |
-| Four unrelated dense patterns | ≈2,500 |
+| Content | URL length (estimate) | Measured in EB3-08 |
+|---|---|---|
+| One dense pattern | ≈1,200 chars | 1,116 |
+| Four variations of one groove | ≈1,650 | 1,527 |
+| Two dense patterns, two empty | ≈1,900 | 1,444 |
+| Four unrelated dense patterns | ≈2,500 | 2,039 → falls back to the playing slot alone, 1,116 |
+
+Measured 2026-10-24 in Chromium through the shipped writer (`createShareLink`), as full URLs on the production origin (`https://elevated-bpm-dusky.vercel.app/?p=…`). "Dense" is every drum and pad lane about 60% on with half of those accented, and both note lanes about 70% on with scattered pitches and lengths; "unrelated" means a different seed per slot, so gzip finds nothing shared. A variation is a copy of slot A with one drum step and one bass note changed. Empty slots travel as nothing, which is why two dense slots land well under the estimate.
 
 Copying and varying, the workflow the bank is built for, fits comfortably; four unrelated dense patterns are what the fallback exists for.
 

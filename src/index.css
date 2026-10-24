@@ -699,6 +699,11 @@ body::before {
   margin-top: 0;
 }
 
+.share-result-fallback {
+  margin: 6px 0 0;
+  color: var(--quad-1);
+}
+
 .share-result label {
   display: grid;
   gap: 6px;

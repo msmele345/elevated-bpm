@@ -25,6 +25,7 @@ import {
   setTransportBpm,
   setTransportSwing,
   toggleActivePatternNoteStep,
+  toggleVoiceSolo,
   updateLessonProgress,
   type ProjectState,
 } from './model/projectState'
@@ -43,7 +44,7 @@ import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
 import { sliceKey } from './model/slice'
 import { createBundle, readBundle } from './model/bundle'
 import { createShareUrl, readSharedBeat } from './model/share'
-import type { PadLane } from './model/types'
+import type { LaneId, PadLane } from './model/types'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import { loadSlice, loadSource, saveSlice, saveSource } from './storage/sampleStore'
 
@@ -283,6 +284,13 @@ function openShareMenu(): void {
 }
 
 /** The deck mounts on a placeholder document and swaps in the stored one. */
+/** A saved project with a programmed step on each of the given pads, so every one renders as a full strip and lane. */
+async function savePadsProgrammed(padIds: LaneId[] = ['pad1', 'pad2', 'pad3', 'pad4']): Promise<void> {
+  let state = createInitialProjectState()
+  for (const id of padIds) state = cycleActivePatternStep(state, id, 0)
+  await saveProjectState(state)
+}
+
 async function hydratedDeck(): Promise<void> {
   render(createElement(App))
   const shareButton = screen.getByRole('button', { name: 'Share' })
@@ -375,7 +383,7 @@ describe('App audio intake', () => {
     await hydratedDeck()
     decoder.newSourceId.mockReturnValue('upload-dropped')
 
-    const pad = screen.getByRole('button', { name: 'Play Pad 3 — empty' }).parentElement!
+    const pad = screen.getByRole('group', { name: 'Pad 3: load a sound' })
     fireEvent.drop(pad, { dataTransfer: { files: [audioFile('Rim Hit.wav')] } })
 
     expect(await screen.findByRole('button', { name: 'Play Pad 3 — Rim Hit' })).toBeTruthy()
@@ -398,18 +406,18 @@ describe('App audio intake', () => {
   it('adds a source without assigning it when the drop lands on the panel', async () => {
     await hydratedDeck()
 
-    const panel = screen.getByRole('button', { name: 'Play Pad 1 — empty' }).closest('section')!
+    const panel = screen.getByRole('group', { name: 'Pad 1: load a sound' }).closest('section')!
     fireEvent.drop(panel, { dataTransfer: { files: [audioFile('Warehouse Break.wav')] } })
 
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
     expect(await within(sourceList).findByText('Warehouse Break')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Play Pad 1 — empty' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Pad 1: load a sound' })).toBeTruthy()
   })
 
   it('shows which pad a dragged file would land on, not just the panel', async () => {
     await hydratedDeck()
 
-    const strip = screen.getByRole('button', { name: 'Play Pad 2 — empty' }).parentElement!
+    const strip = screen.getByRole('group', { name: 'Pad 2: load a sound' })
     fireEvent.dragOver(strip, { dataTransfer: { files: [audioFile('Rim Hit.wav')] } })
 
     expect(strip.hasAttribute('data-drop-active')).toBe(true)
@@ -773,6 +781,7 @@ describe('App sampler workflow', () => {
       frames.push(callback)
       return frames.length
     })
+    await savePadsProgrammed(['pad2'])
     render(createElement(App))
     await waitFor(() =>
       expect(
@@ -1336,7 +1345,7 @@ describe('App region editor', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(engineSpies.commitPadRegion).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'Play Pad 1 — empty' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Pad 1: load a sound' })).toBeTruthy()
   })
 
   it('locks a chop to steps and says what that did to its speed and pitch', async () => {
@@ -1420,6 +1429,118 @@ describe('App sample storage', () => {
       CURATED_SAMPLE_SOURCE.id,
       'upload-1',
     ])
+  })
+})
+
+describe('App sampler compaction', () => {
+  it('shows an empty pad as a compact card, and its lane as soon as it has a sound', async () => {
+    await hydratedDeck()
+
+    // A fresh deck's pads have neither a sound nor programming.
+    expect(screen.getByRole('group', { name: 'Pad 1: load a sound' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pad 1 step 1' })).toBeNull()
+    expect(screen.queryByRole('slider', { name: /Pad 1 Tune/ })).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
+      target: { value: CURATED_SAMPLE_SOURCE.id },
+    })
+
+    expect(await screen.findByRole('button', { name: 'Pad 1 step 1' })).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+    // The other three pads are still cards.
+    expect(screen.getByRole('group', { name: 'Pad 2: load a sound' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pad 2 step 1' })).toBeNull()
+  })
+
+  it('keeps the lane of a pad that lost its audio but has programming', async () => {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    // Chopped and programmed, but no slice was ever stored: the pad is silent.
+    await saveProjectState(
+      commitRegionToSamplerPad(
+        cycleActivePatternStep(addSource(createInitialProjectState(), uploaded), 'pad1', 4),
+        'pad1',
+        REGION,
+      ),
+    )
+
+    await hydratedDeck()
+
+    expect(screen.getByRole('button', { name: /^Pad 1 step 5/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+  })
+
+  it('keeps a silent pad drawn even with no steps, so its relink is never folded away', async () => {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    // A region but no stored slice, and nothing programmed.
+    await saveProjectState(
+      commitRegionToSamplerPad(addSource(createInitialProjectState(), uploaded), 'pad1', REGION),
+    )
+
+    await hydratedDeck()
+
+    expect(screen.getByRole('button', { name: 'Pad 1 step 1' })).toBeTruthy()
+    expect(screen.getByText('Relink Pad 1')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+  })
+
+  it('folds a soundless lane back into a card when its last step is cleared, keeping focus', async () => {
+    // Programming without a sound: the lane is shown for the steps alone.
+    await saveProjectState(cycleActivePatternStep(createInitialProjectState(), 'pad2', 2))
+    await hydratedDeck()
+
+    const step = screen.getByRole('button', { name: /^Pad 2 step 3/ })
+    expect(screen.queryByRole('group', { name: 'Pad 2: load a sound' })).toBeNull()
+
+    step.focus()
+    fireEvent.click(step) // on → accented
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // accented → off
+
+    expect(screen.queryByRole('button', { name: /^Pad 2 step 3/ })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Pad 2: load a sound' })).toBeTruthy()
+    // The control the user pressed is gone; focus lands on the card, not the page.
+    expect(document.activeElement).toBe(screen.getByLabelText('Pad 2 sound source'))
+  })
+
+  it('keeps a soloed soundless lane on the deck when its last step is cleared', async () => {
+    await saveProjectState(
+      toggleVoiceSolo(cycleActivePatternStep(createInitialProjectState(), 'pad2', 2), 'pad2'),
+    )
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // on → accented
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // accented → off
+
+    // Still soloed, so still silencing every other voice: its S has to stay in reach.
+    expect(screen.getByRole('button', { name: /^Pad 2 step 3/ }).getAttribute('aria-pressed')).toBe(
+      'false',
+    )
+    expect(screen.queryByRole('group', { name: 'Pad 2: load a sound' })).toBeNull()
+  })
+
+  it("spotlights an empty pad's card when the lesson points at that pad's Tune", async () => {
+    await saveProjectState(enterLessonIn(createInitialProjectState(), 'sampling', 'tune-a-pad'))
+    await hydratedDeck()
+
+    // No sound yet, so no Tune knob: the card is where the lesson starts.
+    const card = screen.getByRole('group', { name: 'Pad 1: load a sound' })
+    expect(card.hasAttribute('data-spotlit')).toBe(true)
+    expect(
+      screen.getByRole('group', { name: 'Pad 2: load a sound' }).hasAttribute('data-spotlit'),
+    ).toBe(false)
   })
 })
 
@@ -1611,7 +1732,7 @@ describe('App storage durability', () => {
     }
 
     try {
-      const strip = screen.getByRole('button', { name: 'Play Pad 3 — empty' }).parentElement!
+      const strip = screen.getByRole('group', { name: 'Pad 3: load a sound' })
       fireEvent.drop(strip, { dataTransfer: { files: [audioFile('Too Big.wav')] } })
 
       const alert = await screen.findByRole('alert')
@@ -1900,6 +2021,7 @@ describe('App voice mixer', () => {
   const lastMixer = () => engineSpies.setMixer.mock.calls.at(-1)![0] as ProjectState['mixer']
 
   it('gives all eleven voices a Level knob beside their M and S, resting at 0 dB', async () => {
+    await savePadsProgrammed()
     await hydratedDeck()
 
     const voices = [

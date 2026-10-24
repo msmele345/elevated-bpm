@@ -3,6 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { indexedDB } from 'fake-indexeddb'
 import { createElement, memo } from 'react'
+import { createInitialProjectState, cycleActivePatternStep } from './model/projectState'
+import { saveProjectState } from './storage/projectStore'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -146,7 +148,16 @@ function laneId(props: Record<string, unknown>): string {
   return (props.lane as { id: string }).id
 }
 
+/**
+ * A deck with every pad lane drawn: a pad with no sound and no programming is
+ * a compact card instead, so each pad gets a step 1.
+ */
 async function renderReadyDeck() {
+  let seeded = createInitialProjectState()
+  for (const id of ['pad1', 'pad2', 'pad3', 'pad4'] as const) {
+    seeded = cycleActivePatternStep(seeded, id, 0)
+  }
+  await saveProjectState(seeded)
   render(createElement(App))
   await waitFor(
     () =>

@@ -14,6 +14,7 @@ import {
   formatPadRate,
   padAudioState,
   padForKeyboardInput,
+  padLaneShown,
   padPlaybackRate,
   padsUsingSource,
   setPadFit,
@@ -123,6 +124,40 @@ describe('padAudioState', () => {
     expect(
       padAudioState(createSamplerSettings().pad1, { slices: new Set(), sources: new Set() }),
     ).toBe('empty')
+  })
+})
+
+describe('padLaneShown', () => {
+  const stepsWith = (...on: number[]) =>
+    Array.from({ length: 16 }, (_, index) => ({ on: on.includes(index), accent: false }))
+  const empty = { region: null, tune: 0, fit: null, name: 'Pad 1' }
+  const loaded = { ...empty, region: REGION, name: 'Chop' }
+  const plain = { muted: false, soloed: false, level: 1 }
+
+  it('hides the lane of a pad with no sound and no programming', () => {
+    expect(padLaneShown(empty, stepsWith(), plain)).toBe(false)
+  })
+
+  it('shows the lane as soon as the pad has a sound', () => {
+    expect(padLaneShown(loaded, stepsWith(), plain)).toBe(true)
+  })
+
+  it('keeps the lane of a soundless pad that has programmed steps', () => {
+    expect(padLaneShown(empty, stepsWith(4), plain)).toBe(true)
+    expect(padLaneShown(loaded, stepsWith(0, 8), plain)).toBe(true)
+  })
+
+  it('counts only steps that are on: an accent parked on an off step is not programming', () => {
+    const parked = stepsWith().map((step, index) => (index === 3 ? { ...step, accent: true } : step))
+    expect(padLaneShown(empty, parked, plain)).toBe(false)
+  })
+
+  it('keeps the lane of a muted or soloed pad, so the switch is never hidden', () => {
+    // A soloed card would silence the deck with no S button left to undo it.
+    expect(padLaneShown(empty, stepsWith(), { ...plain, soloed: true })).toBe(true)
+    expect(padLaneShown(empty, stepsWith(), { ...plain, muted: true })).toBe(true)
+    // Level only shapes the pad's own sound, so on its own it changes nothing.
+    expect(padLaneShown(empty, stepsWith(), { ...plain, level: 0.5 })).toBe(false)
   })
 })
 

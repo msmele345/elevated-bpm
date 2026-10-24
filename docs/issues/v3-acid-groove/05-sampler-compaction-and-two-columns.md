@@ -3,7 +3,7 @@
 > Track: v3.0 · Slice 5 of 15
 > Blocked by: EB3-03b
 > Blocks: none
-> Branch: `feat/wide-layout`
+> Branch: `feat/acid-groove-05-sample-compaction-and-wide-layout`
 > Spec stories: 38–40; spec "Layout → Sampler compaction" and "Two columns"
 
 ## What to build
@@ -30,11 +30,39 @@ the Deck on screen at once.
 
 ## Acceptance criteria
 
-- [ ] Empty pads render as compact "Load a sound" cards; loading a sound reveals
-      the pad's step lane immediately
-- [ ] A pad with programmed steps but missing audio keeps its lane visible
-- [ ] Playwright: at 1600×900 the Bass panel sits beside the Drums panel
-- [ ] Below 1600px the layout is a single column; the 1280×720 fold test still
-      passes
-- [ ] a11y suite passes (compact cards named; skip links still cover blocks >8)
-- [ ] Mounted test: lane appears/disappears per the sound-or-steps rule
+- [x] Empty pads render as compact "Load a sound" cards; loading a sound reveals
+      the pad's step lane immediately — `padLaneShown` (`src/model/sampler.ts`)
+      is the rule (a region, or any step on); `SamplerPanel` draws a card
+      (number, source picker, "From file", drop target) in place of the strip
+      and leaves the lane out. A fresh sampler measured 722px → 390px at
+      1280×720 (cards 86px vs 195px strips). Verified in-browser: picking
+      Basement Break on Pad 1 swapped its card for the full strip and lane.
+- [x] A pad with programmed steps but missing audio keeps its lane visible —
+      a silent pad keeps its region, so its strip, relink and lane all stay;
+      a pad with steps but no region at all also keeps its lane
+- [x] Playwright: at 1600×900 the Bass panel sits beside the Drums panel —
+      `e2e/wide.spec.ts` (also Sampler under Drums, Stab under Bass, Master
+      spanning below, no sideways scroll)
+- [x] Below 1600px the layout is a single column; the 1280×720 fold test still
+      passes — `e2e/wide.spec.ts` at 1599×900; `e2e/fold.spec.ts` green (lane 5
+      bottom at 693px)
+- [x] a11y suite passes (compact cards named; skip links still cover blocks >8)
+      — cards are named groups ("Pad 1: load a sound") with a named picker and
+      file control; `DECK_SECTIONS` order is unchanged and matches the reading
+      order in both layouts
+- [x] Mounted test: lane appears/disappears per the sound-or-steps rule —
+      `App sampler compaction` in `src/App.test.ts` (appears on assigning a
+      source, stays for a silent programmed pad, folds back to a card when its
+      last step is cleared, with focus kept on the card)
+
+**Note (sound-or-steps):** "has a sound" is read as "has a region". A silent
+pad (its slice is gone) keeps its full strip, Relink and lane even with no
+steps, so programming and the repair path are never folded away. Two
+additions came out of review. A muted or soloed pad also stays drawn, because
+a soloed card would silence the deck with no S button to undo it. A lesson
+spotlighting `knob:pad1Tune` (Tune a Pad) lights Pad 1's card on a fresh deck,
+because the knob only exists once the pad has a sound.
+
+**Note:** at exactly 1600px each column is ~762px, so a step button is 24px
+wide (34px in the 920px single column), which is the WCAG 2.5.8 minimum. Steps
+grow back to full width as the viewport approaches 1900px.

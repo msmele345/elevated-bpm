@@ -1,21 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
-import { wipeProjectStorage } from './helpers/project'
+import { openFreshDeck } from './helpers/project'
 
 // The fold guarantee (spec story 24): on a fresh load at 1280×720, Play, the
 // tempo and all five drum lanes are on screen before anything is scrolled.
 // The viewport is the project default in `playwright.config.ts`.
 const FOLD_PX = 720
-
-/** Open a fresh project and wait until it is the hydrated deck, fonts and all. */
-async function openFreshDeck(page: Page): Promise<void> {
-  await wipeProjectStorage(page)
-  await page.goto('/')
-  // The Share menu opens only once the stored project has replaced the
-  // placeholder, so an enabled trigger means the deck is the real one.
-  await expect(page.getByRole('button', { name: 'Share', exact: true })).toBeEnabled()
-  // Line wraps depend on the webfonts; measure after they have swapped in.
-  await page.evaluate(() => document.fonts.ready)
-}
 
 function drumLanes(page: Page) {
   return page.getByRole('region', { name: 'Drum Machine' }).locator('.step-row')

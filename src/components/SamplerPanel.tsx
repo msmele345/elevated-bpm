@@ -1,4 +1,13 @@
-import { memo, useEffect, useRef, useState, type DragEvent } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from 'react'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { INTAKE_LIMITS_HINT } from '../model/intake'
 import {
@@ -11,7 +20,9 @@ import {
 import {
   PAD_LANES,
   formatPadRate,
+  isPadLaneId,
   padAudioState,
+  padLaneShown,
   padsUsingSource,
   padPlaybackRate,
   samplerParamForPad,
@@ -53,6 +64,19 @@ function deleteWarning(settings: SamplerSettings, source: SampleSource): string 
   return `${pads.join(' and ')} ${pads.length === 1 ? 'uses' : 'use'} ${source.name}. ${
     pads.length === 1 ? 'That pad keeps' : 'Those pads keep'
   } sounding, but can no longer be re-chopped.`
+}
+
+/**
+ * A file input's change, handed on as the one file chosen. The control is
+ * cleared either way, so choosing the same file again is still a change the
+ * browser will report.
+ */
+function onFileChosen(receive: (file: File) => void) {
+  return (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (file) receive(file)
+  }
 }
 
 /**
@@ -168,6 +192,40 @@ function SamplerInstrument({
   // leaves the panel.
   const [dropTarget, setDropTarget] = useState<PadLaneId | 'panel' | null>(null)
 
+  // The sound-or-steps rule: a pad with neither is a "Load a sound" card, and
+  // its lane is not drawn at all.
+  const shownLanes = lanes.filter((lane) =>
+    padLaneShown(settings[lane.id], lane.steps, voiceMix(mixer, lane.id)),
+  )
+  const shownPads: readonly PadLaneId[] = shownLanes.map((lane) => lane.id)
+
+  // Clearing the last step of a soundless pad folds its lane into a card, and
+  // takes the step button the user just pressed with it. Focus would fall to
+  // the page, 160 Tab stops from here, so it lands on the card instead. Only
+  // for the fold that edit caused: a lane folding for any other reason (a
+  // shared beat put back) must never pull focus into the sampler.
+  const editedPad = useRef<PadLaneId | null>(null)
+  const handleCycleStep = useCallback(
+    (laneId: LaneId, stepIndex: number) => {
+      if (isPadLaneId(laneId)) editedPad.current = laneId
+      onCycleStep(laneId, stepIndex)
+    },
+    [onCycleStep],
+  )
+  const previouslyShown = useRef(shownPads)
+  // Every render, so an edit that folds nothing is forgotten by the next one.
+  useLayoutEffect(() => {
+    const edited = editedPad.current
+    const wasShown = edited !== null && previouslyShown.current.includes(edited)
+    editedPad.current = null
+    previouslyShown.current = shownPads
+    const focusLost = document.activeElement === null || document.activeElement === document.body
+    if (!edited || !wasShown || shownPads.includes(edited) || !focusLost) return
+    panelRef.current
+      ?.querySelector<HTMLSelectElement>(`[data-card-pad-id="${edited}"] .sampler-assign`)
+      ?.focus()
+  })
+
   const handleDragOver = (target: PadLaneId | 'panel') => (event: DragEvent) => {
     // Without this the browser refuses the drop and navigates to the file.
     event.preventDefault()
@@ -275,16 +333,7 @@ function SamplerInstrument({
           {/* Deliberately unfiltered: the browser is the authority on what it
               can play, and an `accept` list would grey out a file it could
               have decoded, with no message and no way to override. */}
-          <input
-            type="file"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              // Clear the control either way, so choosing the same file again
-              // is still a change the browser will report.
-              event.target.value = ''
-              if (file) onLoadFile(file, null)
-            }}
-          />
+          <input type="file" onChange={onFileChosen((file) => onLoadFile(file, null))} />
         </label>
         {/* The limits are stated before the user waits on anything. */}
         <p className="sampler-intake-hint">{INTAKE_LIMITS_HINT} Drop one on a pad to load it there.</p>
@@ -425,15 +474,72 @@ function SamplerInstrument({
             ? padPlaybackRate(settingsForPad, region.duration, secondsPerStep(bpm))
             : 1
           const state = padAudioState(settingsForPad, audio)
+          const dropProps = {
+            'data-spotlit': spotlitPads.includes(pad.id) || undefined,
+            'data-drop-active': dropTarget === pad.id || undefined,
+            onDragOver: handleDragOver(pad.id),
+            onDragLeave: () => setDropTarget(null),
+            onDrop: handleDrop(pad.id),
+          }
+          const sourcePicker = (placeholder: string) => (
+            <select
+              className="sampler-assign"
+              aria-label={`${pad.label} sound source`}
+              value={region?.sourceId ?? ''}
+              onChange={(event) => onAssign(pad.id, event.target.value)}
+            >
+              {/* Present so an empty pad has something to show; clearing a
+                  pad is storage lifecycle work, not an assignment. */}
+              <option value="" disabled>
+                {placeholder}
+              </option>
+              {sources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.name}
+                </option>
+              ))}
+            </select>
+          )
+          const lane = lanes.find((candidate) => candidate.id === pad.id)
+          if (lane && !shownLanes.includes(lane)) {
+            // Nothing to tune, fit or chop yet: only the ways a sound arrives.
+            return (
+              <div
+                className="sampler-pad-strip sampler-pad-card"
+                key={pad.id}
+                role="group"
+                aria-label={`${pad.label}: load a sound`}
+                data-card-pad-id={pad.id}
+                {...dropProps}
+                // A lesson aimed at this pad's Tune starts here: there is no
+                // knob to light until the pad has a sound.
+                data-spotlit={
+                  dropProps['data-spotlit'] ||
+                  spotlitParams.includes(samplerParamForPad(pad.id).id) ||
+                  undefined
+                }
+              >
+                <span className="sampler-pad-number" aria-hidden="true">
+                  {pad.keyLabel}
+                </span>
+                <span className="sampler-pad-card-title" aria-hidden="true">
+                  Load a sound
+                </span>
+                {sourcePicker('Pick a source')}
+                <label className="sampler-pad-card-file">
+                  <span>
+                    From file<span className="visually-hidden"> onto {pad.label}</span>
+                  </span>
+                  <input type="file" onChange={onFileChosen((file) => onLoadFile(file, pad.id))} />
+                </label>
+              </div>
+            )
+          }
           return (
             <div
               className="sampler-pad-strip"
               key={pad.id}
-              data-spotlit={spotlitPads.includes(pad.id) || undefined}
-              data-drop-active={dropTarget === pad.id || undefined}
-              onDragOver={handleDragOver(pad.id)}
-              onDragLeave={() => setDropTarget(null)}
-              onDrop={handleDrop(pad.id)}
+              {...dropProps}
             >
               <SamplerPad
                 pad={pad}
@@ -447,23 +553,7 @@ function SamplerInstrument({
                 spotlit={spotlitParams.includes(samplerParamForPad(pad.id).id)}
                 onChange={onTuneChange}
               />
-              <select
-                className="sampler-assign"
-                aria-label={`${pad.label} sound source`}
-                value={region?.sourceId ?? ''}
-                onChange={(event) => onAssign(pad.id, event.target.value)}
-              >
-                {/* Present so an empty pad has something to show; clearing a
-                    pad is storage lifecycle work, not an assignment. */}
-                <option value="" disabled>
-                  No sound
-                </option>
-                {sources.map((source) => (
-                  <option key={source.id} value={source.id}>
-                    {source.name}
-                  </option>
-                ))}
-              </select>
+              {sourcePicker('No sound')}
               <select
                 className="sampler-fit"
                 aria-label={`${pad.label} fit to steps`}
@@ -502,14 +592,7 @@ function SamplerInstrument({
                   {/* One action: point a silent pad at a file and it comes back
                       with its name, its tune, its fit and its programming. */}
                   <span>Relink {pad.label}</span>
-                  <input
-                    type="file"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0]
-                      event.target.value = ''
-                      if (file) onRelinkPad(file, pad.id)
-                    }}
-                  />
+                  <input type="file" onChange={onFileChosen((file) => onRelinkPad(file, pad.id))} />
                 </label>
               )}
             </div>
@@ -518,7 +601,7 @@ function SamplerInstrument({
       </div>
 
       <div className="sampler-sequencer">
-        {lanes.map((lane) => {
+        {shownLanes.map((lane) => {
           const mix = voiceMix(mixer, lane.id)
           return (
             <StepRow
@@ -527,7 +610,7 @@ function SamplerInstrument({
               muted={mix.muted}
               soloed={mix.soloed}
               silenced={!mixIsAudible(mix, soloing)}
-              onCycleStep={onCycleStep}
+              onCycleStep={handleCycleStep}
               level={mix.level}
               levelSpotlit={spotlitParams.includes(levelParamForVoice(lane.id).id)}
               onToggleMute={onToggleMute}

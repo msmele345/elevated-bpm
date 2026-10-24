@@ -290,6 +290,9 @@ Every new setting defaults to the sound the Deck makes today: swing 50%, level 0
 - **Sampler compaction:**
   - A pad's step lane renders when the pad has a sound or has programmed steps.
   - Pads with neither show as compact "Load a sound" cards.
+  - "Has a sound" means the pad has a region. A silent pad (region kept, slice gone) keeps its strip, Relink and lane even with no steps.
+  - A muted or soloed pad also keeps its lane (settled in EB3-05 review). The card has no M or S, and solo silences every other voice, so a soloed card would leave the Deck silent with nothing on screen to undo it. Mixer state is shared across slots but steps are not, so once the bank lands (EB3-07), switching to an empty slot or pressing Clear could fold a soloed pad without the user touching it.
+  - The card holds the pad number, the source picker and a "From file" control, and still takes a dropped file. Whether "From file" stays is an open decision; see Further Notes.
 - **Two columns at a viewport width of 1600px or more:**
   - Drums and Sampler on the left, Bass and Stab on the right.
   - Header, transport strip, curriculum and lesson card span the full width above; Master spans it below.
@@ -528,5 +531,25 @@ Copying and varying, the workflow the bank is built for, fits comfortably; four 
 **Why the swing mechanism is specified.** It looks free, because Tone has transport swing, but under this Deck's step indexing it isn't. See Step resolution above. This is the kind of thing a fresh implementer would otherwise rediscover the hard way.
 
 **EB2-10 (Web MIDI)** stays parked on its branch until a controller is available, then gets rebased onto `develop`. v3 rewrites App wiring, the transport and the mixer, so expect merge conflicts there. MIDI remains one more event source into the existing input layer; it should now also respect the voice mixer (live stab notes pass through stab Level, mute and solo).
+
+**Open decision: the "From file" control on the "Load a sound" card** (EB3-05, kept for now). The spec asked only for a compact card. EB3-05 shipped it with a per-pad "From file" control, which loads a chosen file straight onto that pad. The card can already get a sound two other ways: the source picker (any loaded source) and dropping a file on the card.
+
+| | Keep "From file" (shipped) | Remove it |
+|---|---|---|
+| Keyboard and screen-reader users | Load a file onto a chosen pad in one step | Two steps: the panel's "Load audio file" adds a source to no pad, then the pad's picker assigns it |
+| What the card is for | Matches its name: it can load a sound without a mouse drag | A pure picker-and-drop card, the most compact reading of the spec |
+| Redundancy | Five file controls in the panel: one panel-wide, four per-card | One panel-wide file control, as before EB3-05 |
+| Tab stops | Four more while pads are empty | None added |
+| Risk | Reuses the drop path's handler (`onLoadFile(file, padId)`), so no new behaviour | No behaviour lost; the two-step route already works |
+
+To remove it:
+
+1. In `src/components/SamplerPanel.tsx`, delete the `<label className="sampler-pad-card-file">…</label>` block inside the card (the branch that renders `aria-label={`${pad.label}: load a sound`}`). Keep `onFileChosen`, because the panel's "Load audio file" and the Relink control still use it.
+2. In `src/index.css`, delete the four `.sampler-pad-card-file` rules (base, `:hover`, `input[type='file']`, `:focus-within`). Then in `.sampler-pad-card` change `grid-template-rows: auto auto auto` to `auto auto`, and in `.sampler-pad-card .sampler-pad-number` change `grid-row: 1 / 4` to `1 / 3`. The number then spans the title and the picker only.
+3. In `GLOSSARY.md`, edit the **Pad card** entry from "a source picker and a "From file" control" to "a source picker".
+4. In the EB3-05 issue file, edit the AC evidence from "(number, source picker, "From file", drop target)" to "(number, source picker, drop target)", and edit the "Sampler compaction" bullet above to match.
+5. No test refers to the control, so nothing needs updating there. Run `npx vitest run src/App.test.ts src/a11y.test.ts` and `npm run test:e2e`, then check in the browser that an empty card still measures about 86px or less and that dropping a file on a card still loads it there.
+
+To keep it, delete this note and the "open decision" clause in the Sampler compaction bullet.
 
 **Branch protection** on `develop` and `main` (Phase 1.5) is still pending. When it is turned on, the new Playwright job should be a required check alongside build-and-test.

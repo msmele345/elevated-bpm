@@ -1452,6 +1452,13 @@ export default function App() {
         />
       )}
 
+      {/* The instruments, in two columns on a wide screen — rhythm (Drums,
+          Sampler) on the left, melody (Bass, Stab) on the right — and one
+          stack below 1600px, where both wrappers dissolve. The source order is
+          the reading order either way, so skip links and headings still
+          follow the screen. */}
+      <div className="deck-instruments">
+      <div className="deck-column">
       <section
         className="panel"
         id={DECK_SECTION_IDS.drums}
@@ -1522,7 +1529,9 @@ export default function App() {
         onToggleSolo={handleToggleSolo}
         onLevelChange={handleLevelChange}
       />
+      </div>
 
+      <div className="deck-column">
       <BassPanel
         lane={bassLane}
         settings={bassSettings}
@@ -1560,6 +1569,8 @@ export default function App() {
         onToggleSolo={handleToggleSolo}
         onLevelChange={handleLevelChange}
       />
+      </div>
+      </div>
 
       {/* The master strip, last on screen as it is last in the signal chain:
           the main-out scope, the two macro knobs — filter and drive — that

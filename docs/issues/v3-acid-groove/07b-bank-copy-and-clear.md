@@ -68,9 +68,12 @@ others.
       `projectState.test.ts`; `heldAfterCopy` cases in `arc.test.ts` ("goals and
       the pattern bank"), plus "carries a held shared slot’s hold onto its copy, so
       copying never earns credit"
-- [x] Fits the strip's height budget — desktop strip stays 52px with the confirm
-      open; at 320×640 the phone strip stays 86px with no sideways scroll, idle
-      and confirming (`e2e/reflow.spec.ts`)
+- [x] Fits the strip's height budget — desktop strip measured in-browser at
+      1024px wide (dev build): 52px idle and with the Overwrite confirm open, the
+      confirm taking exactly the idle bank's footprint; at 390×844 and 320×640 the
+      phone strip stays within `--transport-strip-h` with the bank inside it and no
+      sideways scroll, idle, armed and confirming (`e2e/reflow.spec.ts` "the
+      pattern bank, Copy, Clear and the inline confirm fit inside the strip")
 
 **Note:** the issue's branch name differs: work landed on
 `feat/acid-groove-07b-bank-copy-clear`, not `feat/bank-copy-clear`.

@@ -67,16 +67,15 @@ export function bankWithSlots(patterns: readonly Pattern[]): Pattern[] {
 export function withProgrammingOf(target: Pattern, source: Pattern): Pattern {
   return {
     ...target,
-    lanes: source.lanes.map((lane) => ({ ...lane, steps: lane.steps.map((step) => ({ ...step })) })),
-    padLanes: source.padLanes.map((lane) => ({
-      ...lane,
-      steps: lane.steps.map((step) => ({ ...step })),
-    })),
-    noteLanes: source.noteLanes.map((lane) => ({
-      ...lane,
-      steps: lane.steps.map((step) => ({ ...step })),
-    })),
+    lanes: source.lanes.map(cloneLane),
+    padLanes: source.padLanes.map(cloneLane),
+    noteLanes: source.noteLanes.map(cloneLane),
   }
+}
+
+/** One lane with every step a fresh object, whatever kind of step it holds. */
+function cloneLane<Step extends object, L extends { steps: Step[] }>(lane: L): L {
+  return { ...lane, steps: lane.steps.map((step) => ({ ...step })) }
 }
 
 /** `pattern` with every lane started over, keeping its id and letter. */

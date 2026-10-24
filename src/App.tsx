@@ -578,6 +578,11 @@ export default function App() {
   // slot are audible immediately and a newly selected slot comes in at the bar.
   const bank = project.patterns
   const selectedSlotId = project.activePatternId
+  // Mirrored for the copy handler, which must know the source slot before it
+  // edits the document: the hold it carries is a ref, not state, so it is
+  // written outside the state updater, which must stay pure.
+  const selectedSlotIdRef = useRef(selectedSlotId)
+  selectedSlotIdRef.current = selectedSlotId
   useEffect(() => {
     engine.setBank(bank, selectedSlotId)
   }, [bank, selectedSlotId])
@@ -667,19 +672,12 @@ export default function App() {
   }, [])
 
   // A copy of a held shared slot is still the sender's work, so its hold goes
-  // with it; read from the ref, since the hold is not state.
+  // with it.
   const handleCopySlot = useCallback((targetId: string) => {
-    setProject((p) => {
-      const copied = copySlot(p, targetId)
-      if (copied !== p) {
-        inheritedLessonsRef.current = heldAfterCopy(
-          inheritedLessonsRef.current,
-          p.activePatternId,
-          targetId,
-        )
-      }
-      return copied
-    })
+    const sourceId = selectedSlotIdRef.current
+    if (targetId === sourceId) return
+    inheritedLessonsRef.current = heldAfterCopy(inheritedLessonsRef.current, sourceId, targetId)
+    setProject((p) => copySlot(p, targetId))
   }, [])
 
   const handleClearSlot = useCallback(() => {

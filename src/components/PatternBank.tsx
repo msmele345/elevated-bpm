@@ -20,11 +20,46 @@ interface PatternBankProps {
  */
 type BankMode =
   | { kind: 'idle' }
-  | { kind: 'arming' }
+  | { kind: 'armed' }
   | { kind: 'confirmCopy'; targetId: string }
   | { kind: 'confirmClear' }
 
 const IDLE: BankMode = { kind: 'idle' }
+
+/** The control a question was about, which focus returns to once it closes. */
+type AskedAbout = { kind: 'slot'; id: string } | { kind: 'clear' }
+
+/** An open question, as the strip shows it. */
+interface Question {
+  /** "Overwrite B?" — also the confirm group's name. */
+  text: string
+  /** The yes key's printed word and its full accessible name. */
+  yesText: string
+  yesLabel: string
+  askedAbout: AskedAbout
+}
+
+/** The question a mode is asking, if any. */
+function questionFor(mode: BankMode, letterOf: (id: string) => string, selectedLetter: string) {
+  if (mode.kind === 'confirmCopy') {
+    const letter = letterOf(mode.targetId)
+    return {
+      text: `Overwrite ${letter}?`,
+      yesText: 'Overwrite',
+      yesLabel: `Overwrite ${letter}`,
+      askedAbout: { kind: 'slot', id: mode.targetId },
+    } satisfies Question
+  }
+  if (mode.kind === 'confirmClear') {
+    return {
+      text: `Clear ${selectedLetter}?`,
+      yesText: 'Clear',
+      yesLabel: `Clear ${selectedLetter}`,
+      askedAbout: { kind: 'clear' },
+    } satisfies Question
+  }
+  return null
+}
 
 /**
  * The pattern bank in the transport strip: the four slot buttons, A–D, then
@@ -38,9 +73,9 @@ const IDLE: BankMode = { kind: 'idle' }
  * button's text: "Slot B, selected, queued, empty".
  *
  * Overwriting or clearing programming asks with an inline confirm in place of
- * the slots, Copy and Clear — never a browser dialog, which would block the session.
- * Focus goes to Cancel when it opens, so a stray Enter can never wipe a
- * pattern, and comes back to the control the question was about when it
+ * the slots, Copy and Clear — never a browser dialog, which would block the
+ * session. Focus goes to Cancel when it opens, so a stray Enter can never wipe
+ * a pattern, and comes back to the control the question was about when it
  * closes; with the deck this many tab stops deep, focus must never fall to the
  * page. Escape backs out of an armed copy or an open confirm.
  */
@@ -48,19 +83,24 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
   const [mode, setMode] = useState<BankMode>(IDLE)
   const rootRef = useRef<HTMLDivElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
-  /** Where focus goes once the bank settles: a slot id, or 'clear'. */
-  const refocus = useRef<string | null>(null)
+  /** Where focus goes once the bank settles, if anywhere. */
+  const refocus = useRef<AskedAbout | null>(null)
 
   const selected = slots.find((slot) => slot.id === selectedId)
+  const selectedLetter = selected?.letter ?? ''
   const letterOf = (id: string) => slots.find((slot) => slot.id === id)?.letter ?? ''
+  const question = questionFor(mode, letterOf, selectedLetter)
 
-  const settle = (focusOn: string | null) => {
+  const settle = (focusOn: AskedAbout | null) => {
     refocus.current = focusOn
     setMode(IDLE)
   }
 
+  /** Cancel, Escape: drop whatever is armed or asked, nothing changed. */
+  const backOut = () => settle(question?.askedAbout ?? null)
+
   const pressSlot = (slot: BankSlot) => {
-    if (mode.kind !== 'arming') {
+    if (mode.kind !== 'armed') {
       onSelect(slot.id)
       return
     }
@@ -82,16 +122,10 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
   }
 
   const answerYes = () => {
-    if (mode.kind === 'confirmCopy') {
-      onCopy(mode.targetId)
-      settle(mode.targetId)
-    } else if (mode.kind === 'confirmClear') {
-      onClear()
-      settle('clear')
-    }
+    if (mode.kind === 'confirmCopy') onCopy(mode.targetId)
+    else if (mode.kind === 'confirmClear') onClear()
+    backOut()
   }
-
-  const answerNo = () => settle(mode.kind === 'confirmCopy' ? mode.targetId : 'clear')
 
   // The confirm takes the place of the focused Copy or slot, so focus moves
   // into it; when the bank settles, focus returns to what was asked about.
@@ -103,28 +137,22 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
     const target = refocus.current
     refocus.current = null
     if (target === null) return
-    const selector = target === 'clear' ? '[data-bank-clear]' : `[data-slot-id="${target}"]`
+    const selector =
+      target.kind === 'clear' ? '[data-bank-clear]' : `[data-slot-id="${target.id}"]`
     rootRef.current?.querySelector<HTMLElement>(selector)?.focus()
   }, [mode])
 
-  // Escape is listened for only while there is something to back out of, so
-  // it never competes with the Share menu, the region editor or the finale.
+  // Escape is listened for only while there is something to back out of, and
+  // re-bound each render so it backs out of whatever is open now. The Share
+  // menu stops its own Escape, so closing the menu never disarms Copy.
   useEffect(() => {
     if (mode.kind === 'idle') return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (mode.kind === 'arming') setMode(IDLE)
-      else settle(mode.kind === 'confirmCopy' ? mode.targetId : 'clear')
+      if (event.key === 'Escape') backOut()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [mode])
-
-  const confirming = mode.kind === 'confirmCopy' || mode.kind === 'confirmClear'
-  const question =
-    mode.kind === 'confirmCopy'
-      ? `Overwrite ${letterOf(mode.targetId)}?`
-      : `Clear ${selected?.letter ?? ''}?`
+  })
 
   return (
     <div
@@ -132,12 +160,12 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
       className="bank"
       role="group"
       aria-label="Pattern bank"
-      data-copy-armed={mode.kind === 'arming' || undefined}
+      data-copy-armed={mode.kind === 'armed' || undefined}
     >
       {/* Hidden rather than unmounted while a confirm is open: the confirm
           takes the slots' room too, so asking never widens the strip, and the
           buttons stay for useSlotLights and for focus to come back to. */}
-      <div className="bank-slots" hidden={confirming}>
+      <div className="bank-slots" hidden={question !== null}>
         {slots.map((slot) => {
           const isSelected = slot.id === selectedId
           return (
@@ -166,24 +194,20 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
           )
         })}
       </div>
-      {confirming ? (
+      {question ? (
         <div className="bank-confirm" role="group" aria-labelledby="bank-confirm-question">
           <span className="bank-confirm-question" id="bank-confirm-question">
-            {question}
+            {question.text}
           </span>
           <button
             type="button"
             className="bank-key bank-key-danger"
-            aria-label={
-              mode.kind === 'confirmCopy'
-                ? `Overwrite ${letterOf(mode.targetId)}`
-                : `Clear ${selected?.letter ?? ''}`
-            }
+            aria-label={question.yesLabel}
             onClick={answerYes}
           >
-            {mode.kind === 'confirmCopy' ? 'Overwrite' : 'Clear'}
+            {question.yesText}
           </button>
-          <button type="button" className="bank-key" ref={cancelRef} onClick={answerNo}>
+          <button type="button" className="bank-key" ref={cancelRef} onClick={backOut}>
             Cancel
           </button>
         </div>
@@ -192,9 +216,9 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
           <button
             type="button"
             className="bank-key"
-            aria-label={`Copy slot ${selected?.letter ?? ''}`}
-            aria-pressed={mode.kind === 'arming'}
-            onClick={() => setMode(mode.kind === 'arming' ? IDLE : { kind: 'arming' })}
+            aria-label={`Copy slot ${selectedLetter}`}
+            aria-pressed={mode.kind === 'armed'}
+            onClick={() => setMode(mode.kind === 'armed' ? IDLE : { kind: 'armed' })}
           >
             Copy
           </button>
@@ -204,7 +228,7 @@ function Bank({ slots, selectedId, onSelect, onCopy, onClear }: PatternBankProps
             data-bank-clear=""
             // An empty slot has nothing to clear. `aria-disabled` rather than
             // `disabled`, so Clear keeps focus after the slot it just emptied.
-            aria-label={`Clear slot ${selected?.letter ?? ''}`}
+            aria-label={`Clear slot ${selectedLetter}`}
             aria-disabled={selected?.empty || undefined}
             onClick={pressClear}
           >

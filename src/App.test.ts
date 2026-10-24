@@ -1237,18 +1237,45 @@ describe('App pattern bank', () => {
       expect(closedHat3()).toBe('true')
     })
 
-    it('queues the copy while playing, like any other press', async () => {
+    it('queues the copy while playing, like any other press: A plays on, C waits for the bar', async () => {
+      const frames: FrameRequestCallback[] = []
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+        frames.push(callback)
+        return frames.length
+      })
       await hydratedDeck()
       fireEvent.click(screen.getByRole('button', { name: 'Play' }))
-      await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+      await waitFor(() => expect(engineSpies.play).toHaveBeenCalledTimes(1))
+      const before = engineSpies.setBank.mock.calls.at(-1)![0] as Pattern[]
 
       fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
       fireEvent.click(slots()[2])
 
-      // Selected at once; the engine brings it in at the bar.
-      expect(slots()[2].getAttribute('aria-pressed')).toBe('true')
-      expect(lastPatternHanded().name).toBe('C')
+      // The copy is a document edit handed to the running engine — C selected,
+      // A's programming untouched — never a restart, so the engine's queue
+      // rule (step 0 only) is what brings C in.
+      const [bank, selectedId] = engineSpies.setBank.mock.calls.at(-1)! as unknown as [
+        Pattern[],
+        string,
+      ]
+      expect(selectedId).toBe(before[2].id)
+      expect(bank[0]).toBe(before[0])
+      expect(bank[2].lanes).toEqual(before[0].lanes)
       expect(engineSpies.stop).not.toHaveBeenCalled()
+      expect(engineSpies.play).toHaveBeenCalledTimes(1)
+
+      // Until the bar turns, the engine reports A playing and C queued, and the
+      // bank says so.
+      engineSpies.getSlotLights.mockReturnValue({ playing: before[0].id, queued: before[2].id } as never)
+      for (const frame of [...frames]) frame(16)
+      const [slotA, , slotC] = slots()
+      expect(slotC.getAttribute('aria-pressed')).toBe('true')
+      expect(slotA.hasAttribute('data-playing')).toBe(true)
+      expect(slotC.hasAttribute('data-queued')).toBe(true)
+      expect(accessibleName(slotA)).toBe('Slot A, playing')
+      expect(accessibleName(slotC)).toBe('Slot C, selected, queued')
+      expect(screen.getByText(/Editing C · hearing A/)).toBeTruthy()
+      engineSpies.getSlotLights.mockReturnValue({ playing: null, queued: null })
     })
 
     it('asks inline before overwriting a slot with programming; Cancel leaves it intact', async () => {
@@ -1304,6 +1331,27 @@ describe('App pattern bank', () => {
       expect(copy.getAttribute('aria-pressed')).toBe('false')
       fireEvent.click(slots()[2])
       expect(accessibleName(slots()[2])).toBe('Slot C, selected, empty')
+    })
+
+    it('lets Escape close an open Share menu without also disarming Copy', async () => {
+      await hydratedDeck()
+      const copy = screen.getByRole('button', { name: 'Copy slot A' })
+      fireEvent.click(copy)
+      const share = screen.getByRole('button', { name: 'Share' })
+      // A real press focuses the trigger; fireEvent does not.
+      share.focus()
+      fireEvent.click(share)
+      expect(share.getAttribute('aria-expanded')).toBe('true')
+
+      // Escape is the menu's: it closes, focus goes back to its trigger, and
+      // the armed copy is still waiting for a slot.
+      fireEvent.keyDown(share, { key: 'Escape' })
+      expect(share.getAttribute('aria-expanded')).toBe('false')
+      expect(copy.getAttribute('aria-pressed')).toBe('true')
+
+      // With nothing else open, the next Escape backs out of the copy.
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+      expect(copy.getAttribute('aria-pressed')).toBe('false')
     })
 
     it('cancels an open overwrite confirm with Escape', async () => {

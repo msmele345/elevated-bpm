@@ -177,7 +177,7 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   Focus goes to Cancel when a confirm opens and back to the key asked about when
   it closes. Never a browser dialog. Whether copy is armed is local to the bank,
   never saved or shared. Code: `copySlot`, `clearSlot`, `withProgrammingOf`,
-  `PatternBank`.
+  `emptiedPattern`, `PatternBank`.
 - **Drum lane.** A lane of on/off + accent steps that triggers one sample. Its
   ids are `kick`, `snare`, `closedHat`, `openHat` and `perc`. Code: `DrumLane`, `DrumLaneId`.
 - **Empty slot.** A slot with no step on in any lane. Pitch, length or flags left

@@ -8,6 +8,7 @@ import {
   toggleNoteStep,
   transposeNoteStep,
 } from '../model/note'
+import { createBank } from '../model/bank'
 import { createInitialPattern, cycleStep } from '../model/pattern'
 import type { Mixer } from '../model/mixer'
 import { secondsPerStep, type TransportSettings } from '../model/transport'
@@ -28,6 +29,11 @@ function program(
 /** A straight transport at the deck's default tempo. */
 const STRAIGHT: TransportSettings = { bpm: 130, swing: 0.5 }
 
+/** A bank holding just this pattern, selected and playing. */
+function soleSlot(pattern: Pattern) {
+  return { bank: [pattern], selectedSlotId: pattern.id, playingSlotId: pattern.id }
+}
+
 /** Resolve one 16th the way the transport callback does. */
 function resolveAt(
   pattern: Pattern,
@@ -35,7 +41,7 @@ function resolveAt(
   mixer: Mixer = {},
   transport: TransportSettings = STRAIGHT,
 ) {
-  return resolveStep({ pattern, mixer, transport, stepIndex })
+  return resolveStep({ ...soleSlot(pattern), mixer, transport, stepIndex })
 }
 
 /** Just the drum/pad starts of one resolved 16th. */
@@ -187,7 +193,7 @@ describe('resolveStep — note events', () => {
       8,
     )
 
-    expect(resolveStep({ pattern: bassAndStab, mixer: {}, transport: STRAIGHT, stepIndex: 8 }).notes).toEqual([
+    expect(resolveStep({ ...soleSlot(bassAndStab), mixer: {}, transport: STRAIGHT, stepIndex: 8 }).notes).toEqual([
       {
         laneId: 'bass',
         midi: DEFAULT_PITCH,
@@ -217,7 +223,8 @@ describe('resolveStep — one 16th, every sound', () => {
     pattern = resizeNoteStep(toggleNoteStep(pattern, 'bass', 4), 'bass', 4, 1)
     pattern = transposeNoteStep(toggleNoteStep(pattern, 'stab', 4), 'stab', 4, 4)
 
-    expect(resolveStep({ pattern, mixer: {}, transport: STRAIGHT, stepIndex: 4 })).toEqual({
+    expect(resolveStep({ ...soleSlot(pattern), mixer: {}, transport: STRAIGHT, stepIndex: 4 })).toEqual({
+      playingSlotId: pattern.id,
       starts: [
         { laneId: 'kick', gain: ACCENT_GAIN },
         { laneId: 'closedHat', gain: UNACCENTED_GAIN },
@@ -243,7 +250,9 @@ describe('resolveStep — one 16th, every sound', () => {
   })
 
   it('resolves a silent step to an empty result', () => {
-    expect(resolveStep({ pattern: createInitialPattern(), mixer: {}, transport: STRAIGHT, stepIndex: 7 })).toEqual({
+    const empty = createInitialPattern()
+    expect(resolveStep({ ...soleSlot(empty), mixer: {}, transport: STRAIGHT, stepIndex: 7 })).toEqual({
+      playingSlotId: empty.id,
       starts: [],
       chokes: [],
       swingOffset: 0,
@@ -391,5 +400,56 @@ describe('resolveStep — swing', () => {
       0.5 * secondsPerStep(90),
       12,
     )
+  })
+})
+
+describe('resolveStep — the queued bank switch', () => {
+  const bank = createBank(program(createInitialPattern(), [['kick', 0], ['kick', 5]]))
+  const [a, b] = bank
+  bank[1] = program(b, [['snare', 0], ['snare', 5]])
+  const queued = { bank, selectedSlotId: bank[1].id, playingSlotId: a.id }
+
+  function resolveQueued(stepIndex: number, playingSlotId = a.id) {
+    return resolveStep({ ...queued, playingSlotId, mixer: {}, transport: STRAIGHT, stepIndex })
+  }
+
+  it('keeps sounding the playing slot mid-bar while another is selected', () => {
+    for (const stepIndex of [5, 9, 15]) {
+      const resolved = resolveQueued(stepIndex)
+      expect(resolved.playingSlotId).toBe(a.id)
+    }
+    expect(resolveQueued(5).starts.map((hit) => hit.laneId)).toEqual(['kick'])
+  })
+
+  it('switches to the selected slot on step 0, and step 0 is the new slot’s', () => {
+    const resolved = resolveQueued(0)
+    expect(resolved.playingSlotId).toBe(bank[1].id)
+    expect(resolved.starts.map((hit) => hit.laneId)).toEqual(['snare'])
+  })
+
+  it('then plays the new slot through the bar', () => {
+    const resolved = resolveQueued(5, bank[1].id)
+    expect(resolved.playingSlotId).toBe(bank[1].id)
+    expect(resolved.starts.map((hit) => hit.laneId)).toEqual(['snare'])
+  })
+
+  it('has nothing queued when the selected slot is the playing one', () => {
+    const resolved = resolveStep({
+      bank,
+      selectedSlotId: a.id,
+      playingSlotId: a.id,
+      mixer: {},
+      transport: STRAIGHT,
+      stepIndex: 0,
+    })
+    expect(resolved.playingSlotId).toBe(a.id)
+    expect(resolved.starts.map((hit) => hit.laneId)).toEqual(['kick'])
+  })
+
+  it('falls straight to the selected slot when the playing one has left the bank', () => {
+    // A shared beat replaced the bank mid-loop: there is nothing to finish.
+    const resolved = resolveQueued(5, 'gone')
+    expect(resolved.playingSlotId).toBe(bank[1].id)
+    expect(resolved.starts.map((hit) => hit.laneId)).toEqual(['snare'])
   })
 })

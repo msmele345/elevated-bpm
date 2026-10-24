@@ -1,4 +1,4 @@
-import { activePattern, PROJECT_STATE_VERSION, type ProjectState } from './projectState'
+import { PROJECT_STATE_VERSION, type ProjectState } from './projectState'
 import { PAD_LANES, namedPad, type SamplerSettings } from './sampler'
 import { sliceKey, type Slice } from './slice'
 import {
@@ -7,7 +7,7 @@ import {
   compressPayload,
   decompressPayload,
   isRecord,
-  projectForSharing,
+  projectForBundle,
   readSharedDocument,
   UNSUPPORTED_VERSION_MESSAGE,
 } from './sharePayload'
@@ -158,11 +158,11 @@ export function padsNeedingAudio(
   })
 }
 
-/** A file name a recipient can recognize, from a beat name that could be anything. */
-function bundleFileName(name: string): string {
-  const cleaned = name.replace(/[^\w \-.]+/g, '').trim()
-  return `${cleaned === '' ? 'Elevated BPM beat' : cleaned}${BUNDLE_FILE_EXTENSION}`
-}
+/**
+ * A file name a recipient can recognize. Named for the beat rather than for a
+ * slot, because a bundle carries the whole bank.
+ */
+const BUNDLE_FILE_NAME = `Elevated BPM beat${BUNDLE_FILE_EXTENSION}`
 
 /**
  * Write a bundle, given the slices storage actually holds.
@@ -193,7 +193,7 @@ export async function createBundle(
   }
 
   const payload: BundleDocument = {
-    project: projectForSharing(project),
+    project: projectForBundle(project),
     slices: Object.fromEntries(
       needed.map(({ key }) => [key, encodeSlice(slices.get(key)!)]),
     ),
@@ -202,7 +202,7 @@ export async function createBundle(
   return {
     status: 'ready',
     blob: new Blob([header, await compressPayload(payload)], { type: BUNDLE_MEDIA_TYPE }),
-    fileName: bundleFileName(activePattern(project).name),
+    fileName: BUNDLE_FILE_NAME,
   }
 }
 

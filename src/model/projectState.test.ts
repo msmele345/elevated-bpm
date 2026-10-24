@@ -3,6 +3,7 @@ import { BASS_PARAMS, DEFAULT_BASS_SETTINGS } from './bass'
 import { DEFAULT_FX_SETTINGS, FX_PARAMS } from './fx'
 import { DEFAULT_MASTER_SETTINGS, MASTER_PARAMS } from './master'
 import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
+import { createBank, isPatternEmpty } from './bank'
 import { createDemoPattern, createInitialPattern } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -23,8 +24,10 @@ import {
   relinkSamplerPad,
   removeSource,
   setSamplerPadFit,
+  createDemoProjectState,
   createInitialProjectState,
   openingProjectState,
+  selectSlot,
   PROJECT_STATE_VERSION,
   migrateProjectState,
   resizeActivePatternNote,
@@ -47,10 +50,11 @@ import {
 } from './projectState'
 
 describe('createInitialProjectState', () => {
-  it('creates a current-version document with one active pattern and default transport', () => {
+  it('creates a current-version document with a four-slot bank, slot A selected, and default transport', () => {
     const state = createInitialProjectState()
     expect(state.version).toBe(PROJECT_STATE_VERSION)
-    expect(state.patterns).toHaveLength(1)
+    expect(state.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(state.patterns.every(isPatternEmpty)).toBe(true)
     expect(state.activePatternId).toBe(state.patterns[0].id)
     expect(state.transport.bpm).toBe(DEFAULT_BPM)
     expect(state.transport.swing).toBe(DEFAULT_SWING)
@@ -192,16 +196,59 @@ describe('enterLesson', () => {
 })
 
 describe('openingProjectState', () => {
-  it('seeds the demo groove when nothing is saved', () => {
+  it('seeds the demo groove in slot A when nothing is saved, with B–D empty', () => {
     const opening = openingProjectState(null)
     expect(opening.version).toBe(PROJECT_STATE_VERSION)
-    expect(activePattern(opening)).toEqual(createDemoPattern())
+    expect(opening.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(opening.activePatternId).toBe(opening.patterns[0].id)
+    expect(activePattern(opening)).toEqual({ ...createDemoPattern(), name: 'A' })
+    expect(opening.patterns.slice(1).every(isPatternEmpty)).toBe(true)
     expect(opening.lessonProgress).toEqual({})
   })
 
   it('returns a saved document untouched — a returning beat is never replaced', () => {
     const saved = cycleActivePatternStep(createInitialProjectState(), 'kick', 3)
     expect(openingProjectState(saved)).toBe(saved)
+  })
+})
+
+describe('selectSlot', () => {
+  it('makes the pressed slot the one the grid shows and edits go to', () => {
+    const state = createDemoProjectState()
+    const b = state.patterns[1]
+
+    const selected = selectSlot(state, b.id)
+
+    expect(selected.activePatternId).toBe(b.id)
+    expect(activePattern(selected)).toBe(b)
+    const edited = cycleActivePatternStep(selected, 'kick', 0)
+    expect(edited.patterns[1].lanes[0].steps[0].on).toBe(true)
+    // Slot A, the demo, is left exactly as it was.
+    expect(edited.patterns[0]).toBe(state.patterns[0])
+  })
+
+  it('changes nothing about how the Deck sounds — switching is not a patch edit', () => {
+    const state = setTransportSwing(toggleVoiceMute(createDemoProjectState(), 'perc'), 0.6)
+
+    const selected = selectSlot(state, state.patterns[2].id)
+
+    expect(selected.patterns).toBe(state.patterns)
+    expect(selected.transport).toBe(state.transport)
+    expect(selected.mixer).toBe(state.mixer)
+    expect(selected.instrumentSettings).toBe(state.instrumentSettings)
+    expect(selected.sources).toBe(state.sources)
+    expect(selected.lessonProgress).toBe(state.lessonProgress)
+  })
+
+  it('ignores a slot the bank does not have', () => {
+    const state = createDemoProjectState()
+    expect(selectSlot(state, 'no-such-slot')).toBe(state)
+  })
+
+  it('remembers the selected slot through a save and reload', () => {
+    const state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[3].id)
+    const reloaded = migrateProjectState(JSON.parse(JSON.stringify(state)))!
+    expect(activePattern(reloaded).name).toBe('D')
   })
 })
 
@@ -587,7 +634,7 @@ describe('migrateProjectState', () => {
     const migrated = migrateProjectState({ version: 0, pattern, bpm: 125 })
     expect(migrated).toEqual({
       version: PROJECT_STATE_VERSION,
-      patterns: [pattern],
+      patterns: createBank(pattern),
       activePatternId: pattern.id,
       transport: { bpm: 125, swing: DEFAULT_SWING },
       instrumentSettings: {
@@ -603,6 +650,37 @@ describe('migrateProjectState', () => {
       activeArcId: DEFAULT_ARC_ID,
       activeLessonIds: {},
     })
+  })
+
+  it('lifts a v12 document’s pattern into slot A under the same id, with B–D empty', () => {
+    const current = updateLessonProgress(
+      setTransportSwing(
+        toggleVoiceMute(cycleActivePatternStep(createDemoProjectState(), 'kick', 0), 'perc'),
+        0.58,
+      ),
+      'four-on-the-floor',
+      { completed: true },
+    )
+    const v12 = JSON.parse(JSON.stringify({ ...current, version: 12 })) as Record<string, unknown>
+    const saved = { ...activePattern(current), id: 'pattern-1', name: 'Pattern 1' }
+    v12.patterns = [saved]
+    v12.activePatternId = 'pattern-1'
+
+    const migrated = migrateProjectState(v12)!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    // Same id, so the saved selection still names it, and the same programming,
+    // so it plays exactly as its owner left it.
+    expect(migrated.activePatternId).toBe('pattern-1')
+    expect(activePattern(migrated)).toEqual({ ...saved, name: 'A' })
+    expect(migrated.patterns.slice(1).every(isPatternEmpty)).toBe(true)
+    expect(new Set(migrated.patterns.map((pattern) => pattern.id)).size).toBe(4)
+    // Everything that shapes the sound comes through untouched.
+    expect(migrated.transport).toEqual(current.transport)
+    expect(migrated.mixer).toEqual(current.mixer)
+    expect(migrated.instrumentSettings).toEqual(current.instrumentSettings)
+    expect(migrated.lessonProgress).toEqual(current.lessonProgress)
   })
 
   it('lifts a v10 document to straight swing, and it plays exactly as before', () => {

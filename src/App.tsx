@@ -13,7 +13,10 @@ import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportStrip } from './components/TransportStrip'
+import type { BankSlot } from './components/PatternBank'
+import { isPatternEmpty } from './model/bank'
 import { usePlayhead } from './hooks/usePlayhead'
+import { useSlotLights } from './hooks/useSlotLights'
 import { useRoomLight } from './hooks/useRoomLight'
 import { useSpotlightScroll } from './hooks/useSpotlightScroll'
 import {
@@ -22,7 +25,8 @@ import {
   arcEntries,
   detectLessonCompletion,
   goalContextFor,
-  lessonsAlreadyMet,
+  isMetInAnySlot,
+  lessonsAlreadyMetInAnySlot,
   nextUnfinishedLessonId,
 } from './model/arc'
 import type { BassParamId } from './model/bass'
@@ -51,6 +55,7 @@ import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activeLessonIdFor,
   activePattern,
+  selectSlot,
   addSource,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
@@ -402,6 +407,7 @@ export default function App() {
   const canShowMe = !spotlitResting && activeLesson.spotlight.length > 0
 
   usePlayhead(deckRef, isPlaying)
+  useSlotLights(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
   const { requestSpotlightScroll, showSpotlight } = useSpotlightScroll(
     deckRef,
@@ -426,7 +432,7 @@ export default function App() {
       if (incoming.status === 'ready') {
         // Every registered track, not only the techno one: a beat can arrive
         // carrying sampling work as readily as it carries a kick pattern.
-        inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+        inheritedLessonsRef.current = lessonsAlreadyMetInAnySlot(ALL_LESSONS, next)
       }
       try {
         // Orphans are collected against the user's *own* document, never the
@@ -521,9 +527,16 @@ export default function App() {
       goalContext,
     )
     if (!completion.justCompleted) {
-      // The goal is not met right now, so whatever the shared beat brought
-      // with it is gone: from here the lesson is the user's to earn.
-      inheritedLessonsRef.current.delete(activeLesson.id)
+      // Once no slot meets the goal, whatever the shared beat brought with it
+      // is gone: from here the lesson is the user's to earn. Every slot, not
+      // just this one — selecting an empty slot is not taking the work apart,
+      // and selecting the shared slot again must not earn it.
+      if (
+        inheritedLessonsRef.current.has(activeLesson.id) &&
+        !isMetInAnySlot(activeLesson, project, { motion: paramMotion, chord: chordPlay })
+      ) {
+        inheritedLessonsRef.current.delete(activeLesson.id)
+      }
       // An earned card already reads as a finished checklist; saying one of
       // its chips is done again would be chatter.
       if (continuing && !lessonCompleted) {
@@ -542,7 +555,18 @@ export default function App() {
       setCelebratingLessonId(activeLesson.id)
     }
     if (completion.showFinale) setFinaleArcId(activeArc.id)
-  }, [goalContext, lessonChips, activeArc, activeLesson, lessonCompleted, hydrated, sharePreview])
+  }, [
+    goalContext,
+    lessonChips,
+    activeArc,
+    activeLesson,
+    lessonCompleted,
+    hydrated,
+    sharePreview,
+    project,
+    paramMotion,
+    chordPlay,
+  ])
 
   // A celebration has its moment, then the card shrinks to the completed strip.
   // A capstone's finale covers the deck, so the moment starts once it closes.
@@ -553,11 +577,27 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [celebratingLessonId, finaleArcId])
 
-  // Keep the audio engine pointed at the latest pattern; playback reads it
-  // live on each scheduled 16th, so edits are audible immediately.
+  // Keep the audio engine pointed at the latest bank and selected slot;
+  // playback reads them live on each scheduled 16th, so edits to the playing
+  // slot are audible immediately and a newly selected slot comes in at the bar.
+  const bank = project.patterns
+  const selectedSlotId = project.activePatternId
   useEffect(() => {
-    engine.setPattern(pattern)
-  }, [pattern])
+    engine.setBank(bank, selectedSlotId)
+  }, [bank, selectedSlotId])
+
+  // The slot buttons need each slot's letter and whether it is empty. Keyed
+  // on exactly that, so a step tap that leaves every slot as full or as empty
+  // as it was hands the memoized transport strip the same array.
+  const slotSignature = bank.map((p) => `${p.id}:${p.name}:${isPatternEmpty(p)}`).join('|')
+  const bankSlots = useMemo<BankSlot[]>(
+    () =>
+      slotSignature.split('|').map((entry) => {
+        const [id, letter, empty] = entry.split(':')
+        return { id, letter, empty: empty === 'true' }
+      }),
+    [slotSignature],
+  )
 
   // Same for the mixer: the engine reads mute/solo per 16th and per live note,
   // so toggling a voice silences or solos it on the next step with no restart,
@@ -628,6 +668,10 @@ export default function App() {
   // handed to are memoized: a fresh closure is a changed prop, and a changed
   // prop would rebuild seven lanes and a keyboard on each pointer move of a
   // dragged knob — the dropped frame this deck must not have while playing.
+  const handleSelectSlot = useCallback((slotId: string) => {
+    setProject((p) => selectSlot(p, slotId))
+  }, [])
+
   const handleCycleStep = useCallback((laneId: LaneId, stepIndex: number) => {
     setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
   }, [])
@@ -1281,7 +1325,7 @@ export default function App() {
     // A bundle carries real audio, so without this a recipient would arrive
     // with "build your own kit" already earned — the most obviously unearned
     // completion the product could hand out.
-    inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+    inheritedLessonsRef.current = lessonsAlreadyMetInAnySlot(ALL_LESSONS, next)
     setSharePreview({ recipientProject })
     setProject(next)
     engine.setBpm(next.transport.bpm)
@@ -1417,6 +1461,9 @@ export default function App() {
         onTogglePlay={handleTogglePlay}
         onBpmChange={handleBpmChange}
         onSwingChange={handleSwingChange}
+        slots={bankSlots}
+        selectedSlotId={selectedSlotId}
+        onSelectSlot={handleSelectSlot}
       />
 
       <LessonArc

@@ -1,3 +1,4 @@
+import { createBank } from './bank'
 import { clampParam } from './knob'
 import {
   createBassSettings,
@@ -78,8 +79,9 @@ import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 // sampler's source metadata, pad lanes and pad settings; v10 makes the
 // curriculum multi-track — one lesson pointer per arc, plus the arc on screen;
 // v11 adds swing to the transport; v12 keys the mixer by voice — bass and stab
-// join the drum and pad lanes — and gives every strip a Level.
-export const PROJECT_STATE_VERSION = 12
+// join the drum and pad lanes — and gives every strip a Level; v13 makes
+// `patterns` the pattern bank: always four slots, A–D.
+export const PROJECT_STATE_VERSION = 13
 
 /**
  * The arc a document that predates the multi-track curriculum was on.
@@ -110,7 +112,15 @@ export interface InstrumentSettings {
 
 export interface ProjectState {
   version: number
+  /**
+   * The pattern bank: exactly four slots, in A–D order, each named by its
+   * letter. Only programming lives here; how the Deck sounds is shared.
+   */
   patterns: Pattern[]
+  /**
+   * The selected slot — the one the grid shows, edits go to and goals read.
+   * The engine keeps its own playing slot, which follows this at the next bar.
+   */
   activePatternId: string
   transport: TransportSettings
   instrumentSettings: InstrumentSettings
@@ -135,11 +145,11 @@ export interface ProjectState {
 }
 
 export function createInitialProjectState(): ProjectState {
-  const pattern = createInitialPattern()
+  const patterns = createBank(createInitialPattern())
   return {
     version: PROJECT_STATE_VERSION,
-    patterns: [pattern],
-    activePatternId: pattern.id,
+    patterns,
+    activePatternId: patterns[0].id,
     transport: { bpm: DEFAULT_BPM, swing: DEFAULT_SWING },
     instrumentSettings: {
       bass: DEFAULT_BASS_SETTINGS,
@@ -157,12 +167,12 @@ export function createInitialProjectState(): ProjectState {
 }
 
 /**
- * A fresh document pre-loaded with the demo groove, so the very first press
- * of play sounds like techno instead of silence.
+ * A fresh document pre-loaded with the demo groove in slot A, so the very
+ * first press of play sounds like techno instead of silence. B–D start empty.
  */
 export function createDemoProjectState(): ProjectState {
-  const pattern = createDemoPattern()
-  return { ...createInitialProjectState(), patterns: [pattern], activePatternId: pattern.id }
+  const patterns = createBank(createDemoPattern())
+  return { ...createInitialProjectState(), patterns, activePatternId: patterns[0].id }
 }
 
 /**
@@ -179,6 +189,18 @@ export function activePattern(state: ProjectState): Pattern {
   const pattern = state.patterns.find((p) => p.id === state.activePatternId)
   if (!pattern) throw new Error(`ProjectState has no pattern "${state.activePatternId}"`)
   return pattern
+}
+
+/**
+ * Select a slot: an ordinary document edit, so the grid shows it, edits go to
+ * it, goals evaluate it and autosave keeps it at once. Whether it is *heard*
+ * at once is the engine's business — while playing, it waits for the bar. The
+ * bank, the patches and the mixer all come through by reference: switching
+ * changes what is played, never how the Deck sounds.
+ */
+export function selectSlot(state: ProjectState, patternId: string): ProjectState {
+  if (!state.patterns.some((pattern) => pattern.id === patternId)) return state
+  return { ...state, activePatternId: patternId }
 }
 
 /** Immutably advance one step of the active pattern (off → on → accent → off). */
@@ -559,7 +581,9 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
     case 10:
       return migrateProjectState(migrateV10ToV11(doc as ProjectStateV10))
     case 11:
-      return migrateV11ToV12(doc as ProjectStateV11)
+      return migrateProjectState(migrateV11ToV12(doc as ProjectStateV11))
+    case 12:
+      return migrateV12ToV13(doc as ProjectStateV12)
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:
@@ -668,6 +692,9 @@ type ProjectStateV10 = Omit<ProjectState, 'version' | 'transport' | 'mixer'> & {
   transport: TransportPreV11
   mixer: MixerPreV12
 }
+
+/** v12 had one pattern and no bank. */
+type ProjectStateV12 = Omit<ProjectState, 'version'> & { version: 12 }
 
 /** v11 had swing, but no Level, and bass and stab had no strip of their own. */
 type ProjectStateV11 = Omit<ProjectState, 'version' | 'mixer'> & {
@@ -795,7 +822,7 @@ function migrateV10ToV11(doc: ProjectStateV10): ProjectStateV11 {
   }
 }
 
-function migrateV11ToV12(doc: ProjectStateV11): ProjectState {
+function migrateV11ToV12(doc: ProjectStateV11): ProjectStateV12 {
   // Unity on every strip, because that is what every v11 voice played at; a
   // strip missing a flag gets its resting value, so the share validator can
   // insist on complete strips from here on.
@@ -803,4 +830,12 @@ function migrateV11ToV12(doc: ProjectStateV11): ProjectState {
     Object.entries(doc.mixer ?? {}).map(([voiceId, mix]) => [voiceId, { ...UNITY_MIX, ...mix }]),
   )
   return { ...doc, version: 12, mixer }
+}
+
+function migrateV12ToV13(doc: ProjectStateV12): ProjectState {
+  // The pattern the user had becomes slot A under the same id, so the saved
+  // selection still names it and it plays exactly as before; B–D arrive empty.
+  const saved = doc.patterns.find((pattern) => pattern.id === doc.activePatternId) ?? doc.patterns[0]
+  const patterns = createBank(saved)
+  return { ...doc, version: 13, patterns, activePatternId: patterns[0].id }
 }

@@ -74,7 +74,23 @@ let bpm = DEFAULT_BPM
  * swing is never touched and stays at 0 — see `swingOffsetSeconds`.
  */
 let currentSwing = DEFAULT_SWING
-let currentPattern: Pattern | null = null
+/** The pattern bank, slots A–D, read live on every 16th. */
+let currentBank: readonly Pattern[] = []
+/** The slot the user selected: the one the grid shows and edits go to. */
+let selectedSlotId = ''
+/**
+ * The slot being sounded. It follows the selected slot only when step
+ * resolution reaches step 0, so a slot pressed mid-bar is queued for the next
+ * bar; while stopped it always equals the selected slot.
+ */
+let playingSlotId = ''
+/**
+ * The last switch of the playing slot, on the audio clock. The step callback
+ * runs a look-ahead early, so the switch is recorded with the time its bar is
+ * *heard*, and the LEDs read it against the audio clock rather than lighting
+ * the new slot before its first beat.
+ */
+let slotSwitch: { at: number; from: string } | null = null
 let currentMixer: Mixer = {}
 let currentSamplerSettings: SamplerSettings = createSamplerSettings()
 let repeatScheduled = false
@@ -394,9 +410,35 @@ export function auditionRegion(region: SampleRegion): void {
   auditionPlayer.start(Tone.immediate(), region.start, region.duration)
 }
 
-/** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
-export function setPattern(pattern: Pattern): void {
-  currentPattern = pattern
+/**
+ * Point the scheduler at the latest bank and selected slot. Cheap; call on
+ * every edit — edits to the playing slot are heard on the very next 16th.
+ * While stopped, the selected slot is the playing one at once; while playing,
+ * a different selection waits for step 0 (the queued bank switch), and
+ * selecting the playing slot again cancels the wait.
+ */
+export function setBank(bank: readonly Pattern[], selectedId: string): void {
+  currentBank = bank
+  selectedSlotId = selectedId
+  if (Tone.getTransport().state !== 'started') playOnSelectedSlot()
+}
+
+/** Put the playing slot on the selected one, with nothing pending. */
+function playOnSelectedSlot(): void {
+  playingSlotId = selectedSlotId
+  slotSwitch = null
+}
+
+/**
+ * What the slot LEDs show, read from rAF: the slot being heard, and the one
+ * queued to take over at the next bar. Both null while stopped — nothing is
+ * playing then, and a press switches at once.
+ */
+export function getSlotLights(): { playing: string | null; queued: string | null } {
+  if (Tone.getTransport().state !== 'started') return { playing: null, queued: null }
+  const heard =
+    slotSwitch !== null && Tone.immediate() < slotSwitch.at ? slotSwitch.from : playingSlotId
+  return { playing: heard, queued: selectedSlotId === heard ? null : selectedSlotId }
 }
 
 /**
@@ -684,6 +726,8 @@ function ensureVoices(): void {
       master,
       fx,
       channels,
+      /** What the slot LEDs read: the slot heard now, and any queued one. */
+      slotLights: getSlotLights,
       /**
        * Bytes the open editor is holding. Reading a `let` through a function,
        * so it reports what the engine holds *now* — closing the editor has to
@@ -796,29 +840,38 @@ export function getSpectrum(): Float32Array | null {
 export async function play(): Promise<void> {
   await unlockAudio()
   const transport = Tone.getTransport()
+  // A loop always starts on the slot the user is looking at.
+  playOnSelectedSlot()
   if (!repeatScheduled) {
     transport.scheduleRepeat((time) => {
       // Derive the step from transport ticks at the scheduled time so the
       // sequence stays locked across stop/start and BPM changes.
       const ticks = transport.getTicksAtTime(time)
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
-      if (!currentPattern || !voices) return
+      if (currentBank.length === 0 || !voices) return
       // Step resolution decides everything that sounds on this 16th; the
       // callback only applies it to the voices. The tempo is read once, live,
       // so the swing offset and every note length on this 16th are measured
       // in the same step even mid-ramp.
       const liveBpm = transport.bpm.value
       const stepSeconds = secondsPerStep(liveBpm)
-      const { starts, chokes, notes, swingOffset } = resolveStep({
-        pattern: currentPattern,
+      const resolved = resolveStep({
+        bank: currentBank,
+        selectedSlotId,
+        playingSlotId,
         mixer: currentMixer,
         transport: { bpm: liveBpm, swing: currentSwing },
         stepIndex,
       })
+      const { starts, chokes, notes, swingOffset } = resolved
       // Every sequenced sound on this 16th lands at the same, possibly swung,
       // moment. The step index above came from the straight grid, so swing
       // moves *when* a step sounds and never *which* step it is.
       const at = time + swingOffset
+      if (resolved.playingSlotId !== playingSlotId) {
+        slotSwitch = { at, from: playingSlotId }
+        playingSlotId = resolved.playingSlotId
+      }
       // Cut ringing choked voices first so a same-time restart isn't clipped.
       for (const laneId of chokes) {
         voices[laneId].player.stop(at)
@@ -857,6 +910,8 @@ export async function play(): Promise<void> {
 export function stop(): void {
   const transport = Tone.getTransport()
   transport.stop()
+  // Stop clears a queued switch: stopped, the selected slot is the one playing.
+  playOnSelectedSlot()
   stab?.stopSequenced()
   stabSoundingNotes.clearSequenced()
   padSoundingLanes.clearSequenced()

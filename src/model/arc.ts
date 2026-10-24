@@ -47,6 +47,43 @@ export function goalContextFor(
   }
 }
 
+/**
+ * One goal context per slot of the bank, as though each were selected. The
+ * session observations come along unchanged: knob motion and chords are about
+ * what the user did, not about which slot they did it on.
+ */
+function goalContextsForEverySlot(
+  state: ProjectState,
+  session: SessionObservations = {},
+): GoalContext[] {
+  const selected = goalContextFor(state, session)
+  return state.patterns.map((pattern) => ({ ...selected, pattern }))
+}
+
+/**
+ * Whether a lesson is met in any slot of the bank. Inheritance is released
+ * only once this is false: a lesson an arriving bank met in slot B is not
+ * "no longer met" just because the learner is looking at slot A, and coming
+ * back to B must not earn it.
+ */
+export function isMetInAnySlot(
+  lesson: Lesson,
+  state: ProjectState,
+  session: SessionObservations = {},
+): boolean {
+  return goalContextsForEverySlot(state, session).some((context) => isGoalMet(lesson, context))
+}
+
+/**
+ * The lessons any slot of a bank satisfies the moment it lands on the deck —
+ * the union, so no slot of someone else's bank can earn its recipient credit.
+ */
+export function lessonsAlreadyMetInAnySlot(lessons: Lesson[], state: ProjectState): Set<string> {
+  return new Set(
+    goalContextsForEverySlot(state).flatMap((context) => [...lessonsAlreadyMet(lessons, context)]),
+  )
+}
+
 /** One rung of the path as the arc UI renders it. */
 export interface ArcEntry {
   lesson: Lesson

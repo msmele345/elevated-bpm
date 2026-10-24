@@ -582,8 +582,12 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
       return migrateProjectState(migrateV10ToV11(doc as ProjectStateV10))
     case 11:
       return migrateProjectState(migrateV11ToV12(doc as ProjectStateV11))
-    case 12:
-      return migrateV12ToV13(doc as ProjectStateV12)
+    case 12: {
+      // Every v12 document held exactly one pattern; one with none is corrupt,
+      // and a fresh deck beats a bank invented around nothing.
+      const v12 = doc as ProjectStateV12
+      return Array.isArray(v12.patterns) && v12.patterns.length > 0 ? migrateV12ToV13(v12) : null
+    }
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:

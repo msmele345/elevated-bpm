@@ -3,7 +3,8 @@ import { MAX_BPM, MIN_BPM } from '../audio/engine'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { SWING_PARAM, swingToPercent, type TransportParamId } from '../model/transport'
 import { Knob } from './Knob'
-import { PatternBank, type BankSlot } from './PatternBank'
+import type { BankSlot } from '../model/bank'
+import { PatternBank } from './PatternBank'
 
 interface TransportStripProps {
   isPlaying: boolean

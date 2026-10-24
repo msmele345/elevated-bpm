@@ -19,19 +19,17 @@ export function useSlotLights(rootRef: RefObject<HTMLElement | null>, isPlaying:
     let last = ''
 
     const show = (playing: string | null, queued: string | null) => {
-      const letterOf = (id: string | null) =>
-        id === null
-          ? null
-          : (root.querySelector<HTMLElement>(`[data-slot-id="${id}"]`)?.dataset.slotLetter ?? null)
+      let editing: string | null = null
+      let hearing: string | null = null
       root.querySelectorAll<HTMLElement>('[data-slot-id]').forEach((slot) => {
         const id = slot.dataset.slotId!
+        if (id === playing) hearing = slot.dataset.slotLetter ?? null
+        if (id === queued) editing = slot.dataset.slotLetter ?? null
         slot.toggleAttribute('data-playing', id === playing)
         slot.toggleAttribute('data-queued', id === queued)
         const state = slot.querySelector('[data-slot-state]')
         if (state) state.textContent = id === playing ? ', playing' : id === queued ? ', queued' : ''
       })
-      const editing = letterOf(queued)
-      const hearing = letterOf(playing)
       const notice = root.querySelector<HTMLElement>('[data-bank-notice]')
       if (editing && hearing) {
         root.setAttribute('data-bank-queued', '')

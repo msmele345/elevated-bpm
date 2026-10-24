@@ -3,7 +3,7 @@ import {
   detectLessonCompletion,
   goalContextFor,
   lessonsAlreadyMet,
-  lessonsAlreadyMetInAnySlot,
+  slotsAlreadyMeeting,
 } from '../model/arc'
 import { DECK_PARAM_IDS } from '../model/deckParams'
 import {
@@ -521,7 +521,7 @@ describe('the curriculum', () => {
         ])
       }
     }
-    expect(lessonsAlreadyMetInAnySlot(ALL_LESSONS, opening)).toEqual(new Set())
+    expect(slotsAlreadyMeeting(ALL_LESSONS, opening)).toEqual(new Map())
   })
 
   it('names only knobs the deck actually has, on every track', () => {

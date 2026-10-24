@@ -894,6 +894,19 @@ describe('the queued bank switch', () => {
     stopAll()
   })
 
+  it('owns up to a switch already scheduled: pressed in the look-ahead, the old slot is queued again', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    // B's bar is scheduled for t=50 but not heard yet (the audio clock is at 10).
+    fire(0, 50)
+    // Too late to cancel: B comes in at the bar, so A is shown queued behind it.
+    engine.setBank(bank, bank[0].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[0].id })
+    stopAll()
+  })
+
   it('switches at once while stopped, and stop clears a pending switch', async () => {
     const bank = kickAndClapBank()
     const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)

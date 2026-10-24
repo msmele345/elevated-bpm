@@ -438,7 +438,13 @@ export function getSlotLights(): { playing: string | null; queued: string | null
   if (Tone.getTransport().state !== 'started') return { playing: null, queued: null }
   const heard =
     slotSwitch !== null && Tone.immediate() < slotSwitch.at ? slotSwitch.from : playingSlotId
-  return { playing: heard, queued: selectedSlotId === heard ? null : selectedSlotId }
+  // Queued is what comes in next: a selection the sequencer has yet to reach,
+  // or else a switch already scheduled inside the look-ahead but not yet heard.
+  // A press in that window cannot cancel the scheduled bar, so the slot pressed
+  // is honestly shown queued behind it rather than silently waiting a bar.
+  const queued =
+    selectedSlotId !== playingSlotId ? selectedSlotId : heard !== playingSlotId ? playingSlotId : null
+  return { playing: heard, queued }
 }
 
 /**

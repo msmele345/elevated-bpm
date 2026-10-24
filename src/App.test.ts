@@ -1153,6 +1153,29 @@ describe('App pattern bank', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
   })
+
+  it('still credits a lesson the learner builds in a slot of their own while the shared slot meets it', async () => {
+    await saveProjectState(createInitialProjectState())
+    const sender = createInitialProjectState()
+    let built = selectSlot(sender, sender.patterns[1].id)
+    for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+    const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
+    window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    // Slot C is empty: a four-on-the-floor built there is the learner's own.
+    fireEvent.click(slots()[2])
+    for (const step of [1, 5, 9, 13]) {
+      fireEvent.click(screen.getByRole('button', { name: `Kick step ${step}` }))
+    }
+
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
+    )
+  })
 })
 
 describe('App beat bundles', () => {

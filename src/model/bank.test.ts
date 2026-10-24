@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { bankWithSlots, createBank, isPatternEmpty, SLOT_LETTERS } from './bank'
+import {
+  bankSlots,
+  bankWithSlots,
+  createBank,
+  isPatternEmpty,
+  sameBankSlots,
+  SLOT_LETTERS,
+} from './bank'
 import { toggleNoteStep, transposeNoteStep } from './note'
 import { createDemoPattern, createInitialPattern, cycleStep } from './pattern'
 
@@ -67,5 +74,25 @@ describe('isPatternEmpty', () => {
     )
     expect(parked.noteLanes.find((lane) => lane.id === 'stab')!.steps[4].on).toBe(false)
     expect(isPatternEmpty(parked)).toBe(true)
+  })
+})
+
+describe('bankSlots', () => {
+  it('describes each slot for its button: id, letter and whether it is empty', () => {
+    const bank = createBank({ ...createDemoPattern(), id: 'odd:id|"quoted"' })
+    expect(bankSlots(bank)).toEqual([
+      { id: 'odd:id|"quoted"', letter: 'A', empty: false },
+      { id: bank[1].id, letter: 'B', empty: true },
+      { id: bank[2].id, letter: 'C', empty: true },
+      { id: bank[3].id, letter: 'D', empty: true },
+    ])
+  })
+
+  it('reads a step tap that leaves every slot as full as it was as no change', () => {
+    const bank = createBank(createDemoPattern())
+    const tapped = [cycleStep(bank[0], 'kick', 0), ...bank.slice(1)]
+    expect(sameBankSlots(bankSlots(bank), bankSlots(tapped))).toBe(true)
+    const filled = [bank[0], cycleStep(bank[1], 'kick', 0), ...bank.slice(2)]
+    expect(sameBankSlots(bankSlots(bank), bankSlots(filled))).toBe(false)
   })
 })

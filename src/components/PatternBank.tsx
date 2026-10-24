@@ -1,11 +1,5 @@
 import { memo } from 'react'
-
-/** One slot as the bank renders it: which pattern, its letter, and whether it is empty. */
-export interface BankSlot {
-  id: string
-  letter: string
-  empty: boolean
-}
+import type { BankSlot } from '../model/bank'
 
 interface PatternBankProps {
   slots: readonly BankSlot[]

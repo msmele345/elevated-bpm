@@ -63,3 +63,33 @@ export function bankWithSlots(patterns: readonly Pattern[]): Pattern[] {
 export function createBank(pattern: Pattern): Pattern[] {
   return bankWithSlots([{ ...pattern, name: 'A' }])
 }
+
+/** One slot as its button shows it: which pattern, its letter, and whether it is empty. */
+export interface BankSlot {
+  id: string
+  letter: SlotLetter
+  empty: boolean
+}
+
+/** What the slot buttons show of a bank. */
+export function bankSlots(bank: readonly Pattern[]): BankSlot[] {
+  return bank.map((pattern) => ({
+    id: pattern.id,
+    letter: pattern.name as SlotLetter,
+    empty: isPatternEmpty(pattern),
+  }))
+}
+
+/**
+ * Whether two bank descriptions show the same buttons. Most step taps change
+ * a slot's programming without making it empty or not, and the strip they are
+ * handed to is memoized, so they should hand it the same array.
+ */
+export function sameBankSlots(a: readonly BankSlot[], b: readonly BankSlot[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (slot, i) => slot.id === b[i].id && slot.letter === b[i].letter && slot.empty === b[i].empty,
+    )
+  )
+}

@@ -86,12 +86,14 @@ recipient). Bundles already carry all four.
       in-browser (slot B's programming and the selected slot survived a reload)
 - [x] Lesson goals evaluate the selected slot; an incoming bundle's lessons are
       inherited across all slots; opening Deck satisfies no lesson in any slot —
-      `goalContextFor` reads the selected slot; `lessonsAlreadyMetInAnySlot` at
-      both arrival paths, and inheritance is released only once `isMetInAnySlot`
-      is false, so B → A → B cannot launder credit (`arc.test.ts`; `App.test.ts`
-      "holds back a lesson any slot of an incoming bank already meets", which
-      fails without the release rule); every slot × every lesson in
-      `lessons.test.ts`
+      `goalContextFor` reads the selected slot; `slotsAlreadyMeeting` at both
+      arrival paths records, per lesson, every slot that arrived meeting it, and
+      a slot is released only when *it* stops meeting the goal — so B → A → B
+      cannot launder credit, while the same lesson built in the learner's own
+      empty slot earns at once (story 63). `arc.test.ts`; `App.test.ts` "holds
+      back a lesson any slot of an incoming bank already meets" (fails without
+      the rule) and "still credits a lesson the learner builds in a slot of
+      their own"; every slot × every lesson in `lessons.test.ts`
 - [x] Validator accepts 1–4 unique-letter slots and rejects malformed banks; old
       links/bundles open as slot A — `isSharedProject` + `bankWithSlots` in
       `readSharedDocument` (`share.test.ts`: partial bank filled by letter; empty,
@@ -116,6 +118,14 @@ recipient). Bundles already carry all four.
       switch, Empty slot shipped; Pattern, ProjectState (v13), Transport strip,
       Bundle, Share link, Share validator, Inheritance and Demo rule updated;
       Copy/Clear stay tagged for EB3-07b
+
+**Note (review):** a press in the ~100 ms look-ahead just before the bar
+cannot cancel a switch the sequencer has already scheduled; the engine now
+shows the pressed slot queued behind it instead of claiming the cancel took
+(`engine.test.ts` "owns up to a switch already scheduled"). Until EB3-08,
+**Keep this beat** on a link replaces the recipient's whole bank with the one
+slot the link carried (their B–D empty), which is where the bank-by-letter rule
+lands once links carry every slot.
 
 **Note:** a bundle file is now named `Elevated BPM beat.ebpm` rather than after
 the pattern, since it carries the whole bank and a pattern's name is now its

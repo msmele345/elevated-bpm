@@ -6,9 +6,8 @@ import {
   detectLessonCompletion,
   goalContextFor,
   isFinalArcLesson,
-  isMetInAnySlot,
   lessonsAlreadyMet,
-  lessonsAlreadyMetInAnySlot,
+  slotsAlreadyMeeting,
   nextUnfinishedLessonId,
 } from './arc'
 import { parseLesson, type Lesson } from './lesson'
@@ -155,14 +154,12 @@ describe('goals and the pattern bank', () => {
     expect(lessonsAlreadyMet(ARC, goalContextFor(kickInB(0)))).toEqual(new Set())
   })
 
-  it('holds back what any slot of an arriving bank already satisfies, not just the selected one', () => {
-    expect(lessonsAlreadyMetInAnySlot(ARC, kickInB(0))).toEqual(new Set(['one', 'two', 'three']))
-    expect(lessonsAlreadyMetInAnySlot(ARC, createInitialProjectState())).toEqual(new Set())
-  })
-
-  it('knows a lesson is still met somewhere in the bank while another slot is selected', () => {
-    expect(isMetInAnySlot(ARC[0], kickInB(0))).toBe(true)
-    expect(isMetInAnySlot(ARC[0], createInitialProjectState())).toBe(false)
+  it('names, per lesson, every slot of an arriving bank that already satisfies it', () => {
+    const bank = kickInB(0)
+    expect(slotsAlreadyMeeting(ARC, bank)).toEqual(
+      new Map(ARC.map((lesson) => [lesson.id, new Set([bank.patterns[1].id])])),
+    )
+    expect(slotsAlreadyMeeting(ARC, createInitialProjectState())).toEqual(new Map())
   })
 })
 

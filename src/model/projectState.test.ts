@@ -683,6 +683,15 @@ describe('migrateProjectState', () => {
     expect(migrated.lessonProgress).toEqual(current.lessonProgress)
   })
 
+  it('treats a v12 document with no pattern as corrupt rather than inventing a bank', () => {
+    const v12 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 12 }),
+    ) as Record<string, unknown>
+    v12.patterns = []
+
+    expect(migrateProjectState(v12)).toBeNull()
+  })
+
   it('lifts a v10 document to straight swing, and it plays exactly as before', () => {
     // v10 had no swing, so every 16th sat on the grid: 50% is the only value
     // that keeps an upgraded beat sounding the way its owner left it.

@@ -212,7 +212,9 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
 - **Queued switch.** Pressing a slot while playing selects it at once, so the grid
   shows it, edits go to it and goals read it. The sound changes only when the
   engine reaches step 0 of the next bar. Pressing another slot replaces the
-  queue, pressing the playing slot cancels it, and Stop clears it. While queued,
+  queue, pressing the playing slot cancels it, and Stop clears it. A press in
+  the look-ahead just before the bar cannot cancel a switch already scheduled,
+  so that slot shows queued behind it instead. While queued,
   the slot's LED blinks amber, every step grid carries a dashed edge and the
   transport strip says "Editing B · hearing A until the bar ends". Code:
   `selectSlot`, `setBank`, `resolveStep`.
@@ -225,7 +227,7 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
   ties through it and then releases.
 - **Slot.** One position in the pattern bank, named by its letter A–D. Each
   slot button's accessible name carries its state: "Slot B, selected, queued,
-  empty". Code: `SlotLetter`, `BankSlot`.
+  empty". Code: `SlotLetter`, `BankSlot`, `bankSlots`.
 - **Step.** One 16th-note cell. There are 16 per lane (`STEP_COUNT`), and each lasts
   `secondsPerStep(bpm)`, which is 15/bpm seconds.
 - **Step resolution.** The one pure function that decides what sounds on a
@@ -391,9 +393,10 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
 - **Inheritance (held back).** When a shared beat or bundle arrives, any lesson
   its content already satisfies is held back rather than credited. It is earned only
   after the goal stops being met and the learner builds it again. This covers every arc and
-  every slot: what is held back is the union of lessons any slot already meets, and a lesson
-  is released only once no slot meets it, so selecting an empty slot and coming back is not
-  taking the work apart. Code: `lessonsAlreadyMetInAnySlot`, `isMetInAnySlot`.
+  every slot, and is held per slot: a lesson stays held in each slot it arrived met in until
+  that slot stops meeting it, so selecting an empty slot and coming back is not taking the
+  work apart, while the same lesson built in a slot of the learner's own earns at once.
+  Code: `slotsAlreadyMeeting`.
 - **Link degradation.** A share link says plainly what it couldn't carry.
   Audio never travels, so pads arrive silent with a notice to ask for a bundle.
   [v3 spec] Over 2,000 characters, a link carries only the playing slot and says so.
@@ -404,8 +407,8 @@ EB3-07a the pattern bank's slots and queued switching) have shipped.
 - **Share link (share payload).** `?p=` carrying ProjectState as JSON, then gzip, then
   base64url, kept under 2,000 characters. Until EB3-08 a link carries only the selected
   slot, which opens as the recipient's slot A; a link from before the bank opens as slot A
-  too. Code: `projectForLink`. Recipient-owned fields (progress, prefs) are
-  blanked. Code: `createShareUrl`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
+  too. Recipient-owned fields (progress, prefs) are
+  blanked. Code: `createShareUrl`, `projectForLink`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
 - **Share menu (Share ▾).** The header button that unfolds the three ways a
   beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,
   with the copy explaining each. A disclosure, not an ARIA menu; Escape or a

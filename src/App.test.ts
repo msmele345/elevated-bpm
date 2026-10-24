@@ -47,6 +47,7 @@ import { sliceKey } from './model/slice'
 import { createBundle, readBundle } from './model/bundle'
 import { createShareUrl, PRACTICAL_SHARE_URL_LIMIT, readSharedBeat } from './model/share'
 import { NOTE_LANES } from './model/note'
+import { isPatternEmpty } from './model/bank'
 import type { LaneId, PadLane, Pattern } from './model/types'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import { loadSlice, loadSource, saveSlice, saveSource } from './storage/sampleStore'
@@ -895,10 +896,12 @@ describe('App sharing workflow', () => {
     await new Promise((resolve) => setTimeout(resolve, 450))
   })
 
-  it('persists an incoming beat only after the recipient explicitly keeps it', async () => {
+  it('persists an incoming bank only after the recipient explicitly keeps it', async () => {
     const recipient = cycleActivePatternStep(createInitialProjectState(), 'kick', 2)
+    // Slots A and D programmed, B and C empty, D selected.
+    const opening = cycleActivePatternStep(createInitialProjectState(), 'kick', 8)
     const sender = setTransportBpm(
-      cycleActivePatternStep(createInitialProjectState(), 'kick', 8),
+      cycleActivePatternStep(selectSlot(opening, opening.patterns[3].id), 'kick', 12),
       145,
     )
     await saveProjectState(recipient)
@@ -912,7 +915,10 @@ describe('App sharing workflow', () => {
 
     await waitFor(() => expect(screen.queryByText('Shared beat preview')).toBeNull())
     const kept = (await loadProjectState())!
-    expect(activePattern(kept)).toEqual(activePattern(sender))
+    expect(kept.patterns[0]).toEqual(sender.patterns[0])
+    expect(kept.patterns[3]).toEqual(sender.patterns[3])
+    expect(isPatternEmpty(kept.patterns[1]) && isPatternEmpty(kept.patterns[2])).toBe(true)
+    expect(activePattern(kept).name).toBe('D')
     expect(kept.transport.bpm).toBe(145)
     expect(window.location.search).toBe('')
     await new Promise((resolve) => setTimeout(resolve, 450))

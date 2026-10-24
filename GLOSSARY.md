@@ -428,7 +428,7 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   reader fills the letters left out with empty slots, so the sender's B is the
   recipient's B. Over the limit it falls back to one slot (see Link degradation). A link
   from before the bank opens as slot A. Recipient-owned fields (progress, prefs) are
-  blanked. Code: `createShareLink`, `ShareLink`, `projectForLink`, `readSharedBeat`,
+  blanked. Code: `createShareLink`, `ShareLink`, `createShareUrl`, `projectForLink`, `readSharedBeat`,
   `PRACTICAL_SHARE_URL_LIMIT`.
 - **Share menu (Share ▾).** The header button that unfolds the three ways a
   beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,

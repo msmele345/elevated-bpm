@@ -88,6 +88,11 @@ export function createBank(pattern: Pattern): Pattern[] {
   return bankWithSlots([{ ...pattern, name: 'A' }])
 }
 
+/** The letter of a pattern in the bank, which its name holds. */
+export function slotLetterOf(pattern: Pattern): SlotLetter {
+  return pattern.name as SlotLetter
+}
+
 /** One slot as its button shows it: which pattern, its letter, and whether it is empty. */
 export interface BankSlot {
   id: string
@@ -99,7 +104,7 @@ export interface BankSlot {
 export function bankSlots(bank: readonly Pattern[]): BankSlot[] {
   return bank.map((pattern) => ({
     id: pattern.id,
-    letter: pattern.name as SlotLetter,
+    letter: slotLetterOf(pattern),
     empty: isPatternEmpty(pattern),
   }))
 }

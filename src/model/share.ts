@@ -1,4 +1,4 @@
-import { bankWithSlots, type SlotLetter } from './bank'
+import { bankWithSlots, slotLetterOf, type SlotLetter } from './bank'
 import { activePattern, PROJECT_STATE_VERSION, type ProjectState } from './projectState'
 import { PAD_LANES, padAudioState, type AvailableAudio } from './sampler'
 import {
@@ -77,17 +77,13 @@ export async function createShareLink(
   const fallback = projectForLink(project, playingSlotId)
   return {
     url: await linkFor(fallback, baseUrl),
-    onlySlot: activePattern(fallback).name as SlotLetter,
+    onlySlot: slotLetterOf(activePattern(fallback)),
   }
 }
 
 /** The URL alone, for a caller with no use for what it left behind. */
-export async function createShareUrl(
-  project: ProjectState,
-  baseUrl: string,
-  playingSlotId?: string,
-): Promise<string> {
-  return (await createShareLink(project, baseUrl, playingSlotId)).url
+export async function createShareUrl(project: ProjectState, baseUrl: string): Promise<string> {
+  return (await createShareLink(project, baseUrl)).url
 }
 
 /**

@@ -17,7 +17,6 @@ const PHONES = [
   { name: '320×640', width: 320, height: 640 },
 ]
 
-
 interface Box {
   x: number
   y: number
@@ -33,6 +32,52 @@ async function stepBoxes(grid: Locator): Promise<Box[]> {
       return { x, y, width, height }
     }),
   )
+}
+
+/**
+ * One lane, wrapped: 16 steps in two rows of 8 under its header line, every
+ * step one width, step n over step n + 8, and quads whole.
+ */
+async function expectWrappedLane(row: Locator): Promise<void> {
+  const name = (await row.locator('.lane-label').innerText()).split('\n')[0]
+  const label = await row.locator('.lane-label').boundingBox()
+  const steps = await stepBoxes(row.locator('.step-grid'))
+  expect(steps, `${name}: 16 steps`).toHaveLength(16)
+
+  // Two rows: 1–8 share one line, 9–16 the next, the header above both.
+  const first = steps.slice(0, 8)
+  const second = steps.slice(8)
+  for (const step of first) expect(Math.abs(step.y - first[0].y), name).toBeLessThanOrEqual(1)
+  for (const step of second) expect(Math.abs(step.y - second[0].y), name).toBeLessThanOrEqual(1)
+  expect(second[0].y, `${name}: second row below the first`).toBeGreaterThan(
+    first[0].y + first[0].height - 1,
+  )
+  expect(label!.y + label!.height, `${name}: header above the steps`).toBeLessThanOrEqual(
+    first[0].y + 1,
+  )
+
+  // Step n sits directly over step n + 8, and every step is one width.
+  for (let i = 0; i < 8; i++) {
+    expect(Math.abs(first[i].x - second[i].x), `${name}: step ${i + 1} over ${i + 9}`)
+      .toBeLessThanOrEqual(1)
+  }
+  for (const step of steps) {
+    expect(Math.abs(step.width - steps[0].width), `${name}: equal widths`).toBeLessThanOrEqual(1)
+  }
+
+  // Quads stay whole: the gap inside a group is the small one, and the
+  // wider gap falls after step 4 in each row, between steps 4 and 5.
+  for (const r of [first, second]) {
+    const gap = (i: number) => r[i + 1].x - (r[i].x + r[i].width)
+    expect(gap(3), `${name}: quad gap after step 4`).toBeGreaterThan(gap(0) + 3)
+    expect(Math.abs(gap(0) - gap(1)), `${name}: even gaps inside a quad`).toBeLessThanOrEqual(1)
+    expect(Math.abs(gap(1) - gap(2)), `${name}: even gaps inside a quad`).toBeLessThanOrEqual(1)
+    expect(Math.abs(gap(4) - gap(5)), `${name}: even gaps inside a quad`).toBeLessThanOrEqual(1)
+  }
+
+  // Nothing but the 16 steps leaks past the right edge of the grid.
+  const grid = await row.locator('.step-grid').boundingBox()
+  for (const step of steps) expect(step.x + step.width).toBeLessThanOrEqual(grid!.x + grid!.width + 1)
 }
 
 /** How far the document's scrollable width runs past the viewport, in px. */
@@ -96,48 +141,21 @@ for (const phone of PHONES) {
       // cards with no lane (EB3-05).
       await expect(lanes).toHaveCount(7)
 
-      for (let lane = 0; lane < 7; lane++) {
-        const row = lanes.nth(lane)
-        const name = (await row.locator('.lane-label').innerText()).split('\n')[0]
-        const label = await row.locator('.lane-label').boundingBox()
-        const steps = await stepBoxes(row.locator('.step-grid'))
-        expect(steps, `${name}: 16 steps`).toHaveLength(16)
+      for (let lane = 0; lane < 7; lane++) await expectWrappedLane(lanes.nth(lane))
+    })
 
-        // Two rows: 1–8 share one line, 9–16 the next, the header above both.
-        const first = steps.slice(0, 8)
-        const second = steps.slice(8)
-        for (const step of first) expect(Math.abs(step.y - first[0].y), name).toBeLessThanOrEqual(1)
-        for (const step of second) expect(Math.abs(step.y - second[0].y), name).toBeLessThanOrEqual(1)
-        expect(second[0].y, `${name}: second row below the first`).toBeGreaterThan(
-          first[0].y + first[0].height - 1,
-        )
-        expect(label!.y + label!.height, `${name}: header above the steps`).toBeLessThanOrEqual(
-          first[0].y + 1,
-        )
+    test('a pad lane wraps like the rest', async ({ page }) => {
+      // A pad shows its lane once it has a sound or any programmed step
+      // (EB3-05), so one step on an unloaded pad is enough to draw it.
+      await seedProjectState(page, cycleActivePatternStep(createDemoProjectState(), 'pad1', 0))
+      await page.goto('/')
+      await expect(page.getByRole('button', { name: 'Share', exact: true })).toBeEnabled()
+      await page.evaluate(() => document.fonts.ready)
 
-        // Step n sits directly over step n + 8, and every step is one width.
-        for (let i = 0; i < 8; i++) {
-          expect(Math.abs(first[i].x - second[i].x), `${name}: step ${i + 1} over ${i + 9}`)
-            .toBeLessThanOrEqual(1)
-        }
-        for (const step of steps) {
-          expect(Math.abs(step.width - steps[0].width), `${name}: equal widths`).toBeLessThanOrEqual(1)
-        }
-
-        // Quads stay whole: the gap inside a group is the small one, and the
-        // wider gap falls after step 4 in each row, between steps 4 and 5.
-        for (const r of [first, second]) {
-          const gap = (i: number) => r[i + 1].x - (r[i].x + r[i].width)
-          expect(gap(3), `${name}: quad gap after step 4`).toBeGreaterThan(gap(0) + 3)
-          expect(Math.abs(gap(0) - gap(1)), `${name}: even gaps inside a quad`).toBeLessThanOrEqual(1)
-          expect(Math.abs(gap(1) - gap(2)), `${name}: even gaps inside a quad`).toBeLessThanOrEqual(1)
-          expect(Math.abs(gap(4) - gap(5)), `${name}: even gaps inside a quad`).toBeLessThanOrEqual(1)
-        }
-
-        // Nothing but the 16 steps leaks past the right edge of the grid.
-        const grid = await row.locator('.step-grid').boundingBox()
-        for (const step of steps) expect(step.x + step.width).toBeLessThanOrEqual(grid!.x + grid!.width + 1)
-      }
+      const lanes = page.locator('.sampler-sequencer .step-row')
+      await expect(lanes).toHaveCount(1)
+      await expectWrappedLane(lanes.first())
+      expect(await pageOverflow(page)).toBeLessThanOrEqual(0)
     })
 
     test('a drum lane keeps its label, M, S and Level on one line', async ({ page }) => {

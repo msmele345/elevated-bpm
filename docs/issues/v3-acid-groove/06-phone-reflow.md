@@ -68,6 +68,25 @@ of 8, keeping the four-step colour groups.
       (documented in the CSS and under **Phone reflow** in `GLOSSARY.md`)
 - [x] Desktop fold test and the 1600px two-column check (if EB3-05 landed) still
       pass — `fold.spec.ts`, `wide.spec.ts` and `lessonCard.spec.ts` green
-      alongside the new spec (20 e2e tests), `tsc -b` clean, 760 Vitest tests
+      alongside the new spec (22 e2e tests), `tsc -b` clean, 760 Vitest tests
 - [x] Phase 9 AC4's out-of-scope reflow note can be marked resolved in the plan —
       marked resolved in `plans/elevated-bpm-v1.md`
+
+## Review notes (EB3-06)
+
+- **Bass and stab header line.** Their M, S and Level live on the panel plate
+  (`PanelTitle`), above a lane label that holds only the LED and name, so the
+  "label, M, S, Level on one line" check runs on the five drum lanes only. The
+  pad lane shares the drum lane's markup and is checked for the wrap and header
+  position, not separately for M, S and Level on one line; bass and stab are not
+  checked for it at all. Nothing overflows and the plate
+  wraps; moving the strip into the lane label is a markup change left out of a
+  CSS-only slice.
+- **600–820px.** The old `max-width: 640px` rule hid every `.lane-label`, mixer
+  included. It is removed, and the reflow starts below 600px as written, so
+  from 600px the label is back beside a 16-step row: first-step width is about
+  12px at 600px (was ~27px) and 25px at 820px (already the case from 641px).
+  Nothing overflows. Whether the reflow should run to 640px or to tablet
+  widths is an open decision for the issue's owner.
+- **Pad lanes** are covered by a seeded one-step pad (a pad with programmed
+  steps shows its lane even with no sound).

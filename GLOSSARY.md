@@ -135,8 +135,8 @@ shipped.
   the tempo fader shares the first row with Play and the BPM readout and Swing
   takes the second (`--transport-strip-h` carries whichever applies); scroll
   targets clear it through `scroll-padding-top`. [v3 spec] It gains slots A–D,
-  Copy and Clear (EB3-07a): in the room left at the right-hand end on desktop,
-  and beside Swing on the phone's second row. Code: `TransportStrip`.
+  Copy and Clear (EB3-07a), in the room left at its right-hand end on desktop
+  and on the second row beside Swing on a phone. Code: `TransportStrip`.
 
 ## Patterns, lanes and time
 
@@ -177,12 +177,6 @@ shipped.
   Code: `PadLane`, `StepLane`.
 - **Pattern.** A first-class, ID'd 16-step loop holding every lane (drum, pad
   and note). Founding term. Code: `Pattern`. [v3 spec] There is one per slot.
-- **Playhead.** The moving step highlight, animated from rAF reading the
-  transport. It stays on the straight grid under swing (at most half a step from
-  what is heard). Code: `usePlayhead`.
-- **Playing slot** [v3 spec]. The slot the engine is sounding. It differs from the
-  selected slot only while a switch is queued, and it is driven from rAF and CSS, never
-  React state.
 - **Phone reflow.** Below 600px nothing on the Deck scrolls sideways, down to
   320px. Every step lane puts its label and its M, S and Level on a header line
   and wraps its 16 steps into two rows of 8 (steps 1–8, then 9–16), each row
@@ -192,6 +186,12 @@ shipped.
   lines up under its note for free. Bass and stab keep M, S and Level on their
   panel plate, above the lane. The keyboard, Master, region editor and finale
   fit 320px too. Held by `e2e/reflow.spec.ts`. Code: `.step-grid`, `.step-row`.
+- **Playhead.** The moving step highlight, animated from rAF reading the
+  transport. It stays on the straight grid under swing (at most half a step from
+  what is heard). Code: `usePlayhead`.
+- **Playing slot** [v3 spec]. The slot the engine is sounding. It differs from the
+  selected slot only while a switch is queued, and it is driven from rAF and CSS, never
+  React state.
 - **Quad.** A group of four steps (1–4, 5–8, 9–12, 13–16), each wearing its
   909 colour. Phone reflow keeps quads whole: each row of 8 holds two of them.
   Code: `--quad-0`…`--quad-3`.

@@ -760,8 +760,9 @@ body::before {
 
 /* ── Transport strip ───────────────────────────────────────────────── */
 /* The deck's clock, pinned to the top of the screen. Opaque, because the
-   panels scroll underneath it; one row, so it never eats the screen; and
-   the free room at its right-hand end is where the pattern bank lands. */
+   panels scroll underneath it; one slim row (two on a phone, see the reflow
+   block at the end of the file) so it never eats the screen; and the free
+   room at its right-hand end is where the pattern bank lands. */
 .transport-strip {
   position: sticky;
   top: 0;
@@ -782,9 +783,9 @@ body::before {
   flex: 1;
   display: flex;
   align-items: center;
-  /* Always one row: --transport-strip-h, and so every scroll target's
-     clearance, assumes it. The two-row phone strip (EB3-06) must raise
-     that height with it. */
+  /* One row on desktop. --transport-strip-h, and so every scroll target's
+     clearance, is its height; the phone block lays this out as two rows and
+     raises the variable with it. */
   gap: 16px;
 }
 
@@ -3525,8 +3526,14 @@ body::before {
    (1–8, then 9–16), each row holding two whole quads. Kept last in the
    file so it wins over the desktop rules it adjusts at equal specificity. */
 @media (max-width: 599.98px) {
+  /* 599.98 rather than 599: a fractional viewport width (a zoomed or scaled
+     phone) must fall on one side of 600 or the other, never in a gap. */
   :root {
     --deck-gap: 10px;
+    /* Two rows: 6 + play button (~36) + 6 row gap + swing knob (~26) + 6,
+       plus the border, measured at 86. The fixed height is what every
+       scroll target clears, so a taller strip would hide things under it. */
+    --transport-strip-h: 86px;
   }
 
   body {
@@ -3553,10 +3560,11 @@ body::before {
   }
 
   /* Two rows of 8: four steps, a thin spacer track, four steps. The spacer
-     is the quad gap, so all eight buttons in a row are the same width (an
+     is the quad gap (2px plus a 3px column gap either side, 8px like the
+     desktop indent), so all eight buttons in a row are the same width: an
      indent taken out of one button's margin shrinks it, and its aspect-ratio
-     height with it). Every .step-grid shares these tracks, so step n sits
-     directly over step n+8, and over the same step in any further row. */
+     height with it. Every .step-grid shares these tracks, so step n sits
+     directly over step n+8, and over the same step in any further grid. */
   .step-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr)) 2px repeat(4, minmax(0, 1fr));
     gap: 6px 3px;
@@ -3565,7 +3573,10 @@ body::before {
     max-width: 440px;
   }
 
-  .step-grid .step[data-quad] {
+  /* Cancels the desktop quad indent, (0,3,0) on .step[data-quad='1']:nth-
+     child(4n + 1). The :nth-child(n) is not a filter: it lifts this rule to
+     (0,4,0), so it wins on specificity and not on source order alone. */
+  .step-grid .step[data-quad]:nth-child(n) {
     margin-left: 0;
   }
 
@@ -3587,6 +3598,8 @@ body::before {
     grid-column: 9;
   }
 
+  /* Narrower keys than on desktop (~30px at 320): trim the LED's top padding
+     and the number to fit the shorter body. */
   .step {
     padding: 14% 0 8%;
   }
@@ -3614,12 +3627,7 @@ body::before {
 
   /* Transport strip: two rows. Play, tempo and the BPM readout on the first;
      Swing on the second, with room beside it for the pattern bank's slots
-     (EB3-07a). The strip is taller than on desktop, so the variable that
-     every scroll target clears moves with it. */
-  :root {
-    --transport-strip-h: 86px;
-  }
-
+     (EB3-07a). --transport-strip-h, set above, is its height. */
   .transport-strip {
     padding: 6px 10px;
   }

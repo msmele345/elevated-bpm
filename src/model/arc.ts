@@ -47,6 +47,30 @@ export function goalContextFor(
   }
 }
 
+/**
+ * Every slot of an arriving bank that already satisfies each lesson, by
+ * lesson id. A lesson met in no slot is absent.
+ *
+ * Inheritance is held per slot rather than per lesson: the work that arrived
+ * is the sender's *in the slots it arrived in*. Selecting another slot and
+ * coming back is not taking that work apart, so the shared slot stays held
+ * until its own goal stops being met — while a lesson the learner builds in a
+ * slot of their own is theirs, and earns credit at once.
+ */
+export function slotsAlreadyMeeting(
+  lessons: Lesson[],
+  state: ProjectState,
+): Map<string, Set<string>> {
+  const meeting = new Map<string, Set<string>>()
+  for (const slot of state.patterns) {
+    const context = goalContextFor({ ...state, activePatternId: slot.id })
+    for (const lessonId of lessonsAlreadyMet(lessons, context)) {
+      meeting.set(lessonId, (meeting.get(lessonId) ?? new Set()).add(slot.id))
+    }
+  }
+  return meeting
+}
+
 /** One rung of the path as the arc UI renders it. */
 export interface ArcEntry {
   lesson: Lesson

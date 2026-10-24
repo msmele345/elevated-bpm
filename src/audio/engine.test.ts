@@ -8,7 +8,14 @@ import {
 } from '../model/sampler'
 import { createInitialPattern, cycleStep } from '../model/pattern'
 import { midiToFrequency, resizeNoteStep, toggleNoteStep } from '../model/note'
+import { createBank } from '../model/bank'
+import type { Pattern } from '../model/types'
 import { ACCENT_GAIN, UNACCENTED_GAIN } from './stepResolution'
+
+/** Hand the engine a bank of one slot, selected — the deck before the bank. */
+function playSoleSlot(engine: typeof import('./engine'), pattern: Pattern): void {
+  engine.setBank([pattern], pattern.id)
+}
 
 const tone = vi.hoisted(() => {
   let resolveLoaded!: () => void
@@ -279,7 +286,7 @@ describe('live sampler audio', () => {
 
     let pattern = cycleStep(createInitialPattern(), 'kick', 0)
     pattern = cycleStep(pattern, 'pad1', 0)
-    engine.setPattern(pattern)
+    playSoleSlot(engine, pattern)
     engine.setMixer({})
     await engine.play()
     tone.repeatCallbacks[0](42)
@@ -305,7 +312,7 @@ describe('live sampler audio', () => {
     commitSlice(engine, 'pad2', CURATED_SAMPLE_SOURCE.duration)
     engine.setMixer({})
 
-    engine.setPattern(cycleStep(createInitialPattern(), 'pad2', 0))
+    playSoleSlot(engine, cycleStep(createInitialPattern(), 'pad2', 0))
     await engine.play()
 
     // A lookahead-scheduled hit whose window is still open at the audio clock's
@@ -527,7 +534,7 @@ describe('the sequencer step callback', () => {
     pattern = cycleStep(pattern, 'openHat', 2)
     pattern = resizeNoteStep(toggleNoteStep(pattern, 'bass', 2), 'bass', 2, 1)
     pattern = toggleNoteStep(pattern, 'stab', 2)
-    engine.setPattern(pattern)
+    playSoleSlot(engine, pattern)
     engine.setMixer({})
     await engine.play()
 
@@ -578,7 +585,7 @@ describe('swing', () => {
       assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
     )
     commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
-    engine.setPattern(pattern)
+    playSoleSlot(engine, pattern)
     engine.setMixer({})
     engine.setSwing(0.75)
     await engine.play()
@@ -616,7 +623,7 @@ describe('swing', () => {
     const Tone = await import('tone')
     let pattern = cycleStep(createInitialPattern(), 'kick', 4)
     pattern = toggleNoteStep(pattern, 'bass', 4)
-    engine.setPattern(pattern)
+    playSoleSlot(engine, pattern)
     engine.setMixer({})
     engine.setSwing(0.75)
     await engine.play()
@@ -638,7 +645,7 @@ describe('swing', () => {
   it('reads swing live, so a knob moved mid-loop is heard on the next odd 16th', async () => {
     const engine = await import('./engine')
     const Tone = await import('tone')
-    engine.setPattern(cycleStep(createInitialPattern(), 'kick', 3))
+    playSoleSlot(engine, cycleStep(createInitialPattern(), 'kick', 3))
     engine.setMixer({})
     engine.setSwing(0.5)
     await engine.play()
@@ -776,7 +783,7 @@ describe('voice Level and the mixer', () => {
   it('skips sequenced bass and stab notes the mixer silences', async () => {
     const engine = await import('./engine')
     const Tone = await import('tone')
-    engine.setPattern(toggleNoteStep(toggleNoteStep(createInitialPattern(), 'bass', 6), 'stab', 6))
+    playSoleSlot(engine, toggleNoteStep(toggleNoteStep(createInitialPattern(), 'bass', 6), 'stab', 6))
     engine.setMixer({ bass: strip({ muted: true }) })
     await engine.play()
     const bass = tone.synths[0]
@@ -791,6 +798,151 @@ describe('voice Level and the mixer', () => {
     expect(stab.triggerAttackRelease).toHaveBeenCalledTimes(1)
     engine.stop()
     engine.setMixer({})
+  })
+})
+
+describe('the queued bank switch', () => {
+  /** Slot A kicks on every 16th, slot B claps on every 16th. */
+  function kickAndClapBank() {
+    const a = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'kick', i),
+      createInitialPattern(),
+    )
+    const bank = createBank(a)
+    bank[1] = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'snare', i),
+      bank[1],
+    )
+    return bank
+  }
+
+  async function startedWith(bank: Pattern[], selectedId: string) {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    const transport = Tone.getTransport() as unknown as { state: string }
+    engine.setMixer({})
+    engine.setBank(bank, selectedId)
+    await engine.play()
+    transport.state = 'started'
+    const [kick, snare] = tone.players
+    kick.start.mockClear()
+    snare.start.mockClear()
+    const fire = (stepIndex: number, time: number) => {
+      vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(
+        stepIndex * engine.TICKS_PER_16TH,
+      )
+      tone.repeatCallbacks[0](time)
+    }
+    const stopAll = () => {
+      engine.stop()
+      transport.state = 'stopped'
+    }
+    return { engine, kick, snare, fire, stopAll }
+  }
+
+  it('keeps sounding the playing slot after another is pressed, until step 0', async () => {
+    const bank = kickAndClapBank()
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    fire(5, 20)
+    expect(kick.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+
+    fire(0, 40)
+    expect(snare.start.mock.calls).toEqual([[40]])
+    expect(kick.start.mock.calls).toEqual([[20]])
+    stopAll()
+  })
+
+  it('lights the playing slot by what is heard: the switch shows when its bar sounds', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: null })
+    engine.setBank(bank, bank[1].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[1].id })
+
+    // Step 0 is scheduled ahead, for t=50; the audio clock (the mock's
+    // Tone.immediate) is still at 10, so A is what is heard and lit.
+    fire(0, 50)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[1].id })
+    stopAll()
+  })
+
+  it('lights the new slot once the audio clock reaches its bar', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    // Step 0 for t=5, which the audio clock (10) has already passed.
+    fire(0, 5)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[1].id, queued: null })
+    stopAll()
+  })
+
+  it('cancels the queue when the playing slot is pressed again', async () => {
+    const bank = kickAndClapBank()
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    engine.setBank(bank, bank[0].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: null })
+    fire(0, 20)
+    expect(kick.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+    stopAll()
+  })
+
+  it('replaces a queued slot with the next one pressed', async () => {
+    const bank = kickAndClapBank()
+    bank[2] = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'closedHat', i),
+      bank[2],
+    )
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+    const closedHat = tone.players[2]
+    closedHat.start.mockClear()
+
+    engine.setBank(bank, bank[1].id)
+    engine.setBank(bank, bank[2].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[2].id })
+
+    fire(0, 20)
+    expect(closedHat.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+    expect(kick.start).not.toHaveBeenCalled()
+    stopAll()
+  })
+
+  it('owns up to a switch already scheduled: pressed in the look-ahead, the old slot is queued again', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    // B's bar is scheduled for t=50 but not heard yet (the audio clock is at 10).
+    fire(0, 50)
+    // Too late to cancel: B comes in at the bar, so A is shown queued behind it.
+    engine.setBank(bank, bank[0].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[0].id })
+    stopAll()
+  })
+
+  it('switches at once while stopped, and stop clears a pending switch', async () => {
+    const bank = kickAndClapBank()
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    stopAll()
+    expect(engine.getSlotLights()).toEqual({ playing: null, queued: null })
+
+    // Restarting mid-bar (the mock's tick says step 5) plays the selected slot.
+    await engine.play()
+    ;((await import('tone')).getTransport() as unknown as { state: string }).state = 'started'
+    fire(5, 30)
+    expect(snare.start.mock.calls).toEqual([[30]])
+    expect(kick.start).not.toHaveBeenCalled()
+    stopAll()
   })
 })
 

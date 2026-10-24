@@ -2,12 +2,12 @@
 
 The project's shared language: the words specs, issues, PRs, code comments and
 conversations use, and exactly what each one means here. Last reviewed
-2026-10-23: v2 (the SP-04 sampler release) is shipped, v3 is specified in
+2026-10-24: v2 (the SP-04 sampler release) is shipped, v3 is specified in
 `docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
-spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow) have
-shipped.
+spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow,
+EB3-07a the pattern bank's slots and queued switching) have shipped.
 
 ## How to use and maintain this file
 
@@ -41,12 +41,13 @@ shipped.
   cycle, and the hit plays at full gain instead of 0.62. On a **note step** [v3 spec],
   accent is the 303 flag: about +4 dB plus a sharper filter "wow". The two are
   separate fields, and the drum accent is unchanged by v3.
-- **Active.** `activePatternId` names the pattern being *edited*, which
-  [v3 spec] may differ from the one being *heard*. Say **selected slot** and **playing
+- **Active.** `activePatternId` names the pattern being *edited* (the selected
+  slot), which may differ from the one being *heard* while a switch is queued. Say **selected slot** and **playing
   slot** when the difference matters. "Active lesson" and "active arc" mean the one
   on screen.
 - **Bank.** From v3 on, a bare "Bank" means the **pattern bank**: the four
-  slots A–D. The sampler's list of loaded audio is the **source bank**. Always
+  slots A–D (code: `SLOT_LETTERS`, `bankWithSlots`). The sampler's list of
+  loaded audio is the **source bank**. Always
   qualify it, because shipped code already calls it "the bank": the
   `sampler-source-bank` class and comments in `lesson.ts` and `projectState.ts`.
   Learner-facing copy says "sources", never "bank", for the sampler's audio.
@@ -134,9 +135,11 @@ shipped.
   one row and 52px tall on desktop and two rows and 86px tall below 600px, where
   the tempo fader shares the first row with Play and the BPM readout and Swing
   takes the second (`--transport-strip-h` carries whichever applies); scroll
-  targets clear it through `scroll-padding-top`. [v3 spec] It gains slots A–D,
-  Copy and Clear (EB3-07a), in the room left at its right-hand end on desktop
-  and on the second row beside Swing on a phone. Code: `TransportStrip`.
+  targets clear it through `scroll-padding-top`. The pattern bank's slots A–D
+  sit at its right-hand end on desktop and on the second row beside Swing on a
+  phone, and the "Editing B · hearing A" notice hangs under it while a switch
+  is queued. [v3 spec] Copy and Clear join the slots (EB3-07b). Code:
+  `TransportStrip`, `PatternBank`.
 
 ## Patterns, lanes and time
 
@@ -148,8 +151,13 @@ shipped.
   shorter decay, even at Env Mod 0. It is edited on the bass Accent row.
 - **Audio clock.** Tone's transport time. "Never on the audio clock" means
   playback must not drive React state changes (see Performance rule).
-- **Bank (pattern bank)** [v3 spec]. The four pattern slots A–D. `patterns`
-  always holds exactly four. This is not the source bank.
+- **Bank (pattern bank).** The four pattern slots A–D. `patterns` always holds
+  exactly four, in A–D order, each named by its letter; only programming lives
+  in a slot, so tempo, swing, the mixer, the patches, the master, the FX and
+  the pad sounds are shared and never change on a switch. A payload may carry
+  fewer, and `bankWithSlots` puts each back by letter and fills the gaps empty.
+  This is not the source bank. Code: `SLOT_LETTERS`, `createBank`,
+  `bankWithSlots`.
 - **Choke.** One lane cutting another's still-ringing sample: the closed hat
   chokes the open hat, as on a 909. Code: `CHOKES`, `resolveStep`.
 - **Copy / Clear** [v3 spec]. Copy deep-copies the selected slot's lanes onto the next
@@ -158,8 +166,9 @@ shipped.
   dialog.
 - **Drum lane.** A lane of on/off + accent steps that triggers one sample. Its
   ids are `kick`, `snare`, `closedHat`, `openHat` and `perc`. Code: `DrumLane`, `DrumLaneId`.
-- **Empty slot** [v3 spec]. A slot with no step on in any lane. Pitch, length or flags left
-  on off steps don't count.
+- **Empty slot.** A slot with no step on in any lane. Pitch, length or flags left
+  on off steps don't count. Its slot button says "empty" and reads dimmer. Code:
+  `isPatternEmpty`.
 - **Env Mod** [v3 spec]. The depth of the bass filter envelope, from 0 to 100% (up to about
   four octaves above Cutoff), decaying with the Decay knob. Param id
   `envMod`.
@@ -176,7 +185,10 @@ shipped.
 - **Pad lane.** A sampler pad's lane, with the same shape as a drum lane. Its ids are `pad1`–`pad4`.
   Code: `PadLane`, `StepLane`.
 - **Pattern.** A first-class, ID'd 16-step loop holding every lane (drum, pad
-  and note). Founding term. Code: `Pattern`. [v3 spec] There is one per slot.
+  and note). There is one per slot of the bank, and its `name` is the slot's
+  letter. Founding term (`CONCEPT.md` expected song mode to chain patterns; v3
+  rules chaining out, so the bank is four slots and nothing more). Code:
+  `Pattern`.
 - **Phone reflow.** Below 600px nothing on the Deck scrolls sideways, down to
   320px. Every step lane puts its label and its M, S and Level on a header line
   and wraps its 16 steps into two rows of 8 (steps 1–8, then 9–16), each row
@@ -189,21 +201,33 @@ shipped.
 - **Playhead.** The moving step highlight, animated from rAF reading the
   transport. It stays on the straight grid under swing (at most half a step from
   what is heard). Code: `usePlayhead`.
-- **Playing slot** [v3 spec]. The slot the engine is sounding. It differs from the
-  selected slot only while a switch is queued, and it is driven from rAF and CSS, never
-  React state.
+- **Playing slot.** The slot the engine is sounding. Step resolution moves it to
+  the selected slot only on step 0; while stopped it always equals the selected
+  slot. Its LED (run green) is lit from rAF reading the engine against the audio
+  clock, so it changes when the new bar is heard, not when the look-ahead
+  scheduled it; never React state. Code: `getSlotLights`, `useSlotLights`.
 - **Quad.** A group of four steps (1–4, 5–8, 9–12, 13–16), each wearing its
   909 colour. Phone reflow keeps quads whole: each row of 8 holds two of them.
   Code: `--quad-0`…`--quad-3`.
-- **Queued switch** [v3 spec]. Pressing a slot while playing selects it at once, so the grid
+- **Queued switch.** Pressing a slot while playing selects it at once, so the grid
   shows it, edits go to it and goals read it. The sound changes only when the
-  engine reaches step 0 of the next bar. Stop clears the queue.
-- **Selected slot** [v3 spec]. The slot being edited, which `activePatternId` names.
+  engine reaches step 0 of the next bar. Pressing another slot replaces the
+  queue, pressing the playing slot cancels it, and Stop clears it. A press in
+  the look-ahead just before the bar cannot cancel a switch already scheduled,
+  so that slot shows queued behind it instead. While queued,
+  the slot's LED blinks amber, every step grid carries a dashed edge and the
+  transport strip says "Editing B · hearing A until the bar ends". Code:
+  `selectSlot`, `setBank`, `resolveStep`.
+- **Selected slot.** The slot being edited, which `activePatternId` names. Shown
+  with `aria-pressed`, persisted, so a reload comes back to it. Code:
+  `selectSlot`.
 - **Slide** [v3 spec]. The 303 flag on a bass note. The gate stays open into the step
   right after the note ends. If that step holds a note, the line glides into it over
   about 60 ms without restarting the envelopes (legato). If the step is empty, the note
   ties through it and then releases.
-- **Slot** [v3 spec]. One position in the pattern bank, named by its letter A–D.
+- **Slot.** One position in the pattern bank, named by its letter A–D. Each
+  slot button's accessible name carries its state: "Slot B, selected, queued,
+  empty". Code: `SlotLetter`, `BankSlot`, `bankSlots`.
 - **Step.** One 16th-note cell. There are 16 per lane (`STEP_COUNT`), and each lasts
   `secondsPerStep(bpm)`, which is 15/bpm seconds.
 - **Step resolution.** The one pure function that decides what sounds on a
@@ -213,9 +237,10 @@ shipped.
   seconds for that 16th. Bass and stab note events are filtered by the same
   mute/solo rule as drum and pad hits; Level is not part of resolution (hit gains
   stay accent-only). The Tone callback applies its result and decides nothing
-  itself. [v3 spec] The input grows to the Bank and bass patch, and the result
-  gains the playing slot and per-note accent, legato and gate tie. Code: `resolveStep`,
-  `StepResolution`.
+  itself. It also reads the Bank with the selected and playing slots and
+  returns the playing slot after this step (see Queued switch). [v3 spec] The
+  input grows to the bass patch, and the result gains per-note accent, legato
+  and gate tie. Code: `resolveStep`, `StepResolution`.
 - **Swing.** The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75, default 0.50).
   Every odd 16th of every sequenced voice is delayed by (swing − 0.5) × 2 × one step, so 66%
   is roughly a triplet feel and 75% is dotted; even 16ths never move, and note lengths stay
@@ -334,7 +359,7 @@ shipped.
   being previewed. Code: `createAutosaver`.
 - **Demo groove.** The shipped opening pattern, in UI step numbers: the kick is empty, the clap is on
   13, the closed hats are on 3/7/11, the open hat is on 15, and the perc is on 4/6/12/14. The bass and stab are
-  empty. It plays at 50% swing. [v3 spec] It lives in slot A. Code: `createDemoPattern`.
+  empty. It plays at 50% swing, in slot A, with B–D empty. Code: `createDemoPattern`.
 - **Migration (migration chain).** Each schema bump adds one step that lifts vN
   to vN+1, adding fields with defaults that reproduce the old sound. Saved
   documents, share links and bundles all pass through the same chain. A corrupt or
@@ -346,9 +371,10 @@ shipped.
 - **ProjectState.** The one versioned JSON document and the single source of
   truth. It holds `patterns`, `activePatternId`, `transport`, `instrumentSettings`,
   `sources` (metadata only), `lessonProgress`, `prefs`, `mixer`, `activeArcId` and
-  `activeLessonIds`. It never holds audio. It is at v12 today (v11 added swing; v12 keys the
+  `activeLessonIds`. It never holds audio. It is at v13 today (v11 added swing; v12 keys the
   mixer by voice with Level, and its migration fills `level: 1` on every existing
-  strip and repairs missing flags); [v3 spec] v13–v14 are planned. Founding
+  strip and repairs missing flags; v13 makes `patterns` the four-slot bank, the
+  old pattern becoming slot A under the same id); [v3 spec] v14 is planned. Founding
   term. Code: `ProjectState`, `PROJECT_STATE_VERSION`.
 - **Sample store.** A separate IndexedDB store, split into slices (precious) and
   sources (expendable). Code: `saveSlice`, `saveSource`, `loadStoredAudio`.
@@ -362,11 +388,15 @@ shipped.
 
 - **Bundle.** The share payload with slices included, written to a `.ebpm` file
   instead of a URL. It is the same serializer and validator as a link, with a different carrier.
-  [v3 spec] It always carries all four slots. Code: `readBundle`, `BUNDLE_FILE_EXTENSION`.
+  It always carries all four slots, with the selected one still selected. Code:
+  `readBundle`, `projectForBundle`, `BUNDLE_FILE_EXTENSION`.
 - **Inheritance (held back).** When a shared beat or bundle arrives, any lesson
   its content already satisfies is held back rather than credited. It is earned only
-  after the goal stops being met and the learner builds it again. This covers every arc, and
-  [v3 spec] every slot. Code: `lessonsAlreadyMet`.
+  after the goal stops being met and the learner builds it again. This covers every arc and
+  every slot, and is held per slot: a lesson stays held in each slot it arrived met in until
+  that slot stops meeting it, so selecting an empty slot and coming back is not taking the
+  work apart, while the same lesson built in a slot of the learner's own earns at once.
+  Code: `slotsAlreadyMeeting`.
 - **Link degradation.** A share link says plainly what it couldn't carry.
   Audio never travels, so pads arrive silent with a notice to ask for a bundle.
   [v3 spec] Over 2,000 characters, a link carries only the playing slot and says so.
@@ -375,8 +405,10 @@ shipped.
   with autosave suspended. **Keep this beat** saves it; **Back to my project**
   restores the recipient's document exactly. Code: `projectWithSharedBeat`.
 - **Share link (share payload).** `?p=` carrying ProjectState as JSON, then gzip, then
-  base64url, kept under 2,000 characters. Recipient-owned fields (progress, prefs) are
-  blanked. Code: `createShareUrl`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
+  base64url, kept under 2,000 characters. Until EB3-08 a link carries only the selected
+  slot, which opens as the recipient's slot A; a link from before the bank opens as slot A
+  too. Recipient-owned fields (progress, prefs) are
+  blanked. Code: `createShareUrl`, `projectForLink`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
 - **Share menu (Share ▾).** The header button that unfolds the three ways a
   beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,
   with the copy explaining each. A disclosure, not an ARIA menu; Escape or a
@@ -388,7 +420,8 @@ shipped.
   project, or a link, bundle or save error with Dismiss. Event-driven, never
   permanent, never folded into the Share menu. Code: `ShareStrips`.
 - **Share validator.** The one check that both links and bundles pass. Every
-  version bump updates it. Code: `isSharedProject`.
+  version bump updates it. It accepts one to four slots with unique slot letters
+  and ids, with `activePatternId` among them. Code: `isSharedProject`.
 
 ## Curriculum
 
@@ -415,7 +448,7 @@ shipped.
   `LessonArc`.
 - **Demo rule.** The opening deck may groove, but it must never complete a lesson.
   On any lane a lesson asserts, the demo places only steps that lesson also
-  wants (the open hat is the one deliberate exception). [v3 spec] No slot of the opening deck
+  wants (the open hat is the one deliberate exception). No slot of the opening deck
   satisfies any lesson in any arc. It is enforced by the shipped-lesson tests.
 - **Dismiss / resume / put away.** Dismiss (✕, on an unearned card) collapses the
   lesson card to a "Resume lesson" chip and leaves the deck playable. Putting a

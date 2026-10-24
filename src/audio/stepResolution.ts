@@ -33,7 +33,12 @@ const CHOKES: Partial<Record<LaneId, LaneId>> = {
 
 /** What the resolver reads to decide one 16th. An object, so it can grow. */
 export interface StepResolutionInput {
-  pattern: Pattern
+  /** The pattern bank, slots A–D. */
+  bank: readonly Pattern[]
+  /** The slot the user selected — the one the grid shows. */
+  selectedSlotId: string
+  /** The slot the engine was sounding going into this 16th. */
+  playingSlotId: string
   mixer: Mixer
   /** Tempo and swing: together they decide how late an off-beat 16th lands. */
   transport: TransportSettings
@@ -43,6 +48,12 @@ export interface StepResolutionInput {
 
 /** Everything that sounds on one 16th. */
 export interface StepResolution {
+  /**
+   * The slot sounding after this 16th. A selected slot that differs is queued:
+   * it takes over on step 0 — the end of the bar, like hardware — and this 16th
+   * is then already the new slot's.
+   */
+  playingSlotId: string
   /** Drum and pad lanes to trigger, each at its velocity, choked lanes removed. */
   starts: Hit[]
   /** Ringing lanes to silence at this step because a choker fired. */
@@ -68,15 +79,24 @@ export interface StepResolution {
  * channel gain, applied after the accent gain, so a hit's gain stays its
  * accent alone and accents keep their headroom at any Level. Swing moves when
  * the 16th lands, never what is on it: the step index comes from the straight
- * grid.
+ * grid. The bank switch is decided here too: the playing slot follows the
+ * selected one only on step 0, so a press mid-bar is queued, never heard
+ * mid-bar.
  */
 export function resolveStep({
-  pattern,
+  bank,
+  selectedSlotId,
+  playingSlotId,
   mixer,
   transport,
   stepIndex,
 }: StepResolutionInput): StepResolution {
-  const hits = hitsAtStep(pattern, stepIndex, mixer)
+  const selected = bank.find((slot) => slot.id === selectedSlotId) ?? bank[0]
+  // A playing slot the bank no longer holds (a shared beat replaced the bank)
+  // has nothing left to finish, so the selected slot comes in at once.
+  const playing =
+    stepIndex === 0 ? selected : (bank.find((slot) => slot.id === playingSlotId) ?? selected)
+  const hits = hitsAtStep(playing, stepIndex, mixer)
   const firing = new Set(hits.map((hit) => hit.laneId))
   const chokes: LaneId[] = []
   for (const [choker, target] of Object.entries(CHOKES) as [LaneId, LaneId][]) {
@@ -84,9 +104,10 @@ export function resolveStep({
   }
   const choked = new Set(chokes)
   return {
+    playingSlotId: playing.id,
     starts: hits.filter((hit) => !choked.has(hit.laneId)),
     chokes,
-    notes: notesAtStep(pattern, stepIndex, mixer),
+    notes: notesAtStep(playing, stepIndex, mixer),
     swingOffset: swingOffsetSeconds(stepIndex, transport.bpm, transport.swing),
   }
 }

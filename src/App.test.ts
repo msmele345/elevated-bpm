@@ -9,6 +9,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import { computeAccessibleName } from 'dom-accessibility-api'
 import { IDBObjectStore, indexedDB } from 'fake-indexeddb'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -21,6 +22,8 @@ import {
   createDemoProjectState,
   cycleActivePatternStep,
   enterLesson as enterLessonIn,
+  PROJECT_STATE_VERSION,
+  selectSlot,
   setSamplerPadFit,
   setTransportBpm,
   setTransportSwing,
@@ -44,12 +47,14 @@ import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
 import { sliceKey } from './model/slice'
 import { createBundle, readBundle } from './model/bundle'
 import { createShareUrl, readSharedBeat } from './model/share'
-import type { LaneId, PadLane } from './model/types'
+import { bytesToBase64Url, compressPayload, projectForBundle } from './model/sharePayload'
+import type { LaneId, PadLane, Pattern } from './model/types'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import { loadSlice, loadSource, saveSlice, saveSource } from './storage/sampleStore'
 
 const engineSpies = vi.hoisted(() => ({
-  setPattern: vi.fn(),
+  setBank: vi.fn(),
+  getSlotLights: vi.fn(() => ({ playing: null, queued: null })),
   setMixer: vi.fn(),
   setBassSettings: vi.fn(),
   setMasterSettings: vi.fn(),
@@ -75,6 +80,16 @@ const engineSpies = vi.hoisted(() => ({
   auditionRegion: vi.fn(),
   getSoundingPadIds: vi.fn((): string[] => []),
 }))
+
+/** The selected slot's pattern from the bank the engine was last handed. */
+function lastPatternHanded() {
+  const [bank, selectedId] = engineSpies.setBank.mock.calls.at(-1)! as unknown as [
+    Pattern[],
+    string,
+  ]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return bank.find((pattern) => pattern.id === selectedId)! as any
+}
 
 /**
  * Real decoding is never exercised: the decoder is injected and the tests
@@ -688,7 +703,7 @@ describe('App microphone recording', () => {
       expect(settings.pad2.region.sourceId).toBe('recording-1')
       expect(settings.pad2.tune).toBeGreaterThan(0)
     })
-    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const pattern = lastPatternHanded()
     expect(pattern.padLanes.find((lane: { id: string }) => lane.id === 'pad2').steps[4].on).toBe(
       true,
     )
@@ -985,7 +1000,7 @@ describe('App sharing workflow', () => {
     expect(notice.textContent).toContain('Ask whoever sent it for a bundle file')
     // Pad programming, tune and fit all arrived, so loading their own audio is
     // all the recipient has to do.
-    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const pattern = lastPatternHanded()
     expect(pattern.padLanes.find((lane: PadLane) => lane.id === 'pad1').steps[0].on).toBe(true)
     const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
     expect(settings.pad1.fit).toBe(4)
@@ -1009,6 +1024,157 @@ describe('App sharing workflow', () => {
     expect((tempo as HTMLInputElement).value).toBe('127')
     await new Promise((resolve) => setTimeout(resolve, 450))
     expect(await loadProjectState()).toEqual(recipient)
+  })
+})
+
+describe('App pattern bank', () => {
+  /** What a screen reader announces for an element, whitespace tidied. */
+  function accessibleName(element: Element): string {
+    return computeAccessibleName(element).replace(/\s+/g, ' ').trim()
+  }
+
+  /** The bank's slot buttons, A to D. */
+  function slots(): HTMLElement[] {
+    return within(screen.getByRole('group', { name: 'Pattern bank' })).getAllByRole('button')
+  }
+
+  it('puts four slots in the transport strip: A holds the demo and is selected, B–D are empty', async () => {
+    await hydratedDeck()
+
+    const transport = screen.getByRole('region', { name: 'Transport' })
+    expect(within(transport).getByRole('group', { name: 'Pattern bank' })).toBeTruthy()
+    expect(slots().map(accessibleName)).toEqual([
+      'Slot A, selected',
+      'Slot B, empty',
+      'Slot C, empty',
+      'Slot D, empty',
+    ])
+    expect(slots().map((slot) => slot.getAttribute('aria-pressed'))).toEqual([
+      'true',
+      'false',
+      'false',
+      'false',
+    ])
+  })
+
+  it('switches grid and sound at once when a slot is pressed while stopped', async () => {
+    await hydratedDeck()
+    const [slotA, slotB] = slots()
+    // The demo's closed hat on step 3 is slot A's programming.
+    expect(screen.getByRole('button', { name: 'Closed Hat step 3' }).getAttribute('aria-pressed'))
+      .toBe('true')
+
+    fireEvent.click(slotB)
+
+    expect(slotB.getAttribute('aria-pressed')).toBe('true')
+    expect(slotA.getAttribute('aria-pressed')).toBe('false')
+    expect(accessibleName(slotB)).toBe('Slot B, selected, empty')
+    expect(screen.getByRole('button', { name: 'Closed Hat step 3' }).getAttribute('aria-pressed'))
+      .toBe('false')
+    expect(lastPatternHanded().name).toBe('B')
+
+    // Edits go to the selected slot; A keeps the demo.
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+    expect(lastPatternHanded().lanes[0].steps[0].on).toBe(true)
+    expect(accessibleName(slotB)).toBe('Slot B, selected')
+    fireEvent.click(slotA)
+    expect(screen.getByRole('button', { name: 'Kick step 1' }).getAttribute('aria-pressed'))
+      .toBe('false')
+  })
+
+  it('lights the playing slot and blinks the queued one from animation frames, naming both', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    await hydratedDeck()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+    const [slotA, slotB] = slots()
+    const bank = engineSpies.setBank.mock.calls.at(-1)![0] as Pattern[]
+
+    fireEvent.click(slotB)
+    engineSpies.getSlotLights.mockReturnValue({ playing: bank[0].id, queued: bank[1].id } as never)
+    for (const frame of [...frames]) frame(16)
+
+    // Selected at once — the grid already shows B — but A is still what is heard.
+    expect(slotB.getAttribute('aria-pressed')).toBe('true')
+    expect(slotA.hasAttribute('data-playing')).toBe(true)
+    expect(slotB.hasAttribute('data-queued')).toBe(true)
+    expect(accessibleName(slotA)).toBe('Slot A, playing')
+    expect(accessibleName(slotB)).toBe('Slot B, selected, queued, empty')
+    expect(screen.getByText(/Editing B · hearing A/)).toBeTruthy()
+
+    // The bar turns over: B is heard, nothing is queued.
+    engineSpies.getSlotLights.mockReturnValue({ playing: bank[1].id, queued: null } as never)
+    for (const frame of [...frames]) frame(32)
+    expect(slotA.hasAttribute('data-playing')).toBe(false)
+    expect(slotB.hasAttribute('data-playing')).toBe(true)
+    expect(slotB.hasAttribute('data-queued')).toBe(false)
+    expect(accessibleName(slotB)).toBe('Slot B, selected, playing, empty')
+    expect(screen.queryByText(/Editing B · hearing A/)).toBeNull()
+    engineSpies.getSlotLights.mockReturnValue({ playing: null, queued: null })
+  })
+
+  it('remembers the selected slot across a reload', async () => {
+    await hydratedDeck()
+    fireEvent.click(slots()[2])
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    cleanup()
+
+    await hydratedDeck()
+    expect(slots()[2].getAttribute('aria-pressed')).toBe('true')
+    expect(activePattern((await loadProjectState())!).name).toBe('C')
+  })
+
+  it('holds back a lesson any slot of an incoming bank already meets, whichever slot is selected', async () => {
+    await saveProjectState(createInitialProjectState())
+    // The sender built the four-on-the-floor in slot B, and is looking at A.
+    const sender = createInitialProjectState()
+    let built = selectSlot(sender, sender.patterns[1].id)
+    for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+    built = selectSlot(built, built.patterns[0].id)
+    const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
+    window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const [slotA, slotB] = slots()
+
+    // Over to B, where the work is: theirs, not the recipient's.
+    fireEvent.click(slotB)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    // Away to the empty A and back again is not taking the work apart.
+    fireEvent.click(slotA)
+    fireEvent.click(slotB)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+  })
+
+  it('still credits a lesson the learner builds in a slot of their own while the shared slot meets it', async () => {
+    await saveProjectState(createInitialProjectState())
+    const sender = createInitialProjectState()
+    let built = selectSlot(sender, sender.patterns[1].id)
+    for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+    const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
+    window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    // Slot C is empty: a four-on-the-floor built there is the learner's own.
+    fireEvent.click(slots()[2])
+    for (const step of [1, 5, 9, 13]) {
+      fireEvent.click(screen.getByRole('button', { name: `Kick step ${step}` }))
+    }
+
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
+    )
   })
 })
 
@@ -1610,7 +1776,7 @@ describe('App missing audio', () => {
     // the pad keeps the name it had rather than taking the new file's.
     expect(restored.pad1.name).toBe('Warehouse Break')
     expect(restored.pad1.fit).toBe(2)
-    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const pattern = lastPatternHanded()
     expect(pattern.padLanes.find((lane: { id: string }) => lane.id === 'pad1').steps[4].on).toBe(
       true,
     )
@@ -1861,7 +2027,7 @@ describe('App curriculum tracks', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Play' }))
     await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
-    const patternBefore = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const patternBefore = lastPatternHanded()
     const samplerBefore = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
     engineSpies.setBpm.mockClear()
     engineSpies.stop.mockClear()
@@ -1872,7 +2038,7 @@ describe('App curriculum tracks', () => {
 
     // Same objects, not merely equal ones: navigation hands the deck's own
     // state straight back rather than rebuilding it.
-    expect(engineSpies.setPattern.mock.calls.at(-1)![0]).toBe(patternBefore)
+    expect(lastPatternHanded()).toBe(patternBefore)
     expect(engineSpies.setSamplerSettings.mock.calls.at(-1)![0]).toBe(samplerBefore)
     expect(
       (screen.getByRole('slider', { name: 'Tempo in beats per minute' }) as HTMLInputElement)

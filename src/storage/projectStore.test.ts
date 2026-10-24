@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
+import { createBank } from '../model/bank'
 import { DEFAULT_BASS_SETTINGS } from '../model/bass'
 import { createInitialPattern } from '../model/pattern'
 import {
@@ -66,7 +67,8 @@ describe('projectStore', () => {
 
     const loaded = await loadProjectState()
     expect(loaded?.version).toBe(PROJECT_STATE_VERSION)
-    expect(loaded?.patterns).toEqual([pattern])
+    // The saved pattern comes back as slot A of the bank.
+    expect(loaded?.patterns).toEqual(createBank(pattern))
     expect(loaded?.transport.bpm).toBe(118)
   })
 

@@ -6,6 +6,7 @@ import {
   type InstrumentSettings,
   type ProjectState,
 } from './projectState'
+import { bankWithSlots, isSlotLetter, SLOT_LETTERS } from './bank'
 import { BASS_PARAMS } from './bass'
 import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
@@ -68,13 +69,30 @@ export function recipientOwnedBlanks(): Pick<
   }
 }
 
-/** The document a payload carries: the active pattern and everything shaping it. */
-export function projectForSharing(project: ProjectState): ProjectState {
+/**
+ * The document a link carries: the selected slot, as slot A, and everything
+ * shaping how it sounds. One slot only until links carry the bank (EB3-08);
+ * the recipient's reader fills B–D empty.
+ */
+export function projectForLink(project: ProjectState): ProjectState {
   const pattern = activePattern(project)
   return {
-    version: PROJECT_STATE_VERSION,
-    patterns: [pattern],
+    ...projectForBundle(project),
+    patterns: [{ ...pattern, name: 'A' }],
     activePatternId: pattern.id,
+  }
+}
+
+/**
+ * The document a bundle carries: the whole bank — all four slots, in their
+ * letters — with the selected slot still selected, and everything shaping how
+ * it sounds. A bundle is the lossless way to send a bank.
+ */
+export function projectForBundle(project: ProjectState): ProjectState {
+  return {
+    version: PROJECT_STATE_VERSION,
+    patterns: project.patterns,
+    activePatternId: project.activePatternId,
     transport: project.transport,
     instrumentSettings: project.instrumentSettings,
     sources: project.sources,
@@ -315,15 +333,26 @@ function isMixer(value: unknown): value is Mixer {
   )
 }
 
+/**
+ * One to four slots, each a whole pattern named by a slot letter, no letter or
+ * id twice — a payload may leave empty slots out, and the reader fills them.
+ */
+function isBank(value: unknown, activePatternId: unknown): value is Pattern[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > SLOT_LETTERS.length) return false
+  if (!value.every((pattern) => isPattern(pattern) && isSlotLetter(pattern.name))) return false
+  const patterns = value as Pattern[]
+  return (
+    new Set(patterns.map((pattern) => pattern.name)).size === patterns.length &&
+    new Set(patterns.map((pattern) => pattern.id)).size === patterns.length &&
+    patterns.some((pattern) => pattern.id === activePatternId)
+  )
+}
+
 export function isSharedProject(value: unknown): value is ProjectState {
   return (
     isRecord(value) &&
     value.version === PROJECT_STATE_VERSION &&
-    Array.isArray(value.patterns) &&
-    value.patterns.length === 1 &&
-    isPattern(value.patterns[0]) &&
-    typeof value.activePatternId === 'string' &&
-    value.activePatternId === value.patterns[0].id &&
+    isBank(value.patterns, value.activePatternId) &&
     isRecord(value.transport) &&
     isFiniteNumber(value.transport.bpm) &&
     value.transport.bpm >= MIN_BPM &&
@@ -367,5 +396,7 @@ export function readSharedDocument(document: unknown): ProjectState | null {
   // thing that narrows it — migration hands back the current version by
   // assertion, not by checking.
   const project: unknown = { ...migrated, ...recipientOwnedBlanks() }
-  return isSharedProject(project) ? project : null
+  if (!isSharedProject(project)) return null
+  // A payload may carry fewer than four slots; the deck always runs four.
+  return { ...project, patterns: bankWithSlots(project.patterns) }
 }

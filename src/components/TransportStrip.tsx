@@ -3,6 +3,8 @@ import { MAX_BPM, MIN_BPM } from '../audio/engine'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { SWING_PARAM, swingToPercent, type TransportParamId } from '../model/transport'
 import { Knob } from './Knob'
+import type { BankSlot } from '../model/bank'
+import { PatternBank } from './PatternBank'
 
 interface TransportStripProps {
   isPlaying: boolean
@@ -19,6 +21,10 @@ interface TransportStripProps {
   onBpmChange: (bpm: number) => void
   /** Called with the knob's own reading, in percent — the Transport stores the fraction. */
   onSwingChange: (id: TransportParamId, percent: number) => void
+  /** The pattern bank's four slots, A–D. */
+  slots: readonly BankSlot[]
+  selectedSlotId: string
+  onSelectSlot: (slotId: string) => void
 }
 
 /**
@@ -27,8 +33,10 @@ interface TransportStripProps {
  * groove never means scrolling back up from the bass or the stab. It is its
  * own deck section, with a heading and a skip link like every other block.
  *
- * Kept to one slim row on desktop, which leaves room at its right-hand end for
- * the pattern bank's slots, Copy and Clear (EB3-07a).
+ * Kept to one slim row on desktop, with the pattern bank's slots at its
+ * right-hand end. Being sticky, the strip is also where the deck says when the
+ * slot being edited is not the one being heard: the notice hangs under it and
+ * is written from rAF by `useSlotLights`, never rendered by React.
  */
 function Transport({
   isPlaying,
@@ -40,6 +48,9 @@ function Transport({
   onTogglePlay,
   onBpmChange,
   onSwingChange,
+  slots,
+  selectedSlotId,
+  onSelectSlot,
 }: TransportStripProps) {
   return (
     <section
@@ -98,7 +109,9 @@ function Transport({
             onChange={onSwingChange}
           />
         </div>
+        <PatternBank slots={slots} selectedId={selectedSlotId} onSelect={onSelectSlot} />
       </div>
+      <p className="bank-notice" data-bank-notice="" hidden />
     </section>
   )
 }

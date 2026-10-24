@@ -3,7 +3,7 @@
 > Track: v3.0 · Slice 7a of 15
 > Blocked by: EB3-00 (step resolution), EB3-02 (schema chain: v13 follows v12), EB3-03b (slots live in the transport strip)
 > Blocks: EB3-07b, EB3-08, EB3-09a (schema chain)
-> Branch: `feat/pattern-bank`
+> Branch: `feat/acid-groove-07a-pattern-bank`
 > Schema: **v13**
 > Spec stories: 47–55, 61–65, 70–71; spec "Pattern bank" and "Queued bank switch"
 
@@ -62,25 +62,78 @@ recipient). Bundles already carry all four.
 
 ## Acceptance criteria
 
-- [ ] Four slots A–D appear in the transport strip; B–D empty on a new project,
-      A holds the demo
-- [ ] Stopped: pressing a slot switches grid and sound at once
-- [ ] Playing: pressing a slot shows its grid immediately but the sound switches
+- [x] Four slots A–D appear in the transport strip; B–D empty on a new project,
+      A holds the demo — `PatternBank` in `TransportStrip`; `createDemoProjectState`
+      builds the bank with `createBank` (`bank.test.ts`, `projectState.test.ts`,
+      mounted in `App.test.ts` "puts four slots in the transport strip")
+- [x] Stopped: pressing a slot switches grid and sound at once — `selectSlot` is a
+      plain document edit; `engine.setBank` puts the playing slot on the selected
+      one while stopped (`engine.test.ts` "switches at once while stopped";
+      `App.test.ts` "switches grid and sound at once")
+- [x] Playing: pressing a slot shows its grid immediately but the sound switches
       only at the next step 0; queued blinks, playing stays lit; re-pressing the
-      playing slot cancels; pressing another replaces the queue
-- [ ] Tempo, swing, mixer, patches, master, FX and pad sounds are unchanged by a
-      switch
-- [ ] v12 documents migrate to v13 with the old pattern as A (same id) and play
-      identically; selected slot persists across reload
-- [ ] Lesson goals evaluate the selected slot; an incoming bundle's lessons are
-      inherited across all slots; opening Deck satisfies no lesson in any slot
-- [ ] Validator accepts 1–4 unique-letter slots and rejects malformed banks; old
-      links/bundles open as slot A
-- [ ] Slot names announce state; a11y suite passes; no audio-clock re-renders
-      (LEDs driven by rAF)
-- [ ] In-browser: queue B mid-bar at 130 BPM — the switch lands exactly on the
-      next downbeat across three trials, transport never stalls
-- [ ] `GLOSSARY.md` updated
+      playing slot cancels; pressing another replaces the queue — `resolveStep`
+      moves the playing slot only on step 0 (`stepResolution.test.ts` "the queued
+      bank switch"); `engine.test.ts` covers cancel, replace ("replaces a queued
+      slot with the next one pressed") and stop; the engine records the switch
+      on the audio clock so the LED
+      changes when the bar is heard (`engine.test.ts`); `useSlotLights` writes
+      `data-playing`/`data-queued` and the spoken state from rAF (`App.test.ts`)
+- [x] Tempo, swing, mixer, patches, master, FX and pad sounds are unchanged by a
+      switch — `selectSlot` hands back transport, mixer, instrumentSettings and
+      sources by reference (`projectState.test.ts`)
+- [x] v12 documents migrate to v13 with the old pattern as A (same id) and play
+      identically; selected slot persists across reload — `migrateV12ToV13`
+      (`projectState.test.ts`); persistence mounted in `App.test.ts` and checked
+      in-browser (slot B's programming and the selected slot survived a reload)
+- [x] Lesson goals evaluate the selected slot; an incoming bundle's lessons are
+      inherited across all slots; opening Deck satisfies no lesson in any slot —
+      `goalContextFor` reads the selected slot; `slotsAlreadyMeeting` at both
+      arrival paths records, per lesson, every slot that arrived meeting it, and
+      a slot is released only when *it* stops meeting the goal — so B → A → B
+      cannot launder credit, while the same lesson built in the learner's own
+      empty slot earns at once (story 63). `arc.test.ts`; `App.test.ts` "holds
+      back a lesson any slot of an incoming bank already meets" (fails without
+      the rule) and "still credits a lesson the learner builds in a slot of
+      their own"; every slot × every lesson in `lessons.test.ts`
+- [x] Validator accepts 1–4 unique-letter slots and rejects malformed banks; old
+      links/bundles open as slot A — `isSharedProject` + `bankWithSlots` in
+      `readSharedDocument` (`share.test.ts`: partial bank filled by letter; empty,
+      five, duplicate letter, unknown letter, old name, duplicate id and stray
+      `activePatternId` all rejected; v12 link and v6 bundle open as A). Links
+      carry the selected slot as A (`projectForLink`); bundles carry all four
+      (`projectForBundle`)
+- [x] Slot names announce state; a11y suite passes; no audio-clock re-renders
+      (LEDs driven by rAF) — names like "Slot B, selected, queued, empty" (React
+      owns selected/empty, rAF owns playing/queued in a childless span);
+      `a11y.test.ts` and `render.test.ts` pass; the bank prop is memoized on each
+      slot's id, letter and emptiness
+- [x] In-browser: queue B mid-bar at 130 BPM — the switch lands exactly on the
+      next downbeat across three trials, transport never stalls — dev build,
+      B holding a kick on step 1 and the demo in A: pressed on step 6 three times,
+      the first kick landed on ticks 6912 / 8448 / 9984, each exactly the next bar
+      line; the queued blink showed within one frame (~15 ms); the LED moved when
+      the audio clock reached the bar; over 3 s the transport advanced 1400 ticks
+      against 1401 expected from the audio clock with no repeated sample; zero
+      console errors. `npm run test:e2e` (fold, reflow at 390 and 320, wide) green;
+      at 320×640 the queued notice measured 284px wide (13–297px), no sideways
+      scroll
+- [x] `GLOSSARY.md` updated — Bank, Slot, Selected slot, Playing slot, Queued
+      switch, Empty slot shipped; Pattern, ProjectState (v13), Transport strip,
+      Bundle, Share link, Share validator, Inheritance and Demo rule updated;
+      Copy/Clear stay tagged for EB3-07b
+
+**Note (review):** a press in the ~100 ms look-ahead just before the bar
+cannot cancel a switch the sequencer has already scheduled; the engine now
+shows the pressed slot queued behind it instead of claiming the cancel took
+(`engine.test.ts` "owns up to a switch already scheduled"). Until EB3-08,
+**Keep this beat** on a link replaces the recipient's whole bank with the one
+slot the link carried (their B–D empty), which is where the bank-by-letter rule
+lands once links carry every slot.
+
+**Note:** a bundle file is now named `Elevated BPM beat.ebpm` rather than after
+the pattern, since it carries the whole bank and a pattern's name is now its
+slot letter.
 
 ## Testing decisions
 

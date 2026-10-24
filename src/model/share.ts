@@ -1,4 +1,5 @@
-import { activePattern, PROJECT_STATE_VERSION, type ProjectState } from './projectState'
+import { bankWithSlots } from './bank'
+import { PROJECT_STATE_VERSION, type ProjectState } from './projectState'
 import { PAD_LANES, padAudioState, type AvailableAudio } from './sampler'
 import {
   base64UrlToBytes,
@@ -6,7 +7,7 @@ import {
   compressPayload,
   decompressPayload,
   MALFORMED_SHARE_MESSAGE,
-  projectForSharing,
+  projectForLink,
   readSharedDocument,
   UNSUPPORTED_VERSION_MESSAGE,
 } from './sharePayload'
@@ -42,7 +43,7 @@ function malformedShare(): SharedProjectResult {
 
 /** Build a share URL without disturbing unrelated query parameters. */
 export async function createShareUrl(project: ProjectState, baseUrl: string): Promise<string> {
-  const compressed = await compressPayload(projectForSharing(project))
+  const compressed = await compressPayload(projectForLink(project))
   const url = new URL(baseUrl)
   url.searchParams.set(
     SHARE_QUERY_PARAM,
@@ -53,20 +54,18 @@ export async function createShareUrl(project: ProjectState, baseUrl: string): Pr
 
 /**
  * Put a shared beat on the deck while retaining recipient-only curriculum and
- * preference data. The caller decides whether this preview is ever persisted.
+ * preference data. The shared bank takes the recipient's place slot for slot —
+ * the sender's B is the recipient's B — and the recipient's own bank is theirs
+ * to come back to: the caller decides whether this preview is ever persisted.
  */
 export function projectWithSharedBeat(
   base: ProjectState,
   sharedProject: ProjectState,
 ): ProjectState {
-  const pattern = activePattern(sharedProject)
-  const inactivePatterns = base.patterns.filter(
-    (candidate) => candidate.id !== base.activePatternId && candidate.id !== pattern.id,
-  )
   return {
     ...base,
-    patterns: [...inactivePatterns, pattern],
-    activePatternId: pattern.id,
+    patterns: bankWithSlots(sharedProject.patterns),
+    activePatternId: sharedProject.activePatternId,
     transport: sharedProject.transport,
     instrumentSettings: sharedProject.instrumentSettings,
     sources: sharedProject.sources,

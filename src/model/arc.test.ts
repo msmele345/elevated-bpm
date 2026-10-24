@@ -7,12 +7,16 @@ import {
   goalContextFor,
   isFinalArcLesson,
   lessonsAlreadyMet,
+  slotsAlreadyMeeting,
   nextUnfinishedLessonId,
 } from './arc'
 import { parseLesson, type Lesson } from './lesson'
 import { createInitialPattern, toggleStep } from './pattern'
 import {
+  activePattern,
   createInitialProjectState,
+  cycleActivePatternStep,
+  selectSlot,
   setTransportBpm,
   setTransportSwing,
   type LessonProgress,
@@ -133,6 +137,29 @@ describe('lessonsAlreadyMet', () => {
 
   it('names nothing for a beat that carries none of the arc work', () => {
     expect(lessonsAlreadyMet(mixedArc, { pattern: createInitialPattern() })).toEqual(new Set())
+  })
+})
+
+describe('goals and the pattern bank', () => {
+  /** A fresh bank with a kick on step 1 of slot B only, and slot `selected` selected. */
+  function kickInB(selected: number) {
+    const fresh = createInitialProjectState()
+    const inB = cycleActivePatternStep(selectSlot(fresh, fresh.patterns[1].id), 'kick', 0)
+    return selectSlot(inB, inB.patterns[selected].id)
+  }
+
+  it('evaluates goals against the selected slot', () => {
+    expect(activePattern(kickInB(1)).name).toBe('B')
+    expect(lessonsAlreadyMet(ARC, goalContextFor(kickInB(1)))).toEqual(new Set(['one', 'two', 'three']))
+    expect(lessonsAlreadyMet(ARC, goalContextFor(kickInB(0)))).toEqual(new Set())
+  })
+
+  it('names, per lesson, every slot of an arriving bank that already satisfies it', () => {
+    const bank = kickInB(0)
+    expect(slotsAlreadyMeeting(ARC, bank)).toEqual(
+      new Map(ARC.map((lesson) => [lesson.id, new Set([bank.patterns[1].id])])),
+    )
+    expect(slotsAlreadyMeeting(ARC, createInitialProjectState())).toEqual(new Map())
   })
 })
 

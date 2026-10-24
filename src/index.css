@@ -953,6 +953,136 @@ body::before {
   color: var(--quad-2);
 }
 
+/* ── Pattern bank: slots A–D at the strip's right-hand end ─────────── */
+/* Four keys pressed from the step's materials. Selected is a lit letter and a
+   ring (React, aria-pressed); playing is the run-green LED and queued its
+   amber blink — both written from rAF by useSlotLights, never React. */
+.bank {
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.bank-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: 30px;
+  height: 36px;
+  padding: 4px 0 3px;
+  border: 1px solid #000;
+  border-radius: 5px;
+  background: var(--key-face);
+  box-shadow: var(--key-raised);
+  color: var(--ink-dim);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.78rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 60ms ease, box-shadow 60ms ease;
+}
+
+.bank-slot:hover {
+  background: var(--key-face-hover);
+}
+
+.bank-slot:active {
+  transform: translateY(1px);
+  box-shadow: var(--key-pressed);
+}
+
+.bank-slot:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* An empty slot reads quieter than one holding a pattern. */
+.bank-slot[data-empty] .bank-slot-letter {
+  opacity: 0.55;
+}
+
+.bank-slot[aria-pressed='true'] {
+  color: var(--quad-2);
+  box-shadow:
+    var(--key-raised),
+    0 0 0 1px color-mix(in srgb, var(--quad-2) 60%, transparent);
+}
+
+.bank-slot[aria-pressed='true'] .bank-slot-letter {
+  opacity: 1;
+  text-shadow: 0 0 8px rgba(255, 210, 77, 0.55);
+}
+
+.bank-slot-led {
+  width: 12px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--go) 12%, #101113);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.bank-slot[data-playing] .bank-slot-led {
+  background: var(--go);
+  box-shadow:
+    0 0 8px var(--go),
+    0 0 16px rgba(77, 255, 106, 0.5);
+}
+
+.bank-slot[data-queued] .bank-slot-led {
+  background: var(--quad-2);
+  box-shadow: 0 0 8px var(--quad-2);
+  animation: bank-queued-blink 0.5s steps(1, end) infinite;
+}
+
+@keyframes bank-queued-blink {
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* Editing one slot while another is heard: a tab hanging under the sticky
+   strip says so wherever the page is scrolled, and every step grid carries a
+   dashed edge — absolutely placed and an outline, so neither moves a pixel of
+   the deck when the queue comes and goes. */
+.bank-notice {
+  position: absolute;
+  top: 100%;
+  right: 14px;
+  margin: 0;
+  padding: 3px 10px 4px;
+  border: 1px solid #000;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background: var(--panel);
+  color: var(--quad-2);
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.bank-notice[hidden] {
+  display: none;
+}
+
+.deck[data-bank-queued] .step-grid {
+  outline: 1px dashed color-mix(in srgb, var(--quad-2) 55%, transparent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A steady amber instead of a blink: still distinct from playing green. */
+  .bank-slot[data-queued] .bank-slot-led {
+    animation: none;
+  }
+}
+
 /* ── Master strip: main out — scope beside the two macro knobs ─────── */
 /* The mixer surface of the strip: the display window grows, the macros sit
    beside it like a mixer's master section. The knobs reuse the shared knob
@@ -3644,8 +3774,24 @@ body::before {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       'play tempo bpm'
-      'swing swing swing';
+      'swing bank bank';
     gap: 6px 10px;
+  }
+
+  .bank {
+    grid-area: bank;
+    justify-self: end;
+    align-self: center;
+  }
+
+  /* The second row is sized to the Swing knob, so the keys sit lower there. */
+  .bank-slot {
+    height: 28px;
+    padding: 3px 0 2px;
+  }
+
+  .bank-notice {
+    right: 10px;
   }
 
   .transport-play {

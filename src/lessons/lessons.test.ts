@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { detectLessonCompletion, goalContextFor, lessonsAlreadyMet } from '../model/arc'
+import {
+  detectLessonCompletion,
+  goalContextFor,
+  lessonsAlreadyMet,
+  slotsAlreadyMeeting,
+} from '../model/arc'
 import { DECK_PARAM_IDS } from '../model/deckParams'
 import {
   isGoalMet,
@@ -13,7 +18,7 @@ import {
 import { NOTE_LANES } from '../model/note'
 import { progressChip, progressChips } from '../model/progressChip'
 import { createDemoPattern, createInitialPattern } from '../model/pattern'
-import { createDemoProjectState } from '../model/projectState'
+import { createDemoProjectState, selectSlot } from '../model/projectState'
 import { MAX_SLICE_SECONDS } from '../model/region'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -499,6 +504,24 @@ describe('the curriculum', () => {
     for (const lesson of ALL_LESSONS) {
       expect([lesson.id, isGoalMet(lesson, openingContext())]).toEqual([lesson.id, false])
     }
+  })
+
+  it('opens with no slot of the bank satisfying any lesson, on any track', () => {
+    // Slot A holds the demo and B–D are empty — but a learner can select any of
+    // them, so the demo rule has to hold of every slot, not just the first.
+    const opening = createDemoProjectState()
+    expect(opening.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    for (const slot of opening.patterns) {
+      const context = goalContextFor(selectSlot(opening, slot.id))
+      for (const lesson of ALL_LESSONS) {
+        expect([slot.name, lesson.id, isGoalMet(lesson, context)]).toEqual([
+          slot.name,
+          lesson.id,
+          false,
+        ])
+      }
+    }
+    expect(slotsAlreadyMeeting(ALL_LESSONS, opening)).toEqual(new Map())
   })
 
   it('names only knobs the deck actually has, on every track', () => {

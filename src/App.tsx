@@ -13,7 +13,9 @@ import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
 import { TransportStrip } from './components/TransportStrip'
+import { bankSlots, sameBankSlots, type BankSlot } from './model/bank'
 import { usePlayhead } from './hooks/usePlayhead'
+import { useSlotLights } from './hooks/useSlotLights'
 import { useRoomLight } from './hooks/useRoomLight'
 import { useSpotlightScroll } from './hooks/useSpotlightScroll'
 import {
@@ -22,7 +24,7 @@ import {
   arcEntries,
   detectLessonCompletion,
   goalContextFor,
-  lessonsAlreadyMet,
+  slotsAlreadyMeeting,
   nextUnfinishedLessonId,
 } from './model/arc'
 import type { BassParamId } from './model/bass'
@@ -51,6 +53,7 @@ import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activeLessonIdFor,
   activePattern,
+  selectSlot,
   addSource,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
@@ -263,10 +266,10 @@ export default function App() {
   const chordRef = useRef(NO_CHORD_PLAY)
   const [chordPlay, setChordPlay] = useState(NO_CHORD_PLAY)
   // Goals describe what the user did, so work that arrives already done in an
-  // incoming shared beat is inherited, not earned: these lessons are held back
-  // from completion until their goal stops being met and is built again. A
-  // session observation like the others — never persisted.
-  const inheritedLessonsRef = useRef<Set<string>>(new Set())
+  // incoming shared beat is inherited, not earned: each lesson is held back in
+  // the slots it arrived met in, until that slot's goal stops being met and is
+  // built again. A session observation like the others — never persisted.
+  const inheritedLessonsRef = useRef<Map<string, Set<string>>>(new Map())
   // The playhead sweeps every grid on the deck — drums, bass, and stabs — so
   // its root is the deck, not one panel.
   const deckRef = useRef<HTMLElement>(null)
@@ -402,6 +405,7 @@ export default function App() {
   const canShowMe = !spotlitResting && activeLesson.spotlight.length > 0
 
   usePlayhead(deckRef, isPlaying)
+  useSlotLights(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
   const { requestSpotlightScroll, showSpotlight } = useSpotlightScroll(
     deckRef,
@@ -426,7 +430,7 @@ export default function App() {
       if (incoming.status === 'ready') {
         // Every registered track, not only the techno one: a beat can arrive
         // carrying sampling work as readily as it carries a kick pattern.
-        inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+        inheritedLessonsRef.current = slotsAlreadyMeeting(ALL_LESSONS, next)
       }
       try {
         // Orphans are collected against the user's *own* document, never the
@@ -521,9 +525,13 @@ export default function App() {
       goalContext,
     )
     if (!completion.justCompleted) {
-      // The goal is not met right now, so whatever the shared beat brought
-      // with it is gone: from here the lesson is the user's to earn.
-      inheritedLessonsRef.current.delete(activeLesson.id)
+      // The goal is not met in this slot right now, so whatever the shared
+      // beat brought with it here is gone: from here this slot is the
+      // learner's to earn. Only this slot — a shared slot the learner is not
+      // looking at still holds the sender's work.
+      const heldIn = inheritedLessonsRef.current.get(activeLesson.id)
+      heldIn?.delete(project.activePatternId)
+      if (heldIn?.size === 0) inheritedLessonsRef.current.delete(activeLesson.id)
       // An earned card already reads as a finished checklist; saying one of
       // its chips is done again would be chatter.
       if (continuing && !lessonCompleted) {
@@ -533,7 +541,7 @@ export default function App() {
       return
     }
     // Met, but only because the beat arrived that way — hold the credit.
-    if (inheritedLessonsRef.current.has(activeLesson.id)) return
+    if (inheritedLessonsRef.current.get(activeLesson.id)?.has(project.activePatternId)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
     // Completion is said instead of the chip that completed it, never as well.
     // The celebration is for the same moment, so it is gated the same way.
@@ -542,7 +550,16 @@ export default function App() {
       setCelebratingLessonId(activeLesson.id)
     }
     if (completion.showFinale) setFinaleArcId(activeArc.id)
-  }, [goalContext, lessonChips, activeArc, activeLesson, lessonCompleted, hydrated, sharePreview])
+  }, [
+    goalContext,
+    lessonChips,
+    activeArc,
+    activeLesson,
+    lessonCompleted,
+    hydrated,
+    sharePreview,
+    project.activePatternId,
+  ])
 
   // A celebration has its moment, then the card shrinks to the completed strip.
   // A capstone's finale covers the deck, so the moment starts once it closes.
@@ -553,11 +570,25 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [celebratingLessonId, finaleArcId])
 
-  // Keep the audio engine pointed at the latest pattern; playback reads it
-  // live on each scheduled 16th, so edits are audible immediately.
+  // Keep the audio engine pointed at the latest bank and selected slot;
+  // playback reads them live on each scheduled 16th, so edits to the playing
+  // slot are audible immediately and a newly selected slot comes in at the bar.
+  const bank = project.patterns
+  const selectedSlotId = project.activePatternId
   useEffect(() => {
-    engine.setPattern(pattern)
-  }, [pattern])
+    engine.setBank(bank, selectedSlotId)
+  }, [bank, selectedSlotId])
+
+  // The slot buttons need each slot's letter and whether it is empty, handed
+  // back as the same array while those are unchanged, so a step tap that
+  // leaves every slot as full or as empty as it was leaves the memoized
+  // transport strip alone.
+  const shownSlotsRef = useRef<BankSlot[]>([])
+  const slots = useMemo(() => {
+    const next = bankSlots(bank)
+    if (!sameBankSlots(next, shownSlotsRef.current)) shownSlotsRef.current = next
+    return shownSlotsRef.current
+  }, [bank])
 
   // Same for the mixer: the engine reads mute/solo per 16th and per live note,
   // so toggling a voice silences or solos it on the next step with no restart,
@@ -628,6 +659,10 @@ export default function App() {
   // handed to are memoized: a fresh closure is a changed prop, and a changed
   // prop would rebuild seven lanes and a keyboard on each pointer move of a
   // dragged knob — the dropped frame this deck must not have while playing.
+  const handleSelectSlot = useCallback((slotId: string) => {
+    setProject((p) => selectSlot(p, slotId))
+  }, [])
+
   const handleCycleStep = useCallback((laneId: LaneId, stepIndex: number) => {
     setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
   }, [])
@@ -1281,7 +1316,7 @@ export default function App() {
     // A bundle carries real audio, so without this a recipient would arrive
     // with "build your own kit" already earned — the most obviously unearned
     // completion the product could hand out.
-    inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+    inheritedLessonsRef.current = slotsAlreadyMeeting(ALL_LESSONS, next)
     setSharePreview({ recipientProject })
     setProject(next)
     engine.setBpm(next.transport.bpm)
@@ -1322,7 +1357,7 @@ export default function App() {
     engine.setBpm(sharePreview.recipientProject.transport.bpm)
     setProject(sharePreview.recipientProject)
     // The shared beat is off the deck, so nothing is inherited from it any more.
-    inheritedLessonsRef.current = new Set()
+    inheritedLessonsRef.current = new Map()
     setSharePreview(null)
     removeShareFromAddress()
     // A bundle put audio on the pads, so giving the document back is only half
@@ -1417,6 +1452,9 @@ export default function App() {
         onTogglePlay={handleTogglePlay}
         onBpmChange={handleBpmChange}
         onSwingChange={handleSwingChange}
+        slots={slots}
+        selectedSlotId={selectedSlotId}
+        onSelectSlot={handleSelectSlot}
       />
 
       <LessonArc

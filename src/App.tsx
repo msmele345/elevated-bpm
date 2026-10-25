@@ -85,11 +85,12 @@ import {
   type ProjectState,
 } from './model/projectState'
 import {
-  createShareUrl,
+  createShareLink,
   projectWithSharedBeat,
   readSharedBeat,
   sharedAudioNotice,
   SHARE_QUERY_PARAM,
+  type ShareLink,
 } from './model/share'
 import { createBundle, padsNeedingAudio, readBundle } from './model/bundle'
 import {
@@ -238,7 +239,7 @@ export default function App() {
   // Assembling a bundle reads every pad's audio back out of storage, so unlike
   // a link it is not instant and the action says so while it runs.
   const [isBundling, setIsBundling] = useState(false)
-  const [sharedUrl, setSharedUrl] = useState<string | null>(null)
+  const [shareLink, setShareLink] = useState<ShareLink | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   // A session-only graduation overlay, holding *which* track is being
   // celebrated so its own copy can be shown. It appears on the transition into
@@ -474,7 +475,7 @@ export default function App() {
   // Once the deck changes, an older generated link no longer describes what
   // is on it. Clear the stale result; the user can press Share again.
   useEffect(() => {
-    setSharedUrl(null)
+    setShareLink(null)
     setShareCopied(false)
   }, [project])
 
@@ -1236,11 +1237,17 @@ export default function App() {
     setIsSharing(true)
     setOutgoingShareError(null)
     try {
-      const url = await createShareUrl(project, window.location.href)
-      setSharedUrl(url)
+      // A bank too big for a link falls back to the slot being heard — read
+      // from the engine, because mid-queue that is not the one on the grid.
+      const link = await createShareLink(
+        project,
+        window.location.href,
+        engine.getSlotLights().playing ?? project.activePatternId,
+      )
+      setShareLink(link)
       if (navigator.clipboard?.writeText) {
         try {
-          await navigator.clipboard.writeText(url)
+          await navigator.clipboard.writeText(link.url)
           setShareCopied(true)
         } catch {
           // Clipboard permission is optional: the rendered URL remains
@@ -1437,7 +1444,8 @@ export default function App() {
           shareReady={hydrated}
           isSharing={isSharing}
           isBundling={isBundling}
-          sharedUrl={sharedUrl}
+          sharedUrl={shareLink?.url ?? null}
+          onlySlot={shareLink?.onlySlot ?? null}
           copied={shareCopied}
           strip={incomingShareError ?? outgoingShareError ?? (sharePreview ? 'preview' : null)}
           onShare={handleShare}

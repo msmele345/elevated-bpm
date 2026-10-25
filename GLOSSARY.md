@@ -7,7 +7,7 @@ conversations use, and exactly what each one means here. Last reviewed
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
 spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow,
-EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear) have shipped.
+EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links) have shipped.
 
 ## How to use and maintain this file
 
@@ -415,16 +415,21 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   Code: `slotsAlreadyMeeting`, `heldAfterCopy`.
 - **Link degradation.** A share link says plainly what it couldn't carry.
   Audio never travels, so pads arrive silent with a notice to ask for a bundle.
-  [v3 spec] Over 2,000 characters, a link carries only the playing slot and says so.
-  Code: `sharedAudioNotice`.
+  A bank too big for 2,000 characters goes as the playing slot alone (the selected
+  one when stopped), under its own letter, and the Share menu says "This link holds
+  pattern B only — export a bundle to send all four."
+  Code: `sharedAudioNotice`, `ShareLink.onlySlot`.
 - **Preview (preview-and-confirm).** An incoming link or bundle plays in memory
   with autosave suspended. **Keep this beat** saves it; **Back to my project**
   restores the recipient's document exactly. Code: `projectWithSharedBeat`.
 - **Share link (share payload).** `?p=` carrying ProjectState as JSON, then gzip, then
-  base64url, kept under 2,000 characters. Until EB3-08 a link carries only the selected
-  slot, which opens as the recipient's slot A; a link from before the bank opens as slot A
-  too. Recipient-owned fields (progress, prefs) are
-  blanked. Code: `createShareUrl`, `projectForLink`, `readSharedBeat`, `PRACTICAL_SHARE_URL_LIMIT`.
+  base64url, kept under 2,000 characters. A link carries the bank: every slot with
+  programming under its own letter, plus the selected slot even when empty, and the
+  reader fills the letters left out with empty slots, so the sender's B is the
+  recipient's B. Over the limit it falls back to one slot (see Link degradation). A link
+  from before the bank opens as slot A. Recipient-owned fields (progress, prefs) are
+  blanked. Code: `createShareLink`, `ShareLink`, `createShareUrl`, `projectForLink`, `readSharedBeat`,
+  `PRACTICAL_SHARE_URL_LIMIT`.
 - **Share menu (Share ▾).** The header button that unfolds the three ways a
   beat leaves or arrives: Share beat (a link), Export bundle and Open a bundle,
   with the copy explaining each. A disclosure, not an ARIA menu; Escape or a

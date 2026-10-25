@@ -22,7 +22,6 @@ import {
   createDemoProjectState,
   cycleActivePatternStep,
   enterLesson as enterLessonIn,
-  PROJECT_STATE_VERSION,
   selectSlot,
   setSamplerPadFit,
   setTransportBpm,
@@ -46,8 +45,9 @@ import { RECORDER_UNAVAILABLE } from './audio/microphone'
 import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
 import { sliceKey } from './model/slice'
 import { createBundle, readBundle } from './model/bundle'
-import { createShareUrl, readSharedBeat } from './model/share'
-import { bytesToBase64Url, compressPayload, projectForBundle } from './model/sharePayload'
+import { createShareUrl, PRACTICAL_SHARE_URL_LIMIT, readSharedBeat } from './model/share'
+import { NOTE_LANES } from './model/note'
+import { isPatternEmpty } from './model/bank'
 import type { LaneId, PadLane, Pattern } from './model/types'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import { loadSlice, loadSource, saveSlice, saveSource } from './storage/sampleStore'
@@ -291,6 +291,36 @@ beforeEach(async () => {
   window.history.replaceState(null, '', '/')
   await deleteProjectDatabase()
 })
+
+/**
+ * Every slot densely programmed and unrelated to the others — steps, accents
+ * and pitches scattered by seed — so the bank is too big for one link.
+ */
+function withDenseUnrelatedSlots(project: ProjectState): ProjectState {
+  let state = 7
+  const roll = () => (state = (state * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+  const drumStep = () => {
+    const r = roll()
+    return { on: r < 0.6, accent: r < 0.3 }
+  }
+  const patterns = project.patterns.map((pattern) => ({
+    ...pattern,
+    lanes: pattern.lanes.map((lane) => ({ ...lane, steps: lane.steps.map(drumStep) })),
+    padLanes: pattern.padLanes.map((lane) => ({ ...lane, steps: lane.steps.map(drumStep) })),
+    noteLanes: pattern.noteLanes.map((lane) => {
+      const { minPitch, maxPitch } = NOTE_LANES.find((spec) => spec.id === lane.id)!
+      return {
+        ...lane,
+        steps: lane.steps.map(() => ({
+          on: roll() < 0.7,
+          pitch: minPitch + Math.floor(roll() * (maxPitch - minPitch + 1)),
+          length: 1 + Math.floor(roll() * 4),
+        })),
+      }
+    }),
+  }))
+  return { ...project, patterns }
+}
 
 /** Open the header's Share menu, unless it is already open. */
 function openShareMenu(): void {
@@ -866,10 +896,12 @@ describe('App sharing workflow', () => {
     await new Promise((resolve) => setTimeout(resolve, 450))
   })
 
-  it('persists an incoming beat only after the recipient explicitly keeps it', async () => {
+  it('persists an incoming bank only after the recipient explicitly keeps it', async () => {
     const recipient = cycleActivePatternStep(createInitialProjectState(), 'kick', 2)
+    // Slots A and D programmed, B and C empty, D selected.
+    const opening = cycleActivePatternStep(createInitialProjectState(), 'kick', 8)
     const sender = setTransportBpm(
-      cycleActivePatternStep(createInitialProjectState(), 'kick', 8),
+      cycleActivePatternStep(selectSlot(opening, opening.patterns[3].id), 'kick', 12),
       145,
     )
     await saveProjectState(recipient)
@@ -883,7 +915,10 @@ describe('App sharing workflow', () => {
 
     await waitFor(() => expect(screen.queryByText('Shared beat preview')).toBeNull())
     const kept = (await loadProjectState())!
-    expect(activePattern(kept)).toEqual(activePattern(sender))
+    expect(kept.patterns[0]).toEqual(sender.patterns[0])
+    expect(kept.patterns[3]).toEqual(sender.patterns[3])
+    expect(isPatternEmpty(kept.patterns[1]) && isPatternEmpty(kept.patterns[2])).toBe(true)
+    expect(activePattern(kept).name).toBe('D')
     expect(kept.transport.bpm).toBe(145)
     expect(window.location.search).toBe('')
     await new Promise((resolve) => setTimeout(resolve, 450))
@@ -963,6 +998,38 @@ describe('App sharing workflow', () => {
       expect(activePattern(shared.project)).toEqual(activePattern(source))
       expect(shared.project.transport.bpm).toBe(139)
     }
+    // The whole bank fit, so there is nothing to own up to.
+    expect(screen.queryByText(/This link holds pattern/)).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 450))
+  })
+
+  it('tells the sender a bank too big for a link went as the playing slot alone', async () => {
+    const source = withDenseUnrelatedSlots(createInitialProjectState())
+    await saveProjectState(source)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    // A is selected, but the loop is still sounding C: that is what the sender hears.
+    engineSpies.getSlotLights.mockReturnValue({ playing: source.patterns[2].id, queued: null } as never)
+
+    await hydratedDeck()
+    openShareMenu()
+    fireEvent.click(screen.getByRole('button', { name: 'Share beat' }))
+
+    const copied = await screen.findByText('Share URL copied to your clipboard.')
+    const notice = screen.getByText(
+      'This link holds pattern C only — export a bundle to send all four.',
+    )
+    // Announced with the result it qualifies, not left for the sender to find.
+    expect(notice.closest('[role="status"]')).toBe(copied.closest('[role="status"]'))
+    const url = writeText.mock.calls[0][0] as string
+    expect(url.length).toBeLessThanOrEqual(PRACTICAL_SHARE_URL_LIMIT)
+    const shared = await readSharedBeat(url)
+    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    expect(activePattern(shared.project)).toEqual(source.patterns[2])
+    engineSpies.getSlotLights.mockReturnValue({ playing: null, queued: null })
     await new Promise((resolve) => setTimeout(resolve, 450))
   })
 
@@ -1137,8 +1204,7 @@ describe('App pattern bank', () => {
     let built = selectSlot(sender, sender.patterns[1].id)
     for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
     built = selectSlot(built, built.patterns[0].id)
-    const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
-    window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+    window.history.replaceState(null, '', new URL(await createShareUrl(built, window.location.href)).search)
 
     render(createElement(App))
     await screen.findByText('Shared beat preview')
@@ -1161,8 +1227,7 @@ describe('App pattern bank', () => {
     const sender = createInitialProjectState()
     let built = selectSlot(sender, sender.patterns[1].id)
     for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
-    const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
-    window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+    window.history.replaceState(null, '', new URL(await createShareUrl(built, window.location.href)).search)
 
     render(createElement(App))
     await screen.findByText('Shared beat preview')
@@ -1418,8 +1483,7 @@ describe('App pattern bank', () => {
       const sender = createInitialProjectState()
       let built = selectSlot(sender, sender.patterns[1].id)
       for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
-      const payload = bytesToBase64Url(await compressPayload(projectForBundle(built)))
-      window.history.replaceState(null, '', `/?p=${PROJECT_STATE_VERSION}.${payload}`)
+      window.history.replaceState(null, '', new URL(await createShareUrl(built, window.location.href)).search)
 
       render(createElement(App))
       await screen.findByText('Shared beat preview')

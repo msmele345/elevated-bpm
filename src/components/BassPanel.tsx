@@ -4,6 +4,7 @@ import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
 import { levelParamForVoice, type LevelParamId, type VoiceId } from '../model/mixer'
 import type { NoteLane, NoteLaneId } from '../model/types'
 import { Knob } from './Knob'
+import { NoteFlagRow } from './NoteFlagRow'
 import { NoteRow } from './NoteRow'
 import { PanelTitle } from './PanelTitle'
 import { VoiceMixStrip } from './VoiceMixStrip'
@@ -13,11 +14,14 @@ interface BassPanelProps {
   settings: BassSettings
   /** The active lesson is pointing at the bass note lane. */
   spotlitLane?: boolean
+  /** The active lesson is pointing at the Accent row. */
+  spotlitAccentRow?: boolean
   /** Knob ids the active lesson is pointing at. */
   spotlitParams: string[]
   onToggleStep: (laneId: NoteLaneId, stepIndex: number) => void
   onTranspose: (laneId: NoteLaneId, stepIndex: number, semitones: number) => void
   onResize: (laneId: NoteLaneId, stepIndex: number, steps: number) => void
+  onToggleAccent: (laneId: NoteLaneId, stepIndex: number) => void
   onParamChange: (id: BassParamId, value: number) => void
   /** The bass voice's mixer strip, in the panel header. */
   muted: boolean
@@ -33,9 +37,10 @@ interface BassPanelProps {
 const BASS_LEVEL = levelParamForVoice('bass')
 
 /**
- * The bass instrument's surface: the note lane on top, its filter and envelope
- * knobs below — the 303 layout, and the sound-design vocabulary the curriculum
- * teaches (cutoff, resonance, decay).
+ * The bass instrument's surface: the note lane on top with its Accent row
+ * under it, the filter and envelope knobs below — the 303 layout, and the
+ * sound-design vocabulary the curriculum teaches (cutoff, resonance, decay,
+ * Env Mod).
  *
  * The lane and the knobs both name themselves in their callbacks, so this
  * panel forwards the deck's handlers untouched rather than wrapping them in
@@ -45,10 +50,12 @@ function BassInstrument({
   lane,
   settings,
   spotlitLane = false,
+  spotlitAccentRow = false,
   spotlitParams,
   onToggleStep,
   onTranspose,
   onResize,
+  onToggleAccent,
   onParamChange,
   muted,
   soloed,
@@ -85,6 +92,13 @@ function BassInstrument({
         onTranspose={onTranspose}
         onResize={onResize}
       />
+      <NoteFlagRow
+        lane={lane}
+        flag="accent"
+        label="Accent"
+        spotlit={spotlitAccentRow}
+        onToggle={onToggleAccent}
+      />
       <div className="knob-row">
         {BASS_PARAMS.map((param) => (
           <Knob
@@ -98,7 +112,7 @@ function BassInstrument({
       </div>
       <p className="panel-hint">
         Tap an empty bass step to place and focus a note · ↑↓ transposes (shift for octaves) ·
-        ←→ sets its length · tap a lit note to clear it
+        ←→ sets its length · tap a lit note to clear it · Accent hits a note harder
       </p>
     </section>
   )

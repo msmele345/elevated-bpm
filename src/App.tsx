@@ -70,6 +70,7 @@ import {
   resizeActivePatternNote,
   selectArc,
   setBassParamValue,
+  toggleActivePatternNoteAccent,
   setFxParamValue,
   setMasterParamValue,
   setSamplerPadFit,
@@ -714,6 +715,10 @@ export default function App() {
     },
     [],
   )
+
+  const handleToggleNoteAccent = useCallback((laneId: NoteLaneId, stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteAccent(p, laneId, stepIndex))
+  }, [])
 
   const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
     setProject((p) => setBassParamValue(p, id, value))
@@ -1605,10 +1610,12 @@ export default function App() {
         lane={bassLane}
         settings={bassSettings}
         spotlitLane={spotlitNoteLanes.includes('bass')}
+        spotlitAccentRow={spotlitTarget('accentRow:bass')}
         spotlitParams={spotlitParams}
         onToggleStep={handleToggleNoteStep}
         onTranspose={handleTransposeNote}
         onResize={handleResizeNote}
+        onToggleAccent={handleToggleNoteAccent}
         onParamChange={handleBassParamChange}
         muted={bassMix.muted}
         soloed={bassMix.soloed}

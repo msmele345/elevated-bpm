@@ -29,12 +29,18 @@ export type PadLane = StepLane<PadLaneId>
 
 /**
  * One cell of a note lane: a pitch (MIDI note number) and a length in whole
- * steps, so a note can ring across the 16ths that follow it.
+ * steps, so a note can ring across the 16ths that follow it, plus the two 303
+ * flags. Both note lanes carry the flags, but only the bass shows and plays
+ * them; like pitch and length, a flag is kept on a step whose note is off.
  */
 export interface NoteStep {
   on: boolean
   pitch: number
   length: number
+  /** Glide into the next note without restarting it (EB3-09b gives it sound). */
+  slide: boolean
+  /** Louder, with a stronger and faster filter "wow" — not the drum accent. */
+  accent: boolean
 }
 
 export type NoteLaneId = 'bass' | 'stab'

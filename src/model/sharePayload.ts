@@ -202,7 +202,10 @@ function isNoteStep(value: unknown, minPitch: number, maxPitch: number): boolean
     (value.pitch as number) <= maxPitch &&
     Number.isInteger(value.length) &&
     (value.length as number) >= MIN_NOTE_LENGTH &&
-    (value.length as number) <= MAX_NOTE_LENGTH
+    (value.length as number) <= MAX_NOTE_LENGTH &&
+    // Both note lanes carry the 303 flags, whether or not they play them.
+    typeof value.slide === 'boolean' &&
+    typeof value.accent === 'boolean'
   )
 }
 

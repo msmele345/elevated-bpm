@@ -15,8 +15,10 @@ import {
   midiToNoteName,
   noteEventAtStep,
   resizeNoteStep,
+  toggleNoteAccent,
   toggleNoteStep,
   transposeNoteStep,
+  withNoteFlags,
   withNoteLanes,
 } from './note'
 
@@ -52,6 +54,60 @@ describe('createNoteLanes', () => {
   })
 })
 
+describe('303 note flags', () => {
+  it('starts every note step of both lanes with slide and accent off', () => {
+    const pattern = createInitialPattern()
+
+    for (const step of [...bassSteps(pattern), ...stabSteps(pattern)]) {
+      expect(step.slide).toBe(false)
+      expect(step.accent).toBe(false)
+    }
+  })
+
+  it('toggles one note step’s accent and leaves every other step alone', () => {
+    const accented = toggleNoteAccent(toggleNoteStep(createInitialPattern(), 'bass', 2), 'bass', 2)
+
+    expect(bassSteps(accented).map((step) => step.accent)).toEqual(
+      Array.from({ length: STEP_COUNT }, (_, i) => i === 2),
+    )
+    expect(bassSteps(toggleNoteAccent(accented, 'bass', 2))[2].accent).toBe(false)
+  })
+
+  it('keeps an accent set on an empty step, and through switching the note off and on', () => {
+    const parked = toggleNoteAccent(createInitialPattern(), 'bass', 5)
+
+    expect(bassSteps(parked)[5]).toMatchObject({ on: false, accent: true })
+
+    const placed = toggleNoteStep(parked, 'bass', 5)
+    expect(bassSteps(placed)[5]).toMatchObject({ on: true, accent: true })
+    expect(bassSteps(toggleNoteStep(placed, 'bass', 5))[5]).toMatchObject({
+      on: false,
+      accent: true,
+    })
+  })
+
+  it('fills missing flags off on every step of a note lane saved before they existed', () => {
+    const programmed = toggleNoteStep(createInitialPattern(), 'bass', 3)
+    const legacy = {
+      ...programmed,
+      noteLanes: programmed.noteLanes.map((lane) => ({
+        ...lane,
+        steps: lane.steps.map(({ on, pitch, length }) => ({ on, pitch, length })),
+      })),
+    } as Pattern
+
+    const repaired = withNoteFlags(legacy)
+
+    expect(repaired.noteLanes).toEqual(programmed.noteLanes)
+  })
+
+  it('keeps flags a note step already carries when repairing', () => {
+    const accented = toggleNoteAccent(createInitialPattern(), 'bass', 7)
+
+    expect(withNoteFlags(accented)).toEqual(accented)
+  })
+})
+
 describe('withNoteLanes', () => {
   it('adds missing note lanes to a pattern saved before they existed', () => {
     const legacy = { ...createInitialPattern(), noteLanes: [] } as Pattern
@@ -84,7 +140,13 @@ describe('toggleNoteStep', () => {
     const initial = createInitialPattern()
 
     const on = toggleNoteStep(initial, 'bass', 0)
-    expect(bassSteps(on)[0]).toEqual({ on: true, pitch: DEFAULT_PITCH, length: MIN_NOTE_LENGTH })
+    expect(bassSteps(on)[0]).toEqual({
+      on: true,
+      pitch: DEFAULT_PITCH,
+      length: MIN_NOTE_LENGTH,
+      slide: false,
+      accent: false,
+    })
 
     const off = toggleNoteStep(on, 'bass', 0)
     expect(bassSteps(off)[0].on).toBe(false)
@@ -99,6 +161,8 @@ describe('toggleNoteStep', () => {
       on: true,
       pitch: DEFAULT_PITCH + 5,
       length: MIN_NOTE_LENGTH + 1,
+      slide: false,
+      accent: false,
     })
   })
 
@@ -161,7 +225,14 @@ describe('noteEventAtStep', () => {
       midi: DEFAULT_PITCH + 7,
       frequency: midiToFrequency(DEFAULT_PITCH + 7),
       lengthSteps: MIN_NOTE_LENGTH + 2,
+      accent: false,
     })
+  })
+
+  it('carries the note’s accent', () => {
+    const pattern = toggleNoteAccent(toggleNoteStep(createInitialPattern(), 'bass', 6), 'bass', 6)
+
+    expect(noteEventAtStep(pattern, 'bass', 6)!.accent).toBe(true)
   })
 
   it('returns a programmed stab event at the same step boundary as the drums and bass', () => {
@@ -175,6 +246,7 @@ describe('noteEventAtStep', () => {
       midi: STAB_DEFAULT_PITCH + 7,
       frequency: midiToFrequency(STAB_DEFAULT_PITCH + 7),
       lengthSteps: MIN_NOTE_LENGTH,
+      accent: false,
     })
   })
 

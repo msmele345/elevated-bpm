@@ -137,11 +137,31 @@ for (const phone of PHONES) {
       await openFreshDeck(page)
 
       const lanes = page.locator('.step-row')
-      // Five drum lanes, then bass and stab. The fresh deck's pads are empty
-      // cards with no lane (EB3-05).
-      await expect(lanes).toHaveCount(7)
+      // Five drum lanes, then bass, its Accent row and stab. The fresh deck's
+      // pads are empty cards with no lane (EB3-05).
+      await expect(lanes).toHaveCount(8)
 
-      for (let lane = 0; lane < 7; lane++) await expectWrappedLane(lanes.nth(lane))
+      for (let lane = 0; lane < 8; lane++) await expectWrappedLane(lanes.nth(lane))
+    })
+
+    test('the bass Accent row wraps with the lane, each toggle under its note', async ({
+      page,
+    }) => {
+      await openFreshDeck(page)
+
+      const bass = page.getByRole('region', { name: 'Bass Line' })
+      const notes = await stepBoxes(bass.getByRole('group', { name: 'Bass steps' }))
+      const accents = await stepBoxes(bass.getByRole('group', { name: 'Bass accent steps' }))
+      expect(accents).toHaveLength(16)
+      for (let i = 0; i < 16; i++) {
+        expect(Math.abs(accents[i].x - notes[i].x), `accent ${i + 1} under note ${i + 1}`)
+          .toBeLessThanOrEqual(1)
+        expect(Math.abs(accents[i].width - notes[i].width), `accent ${i + 1} width`)
+          .toBeLessThanOrEqual(1)
+      }
+      // Under the lane, not beside it.
+      expect(accents[0].y).toBeGreaterThan(notes[8].y + notes[8].height - 1)
+      expect(await pageOverflow(page)).toBeLessThanOrEqual(0)
     })
 
     test('a pad lane wraps like the rest', async ({ page }) => {

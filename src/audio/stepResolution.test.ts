@@ -5,15 +5,24 @@ import {
   STAB_DEFAULT_PITCH,
   midiToFrequency,
   resizeNoteStep,
+  toggleNoteAccent,
   toggleNoteStep,
   transposeNoteStep,
 } from '../model/note'
 import { createBank } from '../model/bank'
 import { createInitialPattern, cycleStep } from '../model/pattern'
 import type { Mixer } from '../model/mixer'
+import { DEFAULT_BASS_SETTINGS, setBassParam, type BassSettings } from '../model/bass'
 import { secondsPerStep, type TransportSettings } from '../model/transport'
 import type { Pattern } from '../model/types'
-import { ACCENT_GAIN, UNACCENTED_GAIN, resolveStep } from './stepResolution'
+import {
+  ACCENT_ENV_OCTAVES,
+  ACCENT_GAIN,
+  ENV_MOD_MAX_OCTAVES,
+  UNACCENTED_GAIN,
+  bassVoicing,
+  resolveStep,
+} from './stepResolution'
 
 /** Turn steps on (one click) or on+accented (two clicks). */
 function program(
@@ -41,7 +50,7 @@ function resolveAt(
   mixer: Mixer = {},
   transport: TransportSettings = STRAIGHT,
 ) {
-  return resolveStep({ ...soleSlot(pattern), mixer, transport, stepIndex })
+  return resolveStep({ ...soleSlot(pattern), mixer, bass: DEFAULT_BASS_SETTINGS, transport, stepIndex })
 }
 
 /** Just the drum/pad starts of one resolved 16th. */
@@ -193,18 +202,117 @@ describe('resolveStep — note events', () => {
       8,
     )
 
-    expect(resolveStep({ ...soleSlot(bassAndStab), mixer: {}, transport: STRAIGHT, stepIndex: 8 }).notes).toEqual([
+    expect(resolveStep({ ...soleSlot(bassAndStab), mixer: {}, bass: DEFAULT_BASS_SETTINGS, transport: STRAIGHT, stepIndex: 8 }).notes).toEqual([
       {
         laneId: 'bass',
         midi: DEFAULT_PITCH,
         frequency: midiToFrequency(DEFAULT_PITCH),
         lengthSteps: MIN_NOTE_LENGTH,
+        accent: false,
+        voicing: { gain: 1, filterOctaves: 0, filterDecay: DEFAULT_BASS_SETTINGS.decay },
       },
       {
         laneId: 'stab',
         midi: STAB_DEFAULT_PITCH,
         frequency: midiToFrequency(STAB_DEFAULT_PITCH),
         lengthSteps: MIN_NOTE_LENGTH,
+        accent: false,
+      },
+    ])
+  })
+})
+
+describe('bassVoicing — accent and Env Mod', () => {
+  const patch = (fields: Partial<BassSettings>): BassSettings => ({
+    ...DEFAULT_BASS_SETTINGS,
+    ...fields,
+  })
+
+  it('leaves an unaccented note at Env Mod 0 exactly as the bass played before either existed', () => {
+    expect(bassVoicing(patch({ envMod: 0, decay: 0.3 }), false)).toEqual({
+      gain: 1,
+      filterOctaves: 0,
+      filterDecay: 0.3,
+    })
+  })
+
+  it('opens the filter by up to four octaves with Env Mod, decaying with the Decay knob', () => {
+    expect(ENV_MOD_MAX_OCTAVES).toBe(4)
+    expect(bassVoicing(patch({ envMod: 100, decay: 0.4 }), false)).toEqual({
+      gain: 1,
+      filterOctaves: 4,
+      filterDecay: 0.4,
+    })
+    expect(bassVoicing(patch({ envMod: 50 }), false).filterOctaves).toBe(2)
+  })
+
+  it('makes an accented note the drum accent gap louder — about +4 dB, past what velocity can reach', () => {
+    const { gain } = bassVoicing(patch({}), true)
+
+    expect(gain).toBeCloseTo(ACCENT_GAIN / UNACCENTED_GAIN, 10)
+    expect(20 * Math.log10(gain)).toBeGreaterThan(3.5)
+    expect(20 * Math.log10(gain)).toBeLessThan(4.5)
+  })
+
+  it('gives an accent its own filter wow even at Env Mod 0, shorter than the Decay knob', () => {
+    const accented = bassVoicing(patch({ envMod: 0, decay: 0.4 }), true)
+
+    expect(accented.filterOctaves).toBe(ACCENT_ENV_OCTAVES)
+    expect(ACCENT_ENV_OCTAVES).toBeGreaterThan(0)
+    expect(accented.filterDecay).toBeLessThan(0.4)
+  })
+
+  it('stacks the accent’s extra depth on top of Env Mod, and decays faster than an unaccented note', () => {
+    const settings = patch({ envMod: 50, decay: 0.4 })
+    const plain = bassVoicing(settings, false)
+    const accented = bassVoicing(settings, true)
+
+    expect(accented.filterOctaves).toBe(plain.filterOctaves + ACCENT_ENV_OCTAVES)
+    expect(accented.filterDecay).toBeLessThan(plain.filterDecay)
+  })
+})
+
+describe('resolveStep — 303 accent', () => {
+  it('voices an accented bass note from the bass patch', () => {
+    const settings = setBassParam(DEFAULT_BASS_SETTINGS, 'envMod', 50)
+    const pattern = toggleNoteAccent(toggleNoteStep(createInitialPattern(), 'bass', 3), 'bass', 3)
+
+    const [note] = resolveStep({
+      ...soleSlot(pattern),
+      mixer: {},
+      bass: settings,
+      transport: STRAIGHT,
+      stepIndex: 3,
+    }).notes
+
+    expect(note).toMatchObject({ laneId: 'bass', accent: true, voicing: bassVoicing(settings, true) })
+  })
+
+  it('voices an unaccented bass note with Env Mod alone', () => {
+    const settings = setBassParam(DEFAULT_BASS_SETTINGS, 'envMod', 75)
+    const pattern = toggleNoteStep(createInitialPattern(), 'bass', 3)
+
+    const [note] = resolveStep({
+      ...soleSlot(pattern),
+      mixer: {},
+      bass: settings,
+      transport: STRAIGHT,
+      stepIndex: 3,
+    }).notes
+
+    expect(note).toMatchObject({ accent: false, voicing: bassVoicing(settings, false) })
+  })
+
+  it('ignores the flag on the stab lane, which has neither row nor 303 voice', () => {
+    const pattern = toggleNoteAccent(toggleNoteStep(createInitialPattern(), 'stab', 3), 'stab', 3)
+
+    expect(resolveAt(pattern, 3).notes).toEqual([
+      {
+        laneId: 'stab',
+        midi: STAB_DEFAULT_PITCH,
+        frequency: midiToFrequency(STAB_DEFAULT_PITCH),
+        lengthSteps: MIN_NOTE_LENGTH,
+        accent: false,
       },
     ])
   })
@@ -223,7 +331,7 @@ describe('resolveStep — one 16th, every sound', () => {
     pattern = resizeNoteStep(toggleNoteStep(pattern, 'bass', 4), 'bass', 4, 1)
     pattern = transposeNoteStep(toggleNoteStep(pattern, 'stab', 4), 'stab', 4, 4)
 
-    expect(resolveStep({ ...soleSlot(pattern), mixer: {}, transport: STRAIGHT, stepIndex: 4 })).toEqual({
+    expect(resolveStep({ ...soleSlot(pattern), mixer: {}, bass: DEFAULT_BASS_SETTINGS, transport: STRAIGHT, stepIndex: 4 })).toEqual({
       playingSlotId: pattern.id,
       starts: [
         { laneId: 'kick', gain: ACCENT_GAIN },
@@ -238,12 +346,15 @@ describe('resolveStep — one 16th, every sound', () => {
           midi: DEFAULT_PITCH,
           frequency: midiToFrequency(DEFAULT_PITCH),
           lengthSteps: 2,
+          accent: false,
+          voicing: { gain: 1, filterOctaves: 0, filterDecay: DEFAULT_BASS_SETTINGS.decay },
         },
         {
           laneId: 'stab',
           midi: STAB_DEFAULT_PITCH + 4,
           frequency: midiToFrequency(STAB_DEFAULT_PITCH + 4),
           lengthSteps: MIN_NOTE_LENGTH,
+          accent: false,
         },
       ],
     })
@@ -251,7 +362,7 @@ describe('resolveStep — one 16th, every sound', () => {
 
   it('resolves a silent step to an empty result', () => {
     const empty = createInitialPattern()
-    expect(resolveStep({ ...soleSlot(empty), mixer: {}, transport: STRAIGHT, stepIndex: 7 })).toEqual({
+    expect(resolveStep({ ...soleSlot(empty), mixer: {}, bass: DEFAULT_BASS_SETTINGS, transport: STRAIGHT, stepIndex: 7 })).toEqual({
       playingSlotId: empty.id,
       starts: [],
       chokes: [],
@@ -410,7 +521,7 @@ describe('resolveStep — the queued bank switch', () => {
   const queued = { bank, selectedSlotId: bank[1].id, playingSlotId: a.id }
 
   function resolveQueued(stepIndex: number, playingSlotId = a.id) {
-    return resolveStep({ ...queued, playingSlotId, mixer: {}, transport: STRAIGHT, stepIndex })
+    return resolveStep({ ...queued, playingSlotId, mixer: {}, bass: DEFAULT_BASS_SETTINGS, transport: STRAIGHT, stepIndex })
   }
 
   it('keeps sounding the playing slot mid-bar while another is selected', () => {
@@ -439,6 +550,7 @@ describe('resolveStep — the queued bank switch', () => {
       selectedSlotId: a.id,
       playingSlotId: a.id,
       mixer: {},
+      bass: DEFAULT_BASS_SETTINGS,
       transport: STRAIGHT,
       stepIndex: 0,
     })

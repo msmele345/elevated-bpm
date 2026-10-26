@@ -18,6 +18,7 @@ import {
   setTransportBpm,
   setTransportSwing,
   resizeActivePatternNote,
+  toggleActivePatternNoteAccent,
   toggleActivePatternNoteStep,
   toggleVoiceMute,
   toggleVoiceSolo,
@@ -428,6 +429,73 @@ describe('share URL', () => {
       doc.transport = { bpm: doc.transport.bpm, swing } as typeof doc.transport
       const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
       await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('round-trips 303 accents in every slot, an accent parked on an empty step, and Env Mod', async () => {
+    let sender = setBassParamValue(createInitialProjectState(), 'envMod', 65)
+    sender = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(sender, 'bass', 1), 'bass', 1)
+    sender = toggleActivePatternNoteAccent(sender, 'bass', 9)
+    sender = selectSlot(sender, sender.patterns[3].id)
+    sender = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(sender, 'bass', 4), 'bass', 4)
+
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error(`Expected a ready link, got ${shared.status}`)
+    expect(shared.project.instrumentSettings.bass.envMod).toBe(65)
+    expect(shared.project.patterns[0].noteLanes).toEqual(sender.patterns[0].noteLanes)
+    expect(shared.project.patterns[3].noteLanes).toEqual(sender.patterns[3].noteLanes)
+  })
+
+  it('opens a link written before the 303 flags with every flag off and Env Mod 0', async () => {
+    const programmed = toggleActivePatternNoteStep(createInitialProjectState(), 'bass', 3)
+    const legacy = JSON.parse(JSON.stringify({ ...programmed, version: 13 }))
+    for (const pattern of legacy.patterns) {
+      for (const lane of pattern.noteLanes) {
+        for (const step of lane.steps) {
+          delete step.slide
+          delete step.accent
+        }
+      }
+    }
+    delete legacy.instrumentSettings.bass.envMod
+
+    const shared = await readSharedBeat(await legacyShareUrl(13, legacy))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a v13 link to open, got ${shared.status}`)
+    expect(shared.project.patterns[0].noteLanes).toEqual(programmed.patterns[0].noteLanes)
+    expect(shared.project.instrumentSettings.bass.envMod).toBe(0)
+  })
+
+  it('rejects a payload whose note flags are not booleans', async () => {
+    for (const [flag, value] of [
+      ['accent', 1],
+      ['accent', undefined],
+      ['slide', 'yes'],
+      ['slide', null],
+    ] as const) {
+      const doc = createInitialProjectState()
+      const step = doc.patterns[0].noteLanes[0].steps[0] as unknown as Record<string, unknown>
+      step[flag] = value
+      const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url), `${flag}: ${String(value)}`).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('rejects a payload whose Env Mod is missing or out of range', async () => {
+    for (const envMod of [-1, 101, '50', undefined]) {
+      const doc = createInitialProjectState()
+      doc.instrumentSettings.bass = { ...doc.instrumentSettings.bass, envMod } as never
+      const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url), `envMod: ${String(envMod)}`).resolves.toMatchObject({
         status: 'error',
         code: 'malformed',
       })
@@ -883,6 +951,20 @@ describe('beat bundle', () => {
 
     if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
     expect(opened.project.transport.swing).toBe(0.7)
+  })
+
+  it('carries 303 accents in every slot and Env Mod', async () => {
+    const { project: sender, slices } = senderWithChops()
+    let acid = setBassParamValue(sender, 'envMod', 30)
+    acid = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(acid, 'bass', 0), 'bass', 0)
+    acid = selectSlot(acid, acid.patterns[2].id)
+    acid = toggleActivePatternNoteAccent(acid, 'bass', 11)
+
+    const opened = await readBundle(await exportedBytes(acid, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.patterns).toEqual(acid.patterns)
+    expect(opened.project.instrumentSettings.bass.envMod).toBe(30)
   })
 
   it('carries the mixer so the recipient hears the sender’s balance', async () => {

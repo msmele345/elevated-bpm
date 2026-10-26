@@ -1,3 +1,4 @@
+import type { BassSettings } from '../model/bass'
 import { audibleVoiceIds, type Mixer } from '../model/mixer'
 import { NOTE_LANES, noteEventAtStep, type LaneNoteEvent } from '../model/note'
 import { swingOffsetSeconds, type TransportSettings } from '../model/transport'
@@ -16,6 +17,51 @@ import type { LaneId, Pattern } from '../model/types'
 export const UNACCENTED_GAIN = 0.62
 /** ~4 dB above unaccented — the classic 909 accent step, clearly audible. */
 export const ACCENT_GAIN = 1
+
+/** How far the filter opens above Cutoff on a note at Env Mod 100 %. */
+export const ENV_MOD_MAX_OCTAVES = 4
+/** The extra filter opening an accent adds, whatever Env Mod is set to. */
+export const ACCENT_ENV_OCTAVES = 2
+/** An accent's filter closes this much faster than the Decay knob's. */
+const ACCENT_DECAY_RATIO = 0.5
+
+/**
+ * How one bass note is voiced: a gain into the bass channel, and a filter
+ * envelope that jumps `filterOctaves` above Cutoff on the note and falls back
+ * to it over `filterDecay` seconds. The envelope rides on top of Cutoff rather
+ * than replacing it, so the Cutoff knob still moves the base live, mid-note.
+ */
+export interface BassVoicing {
+  gain: number
+  filterOctaves: number
+  filterDecay: number
+}
+
+/**
+ * Voice a bass note from the patch. An unaccented note at Env Mod 0 is unity
+ * gain with no envelope — the bass exactly as it was before either existed.
+ * An accent is the 303's: louder by the drum accent gap (about +4 dB, through
+ * a gain stage, because a synth's velocity tops out at 1), plus a fixed extra
+ * filter opening that closes faster. It stacks on Env Mod and does not need
+ * it, so the Accent row is never a dead control.
+ */
+export function bassVoicing(settings: BassSettings, accent: boolean): BassVoicing {
+  const envOctaves = (settings.envMod / 100) * ENV_MOD_MAX_OCTAVES
+  if (!accent) return { gain: 1, filterOctaves: envOctaves, filterDecay: settings.decay }
+  return {
+    gain: ACCENT_GAIN / UNACCENTED_GAIN,
+    filterOctaves: envOctaves + ACCENT_ENV_OCTAVES,
+    filterDecay: settings.decay * ACCENT_DECAY_RATIO,
+  }
+}
+
+/**
+ * A note one lane starts on a 16th. Only the bass reads the 303 flags, so only
+ * a bass note carries a voicing; a stab note's accent is always off.
+ */
+export type SequencedNote =
+  | (LaneNoteEvent & { laneId: 'bass'; voicing: BassVoicing })
+  | (LaneNoteEvent & { laneId: 'stab' })
 
 export interface Hit {
   laneId: LaneId
@@ -40,6 +86,8 @@ export interface StepResolutionInput {
   /** The slot the engine was sounding going into this 16th. */
   playingSlotId: string
   mixer: Mixer
+  /** The bass patch, which voices each bass note: Env Mod and Decay shape its filter. */
+  bass: BassSettings
   /** Tempo and swing: together they decide how late an off-beat 16th lands. */
   transport: TransportSettings
   /** The 16th on the straight grid. Swing never changes which step this is. */
@@ -58,8 +106,8 @@ export interface StepResolution {
   starts: Hit[]
   /** Ringing lanes to silence at this step because a choker fired. */
   chokes: LaneId[]
-  /** Bass and stab notes starting on this step, in deck order. */
-  notes: LaneNoteEvent[]
+  /** Bass and stab notes starting on this step, in deck order, the bass voiced. */
+  notes: SequencedNote[]
   /**
    * Seconds to add to the scheduled time of everything above: zero on even
    * 16ths, and the swing delay on odd ones. One offset for the whole 16th, so
@@ -88,6 +136,7 @@ export function resolveStep({
   selectedSlotId,
   playingSlotId,
   mixer,
+  bass,
   transport,
   stepIndex,
 }: StepResolutionInput): StepResolution {
@@ -107,7 +156,7 @@ export function resolveStep({
     playingSlotId: playing.id,
     starts: hits.filter((hit) => !choked.has(hit.laneId)),
     chokes,
-    notes: notesAtStep(playing, stepIndex, mixer),
+    notes: notesAtStep(playing, stepIndex, mixer, bass),
     swingOffset: swingOffsetSeconds(stepIndex, transport.bpm, transport.swing),
   }
 }
@@ -127,13 +176,23 @@ function hitsAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer): Hit[] {
 }
 
 /** Every audible melodic event starting on this 16th, one at most per note lane. */
-function notesAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer): LaneNoteEvent[] {
+function notesAtStep(
+  pattern: Pattern,
+  stepIndex: number,
+  mixer: Mixer,
+  bass: BassSettings,
+): SequencedNote[] {
   const audible = audibleVoiceIds(
     NOTE_LANES.map(({ id }) => id),
     mixer,
   )
-  return audible.flatMap((id) => {
+  return audible.flatMap((id): SequencedNote[] => {
     const event = noteEventAtStep(pattern, id, stepIndex)
-    return event ? [{ laneId: id, ...event }] : []
+    if (!event) return []
+    if (id === 'bass') {
+      return [{ laneId: id, ...event, voicing: bassVoicing(bass, event.accent) }]
+    }
+    // The stab has no 303 voice: a flag parked on its lane is kept, not played.
+    return [{ laneId: id, ...event, accent: false }]
   })
 }

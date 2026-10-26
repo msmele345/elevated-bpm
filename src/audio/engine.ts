@@ -151,10 +151,23 @@ let auditionPlayer: Tone.Player | null = null
  * A single Tone.Synth is monophonic by construction — a new note takes the
  * voice from the one still ringing — and the filter sits after it so cutoff
  * and resonance shape the sound continuously, audible even mid-note.
+ *
+ * The 303 half rides on top. A filter envelope, scaled to each note's depth in
+ * cents, drives the filter's detune rather than its frequency: detune
+ * multiplies the cutoff, so the envelope opens the filter above wherever the
+ * Cutoff knob is, and the knob keeps moving that base live, mid-note. After
+ * the filter an accent gain stage lifts an accented note above unity, which a
+ * synth's velocity (capped at 1) cannot.
  */
 interface BassVoice {
   synth: Tone.Synth
   filter: Tone.Filter
+  /** Unity, or the accent boost: set per note at its start. */
+  accent: Tone.Gain
+  /** 0→1→0 on every note: attack, then Decay back down to Cutoff. */
+  filterEnvelope: Tone.Envelope
+  /** The envelope's depth in cents, set per note from its voicing. */
+  envelopeDepth: Tone.Gain
 }
 let bass: BassVoice | null = null
 let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
@@ -468,7 +481,8 @@ export function setSamplerSettings(settings: SamplerSettings): void {
 /**
  * Apply the bass patch. Cheap and idempotent, so knob motion can call it on
  * every pointer move: cutoff ramps over a few milliseconds (a jump in filter
- * frequency zippers audibly), the rest take effect on the next note.
+ * frequency zippers audibly), the rest take effect on the next note — Env Mod
+ * included, since step resolution voices each note from the patch it reads.
  */
 export function setBassSettings(next: BassSettings): void {
   bassSettings = next
@@ -634,8 +648,11 @@ function createSendTap(dry: Tone.ToneAudioNode, fxInput: Tone.ToneAudioNode): Se
   return { input, send }
 }
 
+const CENTS_PER_OCTAVE = 1200
+
 function createBassVoice(destination: Tone.ToneAudioNode): BassVoice {
-  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 })
+  const accent = new Tone.Gain(1).connect(destination)
+  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 }).connect(accent)
   const synth = new Tone.Synth({
     oscillator: { type: 'sawtooth' },
     // Short attack + low sustain: a plucked 303-style note whose tail the
@@ -643,8 +660,18 @@ function createBassVoice(destination: Tone.ToneAudioNode): BassVoice {
     envelope: { attack: 0.004, decay: DEFAULT_BASS_SETTINGS.decay, sustain: 0.25, release: 0.08 },
     volume: Tone.gainToDb(BASS_GAIN),
   }).connect(filter)
-  filter.connect(destination)
-  return { synth, filter }
+  // Resting at depth 0, so the detune stays at 0 and the filter sits exactly
+  // on Cutoff until a note with Env Mod or an accent opens it.
+  const envelopeDepth = new Tone.Gain(0).connect(filter.detune)
+  const filterEnvelope = new Tone.Envelope({
+    // A near-instant attack is the 303's "wow"; with no sustain the envelope
+    // always falls all the way back to Cutoff.
+    attack: 0.003,
+    decay: DEFAULT_BASS_SETTINGS.decay,
+    sustain: 0,
+    release: 0.01,
+  }).connect(envelopeDepth)
+  return { synth, filter, accent, filterEnvelope, envelopeDepth }
 }
 
 function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.Synth> {
@@ -866,6 +893,7 @@ export async function play(): Promise<void> {
         selectedSlotId,
         playingSlotId,
         mixer: currentMixer,
+        bass: bassSettings,
         transport: { bpm: liveBpm, swing: currentSwing },
         stepIndex,
       })
@@ -900,6 +928,13 @@ export async function play(): Promise<void> {
       for (const note of notes) {
         const duration = note.lengthSteps * stepSeconds
         if (note.laneId === 'bass' && bass) {
+          const { gain, filterOctaves, filterDecay } = note.voicing
+          bass.accent.gain.setValueAtTime(gain, at)
+          bass.envelopeDepth.gain.setValueAtTime(filterOctaves * CENTS_PER_OCTAVE, at)
+          // Tone computes an envelope's curve when it is triggered, so each
+          // note in the look-ahead keeps its own decay.
+          bass.filterEnvelope.decay = filterDecay
+          bass.filterEnvelope.triggerAttack(at)
           bass.synth.triggerAttackRelease(note.frequency, duration, at)
         }
         if (note.laneId === 'stab' && stab) {

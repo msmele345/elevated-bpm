@@ -7,10 +7,11 @@ import {
   createSamplerSettings,
 } from '../model/sampler'
 import { createInitialPattern, cycleStep } from '../model/pattern'
-import { midiToFrequency, resizeNoteStep, toggleNoteStep } from '../model/note'
+import { midiToFrequency, resizeNoteStep, toggleNoteAccent, toggleNoteStep } from '../model/note'
+import { DEFAULT_BASS_SETTINGS } from '../model/bass'
 import { createBank } from '../model/bank'
 import type { Pattern } from '../model/types'
-import { ACCENT_GAIN, UNACCENTED_GAIN } from './stepResolution'
+import { ACCENT_ENV_OCTAVES, ACCENT_GAIN, UNACCENTED_GAIN } from './stepResolution'
 
 /** Hand the engine a bank of one slot, selected — the deck before the bank. */
 function playSoleSlot(engine: typeof import('./engine'), pattern: Pattern): void {
@@ -36,6 +37,12 @@ const tone = vi.hoisted(() => {
     resolveLoaded: () => resolveLoaded(),
     repeatCallbacks: [] as Array<(time: number) => void>,
     synths: [] as Array<{ triggerAttackRelease: ReturnType<typeof vi.fn> }>,
+    envelopes: [] as Array<{
+      decay: number
+      /** The decay each attack was scheduled with — read at call time, as Tone does. */
+      decaysAtAttack: number[]
+      triggerAttack: ReturnType<typeof vi.fn>
+    }>,
     polySynths: [] as Array<{
       triggerAttack: ReturnType<typeof vi.fn>
       triggerAttackRelease: ReturnType<typeof vi.fn>
@@ -97,6 +104,20 @@ vi.mock('tone', () => {
   class Filter extends Node {
     frequency = new AudioParam()
     Q = new AudioParam()
+    detune = new AudioParam()
+  }
+
+  class Envelope extends Node {
+    decay = 0
+    decaysAtAttack: number[] = []
+    triggerAttack = vi.fn(() => {
+      this.decaysAtAttack.push(this.decay)
+    })
+    constructor(options?: { decay?: number }) {
+      super()
+      this.decay = options?.decay ?? 0
+      tone.envelopes.push(this)
+    }
   }
 
   class Distortion extends Node {
@@ -182,6 +203,7 @@ vi.mock('tone', () => {
     Gain,
     Player,
     Filter,
+    Envelope,
     Distortion,
     FeedbackDelay,
     Reverb,
@@ -565,6 +587,95 @@ describe('the sequencer step callback', () => {
   })
 })
 
+describe('the bass voice: accent and Env Mod', () => {
+  type Param = {
+    setValueAtTime: ReturnType<typeof vi.fn>
+    rampTo: ReturnType<typeof vi.fn>
+    cancelScheduledValues: ReturnType<typeof vi.fn>
+  }
+  type Chained = { destination: unknown }
+  const next = (node: unknown) => (node as Chained).destination as Chained & { gain: Param }
+
+  /** Fire one bass note on step 3 at t = 50 and return the bass voice's parts. */
+  async function fireBassNote(accented: boolean, settings = DEFAULT_BASS_SETTINGS) {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    let pattern = toggleNoteStep(createInitialPattern(), 'bass', 2)
+    if (accented) pattern = toggleNoteAccent(pattern, 'bass', 2)
+    playSoleSlot(engine, pattern)
+    engine.setMixer({})
+    engine.setBassSettings(settings)
+    await engine.play()
+
+    const synth = tone.synths[0]
+    const filter = next(synth) as unknown as Chained & { detune: Param; frequency: Param }
+    const accentGain = next(filter)
+    const envelope = tone.envelopes[0]
+    const depth = next(envelope)
+    for (const param of [accentGain.gain, depth.gain]) param.setValueAtTime.mockClear()
+    envelope.triggerAttack.mockClear()
+    envelope.decaysAtAttack.length = 0
+    synth.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(2 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](50)
+    engine.stop()
+    return { engine, synth, filter, accentGain, envelope, depth }
+  }
+
+  it('drives the filter envelope into the filter’s detune, never its cutoff', async () => {
+    const { filter, envelope, depth } = await fireBassNote(false)
+
+    expect(next(envelope)).toBe(depth)
+    expect(depth.destination).toBe(filter.detune)
+  })
+
+  it('plays an unaccented note at Env Mod 0 exactly as before: unity gain, no filter envelope', async () => {
+    const { synth, accentGain, depth } = await fireBassNote(false)
+
+    expect(accentGain.gain.setValueAtTime.mock.calls).toEqual([[1, 50]])
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[0, 50]])
+    expect(synth.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(36), 15 / 130, 50]])
+  })
+
+  it('opens the filter by Env Mod’s octaves on every note, decaying with Decay', async () => {
+    const { envelope, depth } = await fireBassNote(false, {
+      ...DEFAULT_BASS_SETTINGS,
+      envMod: 50,
+      decay: 0.4,
+    })
+
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[2 * 1200, 50]])
+    expect(envelope.triggerAttack.mock.calls).toEqual([[50]])
+    expect(envelope.decaysAtAttack).toEqual([0.4])
+  })
+
+  it('applies an accent as given: louder through the gain stage, a deeper and faster wow at Env Mod 0', async () => {
+    const { accentGain, envelope, depth, synth } = await fireBassNote(true, {
+      ...DEFAULT_BASS_SETTINGS,
+      envMod: 0,
+      decay: 0.4,
+    })
+
+    expect(accentGain.gain.setValueAtTime.mock.calls).toEqual([[ACCENT_GAIN / UNACCENTED_GAIN, 50]])
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[ACCENT_ENV_OCTAVES * 1200, 50]])
+    expect(envelope.decaysAtAttack[0]).toBeLessThan(0.4)
+    expect(synth.triggerAttackRelease).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps Cutoff live with Env Mod up: the knob moves the base, the envelope rides on top', async () => {
+    const { engine, filter } = await fireBassNote(false, { ...DEFAULT_BASS_SETTINGS, envMod: 80 })
+    filter.frequency.rampTo.mockClear()
+
+    engine.setBassSettings({ ...DEFAULT_BASS_SETTINGS, envMod: 80, cutoff: 2400 })
+
+    expect(filter.frequency.rampTo.mock.calls).toEqual([[2400, 0.02]])
+    expect(filter.detune.rampTo).not.toHaveBeenCalled()
+    expect(filter.detune.setValueAtTime).not.toHaveBeenCalled()
+    engine.setBassSettings(DEFAULT_BASS_SETTINGS)
+  })
+})
+
 describe('swing', () => {
   /** The gain node a kit player fires through, where accent velocity is set. */
   const gainOf = (player: (typeof tone.players)[number]) =>
@@ -720,8 +831,8 @@ describe('voice Level and the mixer', () => {
     const kickChannel = next(next(kick))
     const hatChannel = next(next(closedHat))
     const padChannel = next(next(pad1))
-    // Bass: synth → filter → channel gain. Stab: both pools → one channel gain.
-    const bassChannel = next(next(bass))
+    // Bass: synth → filter → accent gain → channel gain. Stab: both pools → one channel gain.
+    const bassChannel = next(next(next(bass)))
     const stabChannel = next(stabLive)
     for (const channel of [kickChannel, hatChannel, padChannel, bassChannel, stabChannel]) {
       channel.gain.rampTo.mockClear()

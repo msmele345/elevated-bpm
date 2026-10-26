@@ -7,7 +7,7 @@ conversations use, and exactly what each one means here. Last reviewed
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
 spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow,
-EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links) have shipped.
+EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links, EB3-09a the bass Accent row and Env Mod) have shipped.
 
 ## How to use and maintain this file
 
@@ -38,9 +38,10 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 ## Words with two meanings (read first)
 
 - **Accent.** On a **drum or pad step**, accent is the third state of the step
-  cycle, and the hit plays at full gain instead of 0.62. On a **note step** [v3 spec],
-  accent is the 303 flag: about +4 dB plus a sharper filter "wow". The two are
-  separate fields, and the drum accent is unchanged by v3.
+  cycle, and the hit plays at full gain instead of 0.62. On a **note step**,
+  accent is the 303 flag: about +4 dB through a gain stage plus extra
+  filter-envelope depth with a faster decay. The two are separate fields, and
+  the drum accent is unchanged by v3.
 - **Active.** `activePatternId` names the pattern being *edited* (the selected
   slot), which may differ from the one being *heard* while a switch is queued. Say **selected slot** and **playing
   slot** when the difference matters. "Active lesson" and "active arc" mean the one
@@ -79,9 +80,15 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 
 ## The Deck and its instruments
 
+- **Accent row.** The thin row of 16 toggle buttons under the bass lane that
+  sets each step's accent flag. Each button is named "Bass accent, step 3, on",
+  "… off" or "… on (no note)". It is a `.step-row` with a `.step-grid`, so it
+  shares the lane's tracks and wraps 2×8 aligned on phones. Only the bass has
+  one. Code: `NoteFlagRow`, `NOTE_FLAG_LANES`.
 - **Bass synth (BL-303).** A monophonic 303-style synth: a sawtooth into a
-  resonant −24 dB lowpass. Its knobs are Cutoff, Resonance and Decay, and
-  [v3 spec] Env Mod is added. It plays the bass note lane. Code: `BASS_PARAMS`, `BassSettings`.
+  resonant −24 dB lowpass. Its knobs are Cutoff, Resonance, Decay and Env Mod,
+  and it has an Accent row under its lane. It plays the bass note lane. Code:
+  `BASS_PARAMS`, `BassSettings`.
 - **Deck.** The whole instrument surface: every panel, the transport strip,
   the Master strip, and the curriculum UI woven through them. Top to bottom:
   header (with the Share menu), any share strip, transport strip, curriculum
@@ -118,7 +125,7 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   list, so a lesson goal or spotlight can name any of them, and a mistyped one
   fails when the lesson loads. It includes `swing`, whose value lives in the
   Transport rather than an instrument patch, and every voice's Level knob
-  (`kickLevel`, `pad1Level`, `bassLevel`, `stabLevel`, …). [v3 spec] Adds `envMod`.
+  (`kickLevel`, `pad1Level`, `bassLevel`, `stabLevel`, …) and the bass `envMod`.
   Code: `DECK_PARAMS`, `isDeckParamId`, `TRANSPORT_PARAMS`.
 - **Room (room light).** The beat-synced club backdrop around the Deck. It is
   driven from rAF through CSS variables and never re-renders React. Code:
@@ -150,9 +157,15 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **Accent (drum step).** A single click cycles a step off → on → accented →
   off. An accented hit plays at gain 1; an unaccented one plays at 0.62. Code: `cycleStep`,
   `ACCENT_GAIN`, `UNACCENTED_GAIN`.
-- **Accent (note step)** [v3 spec]. The 303 flag on a bass note. It adds about +4 dB
-  through a gain stage with headroom, plus extra filter-envelope depth with a
-  shorter decay, even at Env Mod 0. It is edited on the bass Accent row.
+- **Accent (note step).** The 303 flag on a bass note. An accented note gets the
+  drum accent gap louder (`ACCENT_GAIN` / `UNACCENTED_GAIN`, about 1.61, +4.2 dB)
+  through an accent gain stage after the bass filter, because synth velocity
+  tops out at 1. It also gets a fixed extra 2 octaves of filter-envelope depth
+  (`ACCENT_ENV_OCTAVES`) that decays in half the Decay knob's time, even at
+  Env Mod 0; unaccented at Env Mod 0 is exactly the old sound. It is edited on
+  the bass Accent row, and kept on steps whose note is off, like pitch and
+  length. Spotlight `accentRow:bass`. Code: `bassVoicing`, `BassVoicing`,
+  `toggleNoteAccent`, `toggleActivePatternNoteAccent`, `NoteFlagRow`.
 - **Audio clock.** Tone's transport time. "Never on the audio clock" means
   playback must not drive React state changes (see Performance rule).
 - **Bank (pattern bank).** The four pattern slots A–D. `patterns` always holds
@@ -183,9 +196,13 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **Empty slot.** A slot with no step on in any lane. Pitch, length or flags left
   on off steps don't count. Its slot button says "empty" and reads dimmer. Code:
   `isPatternEmpty`.
-- **Env Mod** [v3 spec]. The depth of the bass filter envelope, from 0 to 100% (up to about
-  four octaves above Cutoff), decaying with the Decay knob. Param id
-  `envMod`.
+- **Env Mod.** The depth of the bass filter envelope: bass param `envMod`, 0 to
+  100%, default 0 (neutral), linear, labelled "Env Mod". Each note's filter
+  envelope jumps up to `ENV_MOD_MAX_OCTAVES` (4) octaves above Cutoff at 100%
+  and falls back over the Decay knob's time. It is a Tone.Envelope scaled in
+  cents driving the filter's `detune`, so it rides on top of Cutoff and the
+  Cutoff knob keeps moving the base live mid-note. It takes effect on the next
+  note. Spotlight `knob:envMod`. Code: `BASS_PARAMS`, `bassVoicing`.
 - **Lane.** One row of 16 steps in a Pattern. There are three kinds: drum lane, pad
   lane and note lane. Founding term. The UI may say "row"; code and docs say lane.
 - **Live play.** Playing pads or keys by hand over the loop. It is performance
@@ -194,8 +211,11 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **Note lane.** A lane of note steps, with ids `bass` and `stab`. Code: `NoteLane`,
   `NoteLaneId`.
 - **Note step.** A step that carries `on`, `pitch` (a MIDI number) and `length` in
-  whole steps. A note is clipped where the next one starts. [v3 spec] It also gets `slide`
-  and `accent`. Code: `NoteStep`, `noteEventAtStep`.
+  whole steps. A note is clipped where the next one starts. It also carries
+  `slide` and `accent` booleans. Both note lanes carry them, but only the bass shows a row and plays them
+  (`NOTE_FLAG_LANES`, = `['bass']`). Flags are kept on steps whose note is off,
+  like pitch and length. The slide flag has no row and no sound until EB3-09b.
+  Code: `NoteStep`, `noteEventAtStep`, `withNoteFlags`.
 - **Pad lane.** A sampler pad's lane, with the same shape as a drum lane. Its ids are `pad1`–`pad4`.
   Code: `PadLane`, `StepLane`.
 - **Pattern.** A first-class, ID'd 16-step loop holding every lane (drum, pad
@@ -208,7 +228,8 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   and wraps its 16 steps into two rows of 8 (steps 1–8, then 9–16), each row
   holding two whole quads with a thin spacer track between them. Every `.step-grid`
   shares those tracks, so step *n* sits directly over step *n* + 8, and any
-  further row built on the same grid (the bass Accent and Slide rows, EB3-09)
+  further row built on the same grid (the bass Accent row today, and the Slide
+  row in EB3-09b)
   lines up under its note for free. Bass and stab keep M, S and Level on their
   panel plate, above the lane. The keyboard, Master, region editor and finale
   fit 320px too. Held by `e2e/reflow.spec.ts`. Code: `.step-grid`, `.step-row`.
@@ -252,9 +273,12 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   mute/solo rule as drum and pad hits; Level is not part of resolution (hit gains
   stay accent-only). The Tone callback applies its result and decides nothing
   itself. It also reads the Bank with the selected and playing slots and
-  returns the playing slot after this step (see Queued switch). [v3 spec] The
-  input grows to the bass patch, and the result gains per-note accent, legato
-  and gate tie. Code: `resolveStep`, `StepResolution`.
+  returns the playing slot after this step (see Queued switch). The
+  input includes the bass patch (`bass: BassSettings`); every note event
+  carries `accent` (always false for stab), and bass events carry a `voicing`
+  of gain, filter octaves and filter decay. [v3 spec] Legato and gate tie
+  arrive with EB3-09b. Code: `resolveStep`, `StepResolution`, `SequencedNote`,
+  `bassVoicing`.
 - **Swing.** The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75, default 0.50).
   Every odd 16th of every sequenced voice is delayed by (swing − 0.5) × 2 × one step, so 66%
   is roughly a triplet feel and 75% is dotted; even 16ths never move, and note lengths stay
@@ -299,7 +323,7 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   ringing when you mute keeps ringing. Code: `audibleVoiceIds`,
   `voiceIsAudible`, `toggleVoiceMute`, `toggleVoiceSolo`.
 - **Neutral.** A param's resting value, at which it changes nothing: sends at 0,
-  drive at 0, master filter at 18 kHz, swing 50%, Level 1, [v3 spec] Env Mod 0. Every new
+  drive at 0, master filter at 18 kHz, swing 50%, Level 1, Env Mod 0. Every new
   param must default to neutral, so an untouched Deck sounds exactly as it did
   before the param existed.
 - **Send / return.** A send is a per-instrument level into the FX bus (`drumSend`,
@@ -385,10 +409,12 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **ProjectState.** The one versioned JSON document and the single source of
   truth. It holds `patterns`, `activePatternId`, `transport`, `instrumentSettings`,
   `sources` (metadata only), `lessonProgress`, `prefs`, `mixer`, `activeArcId` and
-  `activeLessonIds`. It never holds audio. It is at v13 today (v11 added swing; v12 keys the
+  `activeLessonIds`. It never holds audio. It is at v14 today (v11 added swing; v12 keys the
   mixer by voice with Level, and its migration fills `level: 1` on every existing
   strip and repairs missing flags; v13 makes `patterns` the four-slot bank, the
-  old pattern becoming slot A under the same id); [v3 spec] v14 is planned. Founding
+  old pattern becoming slot A under the same id; v14 gives every note step in
+  every slot `slide: false` and `accent: false`, and the bass patch `envMod: 0`,
+  repaired and clamped by `createBassSettings`). Founding
   term. Code: `ProjectState`, `PROJECT_STATE_VERSION`.
 - **Sample store.** A separate IndexedDB store, split into slices (precious) and
   sources (expendable). Code: `saveSlice`, `saveSource`, `loadStoredAudio`.
@@ -442,7 +468,9 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   permanent, never folded into the Share menu. Code: `ShareStrips`.
 - **Share validator.** The one check that both links and bundles pass. Every
   version bump updates it. It accepts one to four slots with unique slot letters
-  and ids, with `activePatternId` among them. Code: `isSharedProject`.
+  and ids, with `activePatternId` among them. It also requires boolean `slide` and
+  `accent` on every note step and an in-range `envMod` (via the bass patch
+  check). Code: `isSharedProject`.
 
 ## Curriculum
 
@@ -532,8 +560,8 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   `useSpotlightScroll`, `spotlightNeedsScroll`.
 - **Spotlight (spotlight target).** A `kind:id` string in lesson JSON that puts
   an amber ring on a control: `lane:`, `noteLane:`, `knob:`, `pad:`, plus the
-  single targets `transport:tempo`, `keyboard:stab` and `sampler:sources`. [v3 spec] It adds
-  `accentRow:bass` and `slideRow:bass`. Code: `SpotlightTarget`, `spotlightsTarget`.
+  single targets `transport:tempo`, `keyboard:stab` and `sampler:sources`. It also has
+  `accentRow:bass`; [v3 spec] `slideRow:bass` is added with EB3-09b. Code: `SpotlightTarget`, `spotlightsTarget`.
 - **Track (curriculum track).** The learner-facing name for an Arc on the track
   selector. See the first section.
 

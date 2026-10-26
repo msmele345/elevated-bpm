@@ -45,6 +45,9 @@ export interface NoteStep {
 
 export type NoteLaneId = 'bass' | 'stab'
 
+/** The 303 flags a note step carries, each edited on its own row. */
+export type NoteFlag = keyof Pick<NoteStep, 'slide' | 'accent'>
+
 /** A note lane: 16 steps of on/off + pitch + length. */
 export interface NoteLane {
   id: NoteLaneId

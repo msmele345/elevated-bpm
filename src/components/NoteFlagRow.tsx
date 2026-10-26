@@ -1,8 +1,5 @@
 import { memo } from 'react'
-import type { NoteLane, NoteLaneId } from '../model/types'
-
-/** The 303 flags a note step carries, each edited on its own row. */
-export type NoteFlag = 'accent' | 'slide'
+import type { NoteFlag, NoteLane, NoteLaneId } from '../model/types'
 
 interface NoteFlagRowProps {
   lane: NoteLane

@@ -2,8 +2,9 @@ import { STEP_COUNT, type NoteLane, type NoteLaneId, type NoteStep, type Pattern
 
 /**
  * Note lanes: the melodic half of a pattern. A step carries a pitch, a length
- * and the 303 slide and accent flags instead of a drum accent, and the lane is played monophonically — one
- * note at a time, a later note cutting the one still ringing.
+ * and the 303 slide and accent flags instead of a drum accent, and the lane is
+ * played monophonically — one note at a time, a later note cutting the one
+ * still ringing.
  */
 
 /** MIDI note the bass lane parks on: C2, the root a 303 line usually sits on. */

@@ -1,6 +1,6 @@
 import type { BassSettings } from '../model/bass'
 import { audibleVoiceIds, type Mixer } from '../model/mixer'
-import { NOTE_LANES, noteEventAtStep, type LaneNoteEvent } from '../model/note'
+import { NOTE_FLAG_LANES, NOTE_LANES, noteEventAtStep, type LaneNoteEvent } from '../model/note'
 import { swingOffsetSeconds, type TransportSettings } from '../model/transport'
 import type { LaneId, Pattern } from '../model/types'
 
@@ -189,10 +189,9 @@ function notesAtStep(
   return audible.flatMap((id): SequencedNote[] => {
     const event = noteEventAtStep(pattern, id, stepIndex)
     if (!event) return []
-    if (id === 'bass') {
-      return [{ laneId: id, ...event, voicing: bassVoicing(bass, event.accent) }]
-    }
-    // The stab has no 303 voice: a flag parked on its lane is kept, not played.
-    return [{ laneId: id, ...event, accent: false }]
+    // A lane without the 303 flags (the stab) keeps any it is given, unplayed.
+    const accent = NOTE_FLAG_LANES.includes(id) && event.accent
+    if (id === 'bass') return [{ laneId: id, ...event, accent, voicing: bassVoicing(bass, accent) }]
+    return [{ laneId: id, ...event, accent }]
   })
 }

@@ -19,6 +19,7 @@ import {
   setTransportSwing,
   resizeActivePatternNote,
   toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
   toggleVoiceMute,
   toggleVoiceSolo,
@@ -435,12 +436,15 @@ describe('share URL', () => {
     }
   })
 
-  it('round-trips 303 accents in every slot, an accent parked on an empty step, and Env Mod', async () => {
+  it('round-trips 303 accents and slides in every slot, flags parked on empty steps, and Env Mod', async () => {
     let sender = setBassParamValue(createInitialProjectState(), 'envMod', 65)
     sender = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(sender, 'bass', 1), 'bass', 1)
     sender = toggleActivePatternNoteAccent(sender, 'bass', 9)
+    sender = toggleActivePatternNoteSlide(sender, 'bass', 1)
+    sender = toggleActivePatternNoteSlide(sender, 'bass', 12)
     sender = selectSlot(sender, sender.patterns[3].id)
     sender = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(sender, 'bass', 4), 'bass', 4)
+    sender = toggleActivePatternNoteSlide(sender, 'bass', 4)
 
     const shared = await readSharedBeat(
       await createShareUrl(sender, 'https://elevated-bpm.example/'),
@@ -450,6 +454,8 @@ describe('share URL', () => {
     expect(shared.project.instrumentSettings.bass.envMod).toBe(65)
     expect(shared.project.patterns[0].noteLanes).toEqual(sender.patterns[0].noteLanes)
     expect(shared.project.patterns[3].noteLanes).toEqual(sender.patterns[3].noteLanes)
+    expect(shared.project.patterns[0].noteLanes[0].steps[12].slide).toBe(true)
+    expect(shared.project.patterns[3].noteLanes[0].steps[4].slide).toBe(true)
   })
 
   it('opens a link written before the 303 flags with every flag off and Env Mod 0', async () => {
@@ -965,6 +971,23 @@ describe('beat bundle', () => {
     if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
     expect(opened.project.patterns).toEqual(acid.patterns)
     expect(opened.project.instrumentSettings.bass.envMod).toBe(30)
+  })
+
+  it('carries bass slides in every slot through a bundle', async () => {
+    const { project: sender, slices } = senderWithChops()
+    let slid = toggleActivePatternNoteSlide(toggleActivePatternNoteStep(sender, 'bass', 2), 'bass', 2)
+    slid = toggleActivePatternNoteSlide(slid, 'bass', 13)
+    slid = selectSlot(slid, slid.patterns[2].id)
+    slid = toggleActivePatternNoteSlide(toggleActivePatternNoteStep(slid, 'bass', 7), 'bass', 7)
+
+    const opened = await readBundle(await exportedBytes(slid, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    for (const i of [0, 2]) {
+      expect(opened.project.patterns[i].noteLanes).toEqual(slid.patterns[i].noteLanes)
+    }
+    expect(opened.project.patterns[0].noteLanes[0].steps[13].slide).toBe(true)
+    expect(opened.project.patterns[2].noteLanes[0].steps[7].slide).toBe(true)
   })
 
   it('carries the mixer so the recipient hears the sender’s balance', async () => {

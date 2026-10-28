@@ -153,6 +153,14 @@ export function toggleNoteAccent(pattern: Pattern, laneId: NoteLaneId, stepIndex
   return mapNoteStep(pattern, laneId, stepIndex, (step) => ({ ...step, accent: !step.accent }))
 }
 
+/**
+ * Immutably flip one note step's slide. Like accent, it flips whether or not
+ * the note is on and is kept through switching the note off and on.
+ */
+export function toggleNoteSlide(pattern: Pattern, laneId: NoteLaneId, stepIndex: number): Pattern {
+  return mapNoteStep(pattern, laneId, stepIndex, (step) => ({ ...step, slide: !step.slide }))
+}
+
 /** Immutably shift one note by `semitones`, clamped to the lane's range. */
 export function transposeNoteStep(
   pattern: Pattern,
@@ -226,6 +234,28 @@ export function noteEventAtStep(
     lengthSteps: stepsUntilNextNote(lane.steps, stepIndex, step.length),
     accent: step.accent,
   }
+}
+
+/** The step a slid note's gate reaches, and whether a note or a rest is there. */
+export interface SlideReach {
+  step: number
+  into: 'note' | 'rest'
+}
+
+/**
+ * Where a slid note's gate goes: the step right after the note ends, measured
+ * from its clipped length so it agrees with what sounds. `note` when that step
+ * holds a note — the line glides into it without restarting — and `rest` when
+ * it is empty, so the slid note ties through it and then releases. Null when
+ * the step has no note or no slide: a slide parked on an empty step does
+ * nothing until a note comes in under it.
+ */
+export function slideReach(lane: NoteLane, stepIndex: number): SlideReach | null {
+  const step = lane.steps[stepIndex]
+  if (!step?.on || !step.slide) return null
+  const ahead = stepsUntilNextNote(lane.steps, stepIndex, step.length)
+  const reached = (stepIndex + ahead) % lane.steps.length
+  return { step: reached, into: lane.steps[reached].on ? 'note' : 'rest' }
 }
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']

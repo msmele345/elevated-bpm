@@ -34,6 +34,7 @@ import {
 import {
   resizeNoteStep,
   toggleNoteAccent,
+  toggleNoteSlide,
   toggleNoteStep,
   transposeNoteStep,
   withNoteFlags,
@@ -277,6 +278,15 @@ export function toggleActivePatternNoteAccent(
   stepIndex: number,
 ): ProjectState {
   return editActivePattern(state, (p) => toggleNoteAccent(p, laneId, stepIndex))
+}
+
+/** Immutably flip one note step's 303 slide in the active pattern, note or no note. */
+export function toggleActivePatternNoteSlide(
+  state: ProjectState,
+  laneId: NoteLaneId,
+  stepIndex: number,
+): ProjectState {
+  return editActivePattern(state, (p) => toggleNoteSlide(p, laneId, stepIndex))
 }
 
 /** Immutably shift one note of the active pattern by semitones. */

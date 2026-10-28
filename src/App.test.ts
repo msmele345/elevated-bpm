@@ -3075,3 +3075,86 @@ describe('App bass Accent row and Env Mod', () => {
     )
   })
 })
+
+describe('App bass Slide row and ties', () => {
+  const bass = () => screen.getByRole('region', { name: 'Bass Line' })
+  const slideRow = () => screen.getByRole('group', { name: 'Bass slide steps' })
+  const slideStep = (step: number) =>
+    within(slideRow()).getByRole('button', { name: new RegExp(`^Bass slide, step ${step},`) })
+  const noteStep = (step: number) =>
+    within(screen.getByRole('group', { name: 'Bass steps' })).getByRole('button', {
+      name: new RegExp(`^Bass step ${step},`),
+    })
+
+  it('puts 16 named slide toggles under the Accent row, and none under the stab', async () => {
+    await hydratedDeck()
+
+    const toggles = within(slideRow()).getAllByRole('button')
+    expect(toggles.map((toggle) => toggle.getAttribute('aria-label'))).toEqual(
+      Array.from({ length: 16 }, (_, i) => `Bass slide, step ${i + 1}, off`),
+    )
+    expect(toggles.every((toggle) => toggle.getAttribute('aria-pressed') === 'false')).toBe(true)
+    const lastAccent = within(bass()).getByRole('button', { name: 'Bass accent, step 16, off' })
+    expect(
+      lastAccent.compareDocumentPosition(toggles[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    const stab = screen.getByRole('region', { name: 'Chord Stab' })
+    expect(within(stab).queryByRole('group', { name: /slide/i })).toBeNull()
+  })
+
+  it('keeps a slide set on an empty step, and says the step has no note', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(slideStep(5))
+    expect(slideStep(5).getAttribute('aria-pressed')).toBe('true')
+    expect(slideStep(5).getAttribute('aria-label')).toBe('Bass slide, step 5, on (no note)')
+
+    fireEvent.click(noteStep(5))
+    expect(slideStep(5).getAttribute('aria-label')).toBe('Bass slide, step 5, on')
+    fireEvent.click(noteStep(5))
+    expect(slideStep(5).getAttribute('aria-label')).toBe('Bass slide, step 5, on (no note)')
+  })
+
+  it('operates from the keyboard like any button', async () => {
+    await hydratedDeck()
+
+    slideStep(2).focus()
+    expect(document.activeElement).toBe(slideStep(2))
+    fireEvent.click(document.activeElement!) // Enter and Space activate a native button
+    expect(slideStep(2).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('saves the slide in the selected slot, where the engine reads it', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(noteStep(5))
+    fireEvent.click(slideStep(5))
+
+    const [bank, selected] = engineSpies.setBank.mock.calls.at(-1)! as [Pattern[], string]
+    const slot = bank.find((pattern) => pattern.id === selected)!
+    expect(slot.noteLanes.find((lane) => lane.id === 'bass')!.steps[4]).toMatchObject({
+      on: true,
+      slide: true,
+    })
+  })
+
+  it('draws a tie on the bass row from a slid note into the note it glides to', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(noteStep(5))
+    fireEvent.click(noteStep(6))
+    fireEvent.click(slideStep(5))
+
+    expect(noteStep(5).getAttribute('aria-label')).toBe(
+      'Bass step 5, C2, 1 step long, slides into step 6',
+    )
+    expect(noteStep(5).hasAttribute('data-tie-out')).toBe(true)
+    expect(noteStep(6).hasAttribute('data-tie-in')).toBe(true)
+
+    // With the note it reached cleared, the slide holds through the rest: nothing to tie into.
+    fireEvent.click(noteStep(6))
+    expect(noteStep(5).getAttribute('aria-label')).toBe('Bass step 5, C2, 1 step long')
+    expect(noteStep(5).hasAttribute('data-tie-out')).toBe(false)
+    expect(noteStep(6).hasAttribute('data-tie-in')).toBe(false)
+  })
+})

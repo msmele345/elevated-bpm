@@ -137,11 +137,11 @@ for (const phone of PHONES) {
       await openFreshDeck(page)
 
       const lanes = page.locator('.step-row')
-      // Five drum lanes, then bass, its Accent row and stab. The fresh deck's
-      // pads are empty cards with no lane (EB3-05).
-      await expect(lanes).toHaveCount(8)
+      // Five drum lanes, then bass, its Accent and Slide rows, and stab. The
+      // fresh deck's pads are empty cards with no lane (EB3-05).
+      await expect(lanes).toHaveCount(9)
 
-      for (let lane = 0; lane < 8; lane++) await expectWrappedLane(lanes.nth(lane))
+      for (let lane = 0; lane < 9; lane++) await expectWrappedLane(lanes.nth(lane))
     })
 
     test('the bass Accent row wraps with the lane, each toggle under its note', async ({
@@ -161,6 +161,29 @@ for (const phone of PHONES) {
       }
       // Under the lane, not beside it.
       expect(accents[0].y).toBeGreaterThan(notes[8].y + notes[8].height - 1)
+      expect(await pageOverflow(page)).toBeLessThanOrEqual(0)
+    })
+
+    test('the bass Slide row wraps under the Accent row, each toggle under its note and accent', async ({
+      page,
+    }) => {
+      await openFreshDeck(page)
+
+      const bass = page.getByRole('region', { name: 'Bass Line' })
+      const notes = await stepBoxes(bass.getByRole('group', { name: 'Bass steps' }))
+      const accents = await stepBoxes(bass.getByRole('group', { name: 'Bass accent steps' }))
+      const slides = await stepBoxes(bass.getByRole('group', { name: 'Bass slide steps' }))
+      expect(slides).toHaveLength(16)
+      for (let i = 0; i < 16; i++) {
+        expect(Math.abs(slides[i].x - notes[i].x), `slide ${i + 1} under note ${i + 1}`)
+          .toBeLessThanOrEqual(1)
+        expect(Math.abs(slides[i].x - accents[i].x), `slide ${i + 1} under accent ${i + 1}`)
+          .toBeLessThanOrEqual(1)
+        expect(Math.abs(slides[i].width - notes[i].width), `slide ${i + 1} width`)
+          .toBeLessThanOrEqual(1)
+      }
+      // Under the Accent row, not beside it.
+      expect(slides[0].y).toBeGreaterThan(accents[8].y + accents[8].height - 1)
       expect(await pageOverflow(page)).toBeLessThanOrEqual(0)
     })
 

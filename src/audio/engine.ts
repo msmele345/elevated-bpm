@@ -48,7 +48,7 @@ import {
   type RenderableAudio,
   type Slice,
 } from '../model/slice'
-import { resolveStep } from './stepResolution'
+import { LEGATO_ACCENT_SECONDS, SLIDE_SECONDS, resolveStep } from './stepResolution'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
 import { decodeForAnalysis, decodeForRender } from './sampleDecoder'
@@ -91,6 +91,17 @@ let playingSlotId = ''
  * the new slot before its first beat.
  */
 let slotSwitch: { at: number; from: string } | null = null
+/**
+ * The step a slid bass note's gate is held open to, as the last 16th's
+ * resolution left it, threaded into the next one like the playing slot.
+ */
+let bassTie: number | null = null
+/**
+ * When the bass gate was last attacked or glided on the audio clock. A stop
+ * releases a held gate no earlier than this, so the release can never land
+ * ahead of a note the look-ahead has already scheduled.
+ */
+let bassGateAt = 0
 let currentMixer: Mixer = {}
 let currentSamplerSettings: SamplerSettings = createSamplerSettings()
 let repeatScheduled = false
@@ -873,8 +884,9 @@ export function getSpectrum(): Float32Array | null {
 export async function play(): Promise<void> {
   await unlockAudio()
   const transport = Tone.getTransport()
-  // A loop always starts on the slot the user is looking at.
+  // A loop always starts on the slot the user is looking at, with no gate held.
   playOnSelectedSlot()
+  bassTie = null
   if (!repeatScheduled) {
     transport.scheduleRepeat((time) => {
       // Derive the step from transport ticks at the scheduled time so the
@@ -896,7 +908,9 @@ export async function play(): Promise<void> {
         bass: bassSettings,
         transport: { bpm: liveBpm, swing: currentSwing },
         stepIndex,
+        bassTie,
       })
+      bassTie = resolved.bassTie
       const { starts, chokes, notes, swingOffset } = resolved
       // Every sequenced sound on this 16th lands at the same, possibly swung,
       // moment. The step index above came from the straight grid, so swing
@@ -910,6 +924,9 @@ export async function play(): Promise<void> {
       for (const laneId of chokes) {
         voices[laneId].player.stop(at)
       }
+      // Likewise a held bass gate whose note isn't coming closes before
+      // anything on this 16th attacks.
+      if (resolved.releaseTie) bass?.synth.triggerRelease(at)
       // All voices share the transport, so lanes stay independent and
       // sample-locked; each fires at its own accent velocity.
       for (const hit of starts) {
@@ -922,20 +939,33 @@ export async function play(): Promise<void> {
         }
       }
       // Every note lane resolves from this same scheduled 16th as the drums.
-      // Bass uses its monophonic voice. Programmed stabs use a separate
-      // polyphonic pool from live input so same-pitch releases cannot steal a
-      // held live key.
+      // Bass uses its monophonic voice, gated in attack/release pairs so a
+      // slid chain is one gate. Programmed stabs use a separate polyphonic
+      // pool from live input so same-pitch releases cannot steal a held live
+      // key.
       for (const note of notes) {
         const duration = note.lengthSteps * stepSeconds
         if (note.laneId === 'bass' && bass) {
-          const { gain, filterOctaves, filterDecay } = note.voicing
-          bass.accent.gain.setValueAtTime(gain, at)
-          bass.envelopeDepth.gain.setValueAtTime(filterOctaves * CENTS_PER_OCTAVE, at)
-          // Tone computes an envelope's curve when it is triggered, so each
-          // note in the look-ahead keeps its own decay.
-          bass.filterEnvelope.decay = filterDecay
-          bass.filterEnvelope.triggerAttack(at)
-          bass.synth.triggerAttackRelease(note.frequency, duration, at)
+          if (note.legato) {
+            // Glided into: the gate is already open, so the pitch moves and
+            // neither the amplitude nor the filter envelope restarts. Its accent
+            // still counts — the gain stage glides to this note's level — but
+            // the filter keeps the chain's envelope, which only an attack sets.
+            bass.synth.frequency.exponentialRampTo(note.frequency, SLIDE_SECONDS, at)
+            bass.accent.gain.rampTo(note.voicing.gain, LEGATO_ACCENT_SECONDS, at)
+          } else {
+            const { gain, filterOctaves, filterDecay } = note.voicing
+            bass.accent.gain.setValueAtTime(gain, at)
+            bass.envelopeDepth.gain.setValueAtTime(filterOctaves * CENTS_PER_OCTAVE, at)
+            // Tone computes an envelope's curve when it is triggered, so each
+            // note in the look-ahead keeps its own decay.
+            bass.filterEnvelope.decay = filterDecay
+            bass.filterEnvelope.triggerAttack(at)
+            bass.synth.triggerAttack(note.frequency, at)
+          }
+          // A note tied on leaves its gate for the note it slides into to close.
+          if (!note.tiesOn) bass.synth.triggerRelease(at + duration)
+          bassGateAt = at
         }
         if (note.laneId === 'stab' && stab) {
           stab.triggerSequenced(note.frequency, duration, at, 0.72)
@@ -953,6 +983,10 @@ export function stop(): void {
   transport.stop()
   // Stop clears a queued switch: stopped, the selected slot is the one playing.
   playOnSelectedSlot()
+  // A held gate's release was left to the note it slides into, which will
+  // never come now. Other notes keep their own releases and ring out.
+  if (bassTie !== null) bass?.synth.triggerRelease(Math.max(Tone.immediate(), bassGateAt))
+  bassTie = null
   stab?.stopSequenced()
   stabSoundingNotes.clearSequenced()
   padSoundingLanes.clearSequenced()

@@ -11,7 +11,13 @@ import {
   type GoalContext,
   type SamplerGoalContext,
 } from './lesson'
-import { toggleNoteStep, transposeNoteStep } from './note'
+import {
+  resizeNoteStep,
+  toggleNoteAccent,
+  toggleNoteSlide,
+  toggleNoteStep,
+  transposeNoteStep,
+} from './note'
 import { createInitialPattern, cycleStep, toggleStep } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -401,6 +407,122 @@ describe('isGoalMet — chordPlayed', () => {
   it('is not met by notes played one at a time', () => {
     expect(isGoalMet(lesson, { pattern, chord: { held: {}, maxNotes: 1 } })).toBe(false)
     expect(isGoalMet(lesson, { pattern })).toBe(false)
+  })
+})
+
+/** Flip the accent (or slide) flag of each listed note-lane step. */
+function withFlags(
+  pattern: Pattern,
+  laneId: NoteLaneId,
+  toggle: typeof toggleNoteAccent,
+  steps: number[],
+): Pattern {
+  return steps.reduce<Pattern>((p, step) => toggle(p, laneId, step), pattern)
+}
+
+describe('isGoalMet — notesAccented', () => {
+  const lesson = parseLesson({
+    ...validLesson,
+    id: 'accent-it',
+    spotlight: ['accentRow:bass'],
+    goal: [{ type: 'notesAccented', lane: 'bass', min: 3 }],
+  })
+
+  it('is met once enough notes carry the accent flag', () => {
+    const pattern = withFlags(notePattern('bass', [0, 2, 4, 6]), 'bass', toggleNoteAccent, [0, 2, 6])
+    expect(isGoalMet(lesson, { pattern })).toBe(true)
+  })
+
+  it('is not met while too few notes are accented', () => {
+    const pattern = withFlags(notePattern('bass', [0, 2, 4, 6]), 'bass', toggleNoteAccent, [0, 2])
+    expect(isGoalMet(lesson, { pattern })).toBe(false)
+  })
+
+  it('ignores an accent parked on a step with no note', () => {
+    // Flags are kept on off steps like pitch and length, but an accent with no
+    // note under it is silent, so it is no part of the line.
+    const pattern = withFlags(notePattern('bass', [0, 2]), 'bass', toggleNoteAccent, [0, 2, 5])
+    expect(isGoalMet(lesson, { pattern })).toBe(false)
+  })
+})
+
+describe('isGoalMet — notesSlid', () => {
+  const lesson = parseLesson({
+    ...validLesson,
+    id: 'slide-into-it',
+    spotlight: ['slideRow:bass'],
+    goal: [{ type: 'notesSlid', lane: 'bass', min: 2 }],
+  })
+
+  it('is met by slides that each glide into a following note', () => {
+    const pattern = withFlags(notePattern('bass', [0, 1, 4, 5]), 'bass', toggleNoteSlide, [0, 4])
+    expect(isGoalMet(lesson, { pattern })).toBe(true)
+  })
+
+  it('does not count a slide into an empty step — that ties, it does not connect', () => {
+    const pattern = withFlags(notePattern('bass', [0, 1, 4]), 'bass', toggleNoteSlide, [0, 4])
+    expect(assertionProgress(lesson.goal[0], { pattern })).toMatchObject({ met: false, done: 1 })
+  })
+
+  it('does not count a slide parked on a step with no note', () => {
+    const pattern = withFlags(notePattern('bass', [0, 1, 4, 5]), 'bass', toggleNoteSlide, [0, 2])
+    expect(isGoalMet(lesson, { pattern })).toBe(false)
+  })
+
+  it('measures where the gate reaches from the note’s length, as the voice does', () => {
+    // A two-step note at 0 reaches step 2, which is empty — a tie, even though
+    // a note waits further on at 3.
+    const long = resizeNoteStep(notePattern('bass', [0, 3, 6, 7]), 'bass', 0, 1)
+    const pattern = withFlags(long, 'bass', toggleNoteSlide, [0, 6])
+    expect(assertionProgress(lesson.goal[0], { pattern })).toMatchObject({ met: false, done: 1 })
+  })
+
+  it('counts a slide off the last step into the first, because the loop wraps', () => {
+    const pattern = withFlags(notePattern('bass', [0, 7, 8, 15]), 'bass', toggleNoteSlide, [7, 15])
+    expect(isGoalMet(lesson, { pattern })).toBe(true)
+  })
+
+  it('counts only its own lane', () => {
+    const pattern = withFlags(notePattern('stab', [0, 1, 4, 5]), 'stab', toggleNoteSlide, [0, 4])
+    expect(isGoalMet(lesson, { pattern })).toBe(false)
+  })
+})
+
+describe('parseLesson — the acid goal vocabulary', () => {
+  function withGoal(goal: unknown) {
+    return () => parseLesson({ ...validLesson, goal: [goal] })
+  }
+
+  it('accepts accent and slide goals on the bass', () => {
+    expect(
+      parseLesson({
+        ...validLesson,
+        goal: [
+          { type: 'notesAccented', lane: 'bass', min: 3 },
+          { type: 'notesSlid', lane: 'bass', min: 2 },
+        ],
+      }).goal,
+    ).toEqual([
+      { type: 'notesAccented', lane: 'bass', min: 3 },
+      { type: 'notesSlid', lane: 'bass', min: 2 },
+    ])
+  })
+
+  it('rejects a lane that shows no flags, so a stab accent goal fails at load', () => {
+    // The stab carries the flags but has no rows and ignores them: a goal on it
+    // could never be met from the deck and would never be seen to fail.
+    expect(withGoal({ type: 'notesAccented', lane: 'stab', min: 2 })).toThrow(/stab/)
+    expect(withGoal({ type: 'notesSlid', lane: 'stab', min: 2 })).toThrow(/stab/)
+    expect(withGoal({ type: 'notesAccented', lane: 'kick', min: 2 })).toThrow(/kick/)
+    expect(withGoal({ type: 'notesSlid', lane: undefined, min: 2 })).toThrow(/lane/)
+  })
+
+  it('rejects counts no 16-step lane could reach', () => {
+    expect(withGoal({ type: 'notesAccented', lane: 'bass', min: 0 })).toThrow(/min/)
+    expect(withGoal({ type: 'notesAccented', lane: 'bass', min: 17 })).toThrow(/min/)
+    expect(withGoal({ type: 'notesSlid', lane: 'bass', min: 0 })).toThrow(/min/)
+    expect(withGoal({ type: 'notesSlid', lane: 'bass', min: 1.5 })).toThrow(/min/)
+    expect(withGoal({ type: 'notesSlid', lane: 'bass' })).toThrow(/min/)
   })
 })
 

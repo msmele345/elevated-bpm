@@ -1,15 +1,18 @@
 import { createBank, emptiedPattern, isPatternEmpty, withProgrammingOf } from './bank'
 import { clampParam } from './knob'
 import {
+  BASS_PARAMS,
   createBassSettings,
   DEFAULT_BASS_SETTINGS,
   setBassParam,
   type BassParamId,
   type BassSettings,
 } from './bass'
+import type { DeckParamId } from './deckParams'
 import {
   createFxSettings,
   DEFAULT_FX_SETTINGS,
+  FX_PARAMS,
   setFxParam,
   type FxParamId,
   type FxSettings,
@@ -17,11 +20,13 @@ import {
 import {
   createMasterSettings,
   DEFAULT_MASTER_SETTINGS,
+  MASTER_PARAMS,
   setMasterParam,
   type MasterParamId,
   type MasterSettings,
 } from './master'
 import {
+  LEVEL_PARAMS,
   levelParamForVoice,
   UNITY_MIX,
   voiceMix,
@@ -69,6 +74,8 @@ import {
   clampSwing,
   DEFAULT_BPM,
   DEFAULT_SWING,
+  SWING_PARAM,
+  swingToPercent,
   type TransportSettings,
 } from './transport'
 import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
@@ -597,6 +604,23 @@ export function setLevelParamValue(
   level: number,
 ): ProjectState {
   return setVoiceLevel(state, voiceOfLevelParam(id), level)
+}
+
+/**
+ * Where one knob sits now, in the knob's own units: the counterpart of the
+ * per-family setters above. A sweep needs it, because the position a knob
+ * moved *from* over a running loop is part of the motion.
+ */
+export function deckParamValue(state: ProjectState, id: DeckParamId): number {
+  const { bass, master, fx, sampler } = state.instrumentSettings
+  if (BASS_PARAMS.some((param) => param.id === id)) return bass[id as BassParamId]
+  if (MASTER_PARAMS.some((param) => param.id === id)) return master[id as MasterParamId]
+  if (FX_PARAMS.some((param) => param.id === id)) return fx[id as FxParamId]
+  if (LEVEL_PARAMS.some((param) => param.id === id)) {
+    return voiceMix(state.mixer, voiceOfLevelParam(id as LevelParamId)).level
+  }
+  if (id === SWING_PARAM.id) return swingToPercent(state.transport.swing)
+  return sampler[SAMPLER_PARAMS.find((param) => param.id === id)!.padId].tune
 }
 
 /**

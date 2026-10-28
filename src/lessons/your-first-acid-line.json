@@ -1,0 +1,13 @@
+{
+  "id": "your-first-acid-line",
+  "title": "Your First Acid Line",
+  "intro": "All of it at once. At least eight bass notes on three or more pitches, at least two of them accented, at least two slides that glide into the next note, and Swing somewhere from 54% to 70%. If you tidied anything away along the way, put it back — then press play, ride Cutoff and Env Mod while it runs, and let the line bend.",
+  "spotlight": [],
+  "goal": [
+    { "type": "notesPlaced", "lane": "bass", "min": 8 },
+    { "type": "pitchesVaried", "lane": "bass", "min": 3 },
+    { "type": "notesAccented", "lane": "bass", "min": 2 },
+    { "type": "notesSlid", "lane": "bass", "min": 2 },
+    { "type": "swingInRange", "min": 54, "max": 70 }
+  ]
+}

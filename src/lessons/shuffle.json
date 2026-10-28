@@ -1,0 +1,7 @@
+{
+  "id": "shuffle",
+  "title": "Shuffle",
+  "intro": "Acid shuffles. The Swing knob in the transport strip holds back every offbeat sixteenth, so the line rolls instead of ticking: 50% is dead straight, 66% is a triplet lilt, 75% limps. Set Swing somewhere from 56% to 66% and listen to the bassline and the hats start to swing together.",
+  "spotlight": ["knob:swing"],
+  "goal": [{ "type": "swingInRange", "min": 56, "max": 66 }]
+}

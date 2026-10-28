@@ -1,9 +1,11 @@
 import { DEFAULT_ARC_ID } from '../model/projectState'
 import { parseLesson, type Lesson } from '../model/lesson'
 import type { ArcFinale } from '../model/finale'
+import accentIt from './accent-it.json'
 import backbeatClap from './backbeat-clap.json'
 import bassMovement from './bass-movement.json'
 import buildYourOwnKit from './build-your-own-kit.json'
+import envModSweep from './env-mod-sweep.json'
 import envelopePluck from './envelope-pluck.json'
 import filterSweep from './filter-sweep.json'
 import findTheChop from './find-the-chop.json'
@@ -12,14 +14,19 @@ import fitTheBreak from './fit-the-break.json'
 import fourOnTheFloor from './four-on-the-floor.json'
 import kickAccents from './kick-accents.json'
 import loadASound from './load-a-sound.json'
+import makeItWalk from './make-it-walk.json'
 import offbeatHats from './offbeat-hats.json'
 import openHatLift from './open-hat-lift.json'
 import peakTimeTempo from './peak-time-tempo.json'
 import resonanceSquelch from './resonance-squelch.json'
+import shuffle from './shuffle.json'
+import sixteenths from './sixteenths.json'
+import slideIntoIt from './slide-into-it.json'
 import stabChord from './stab-chord.json'
 import stabHits from './stab-hits.json'
 import trimItTight from './trim-it-tight.json'
 import tuneAPad from './tune-a-pad.json'
+import yourFirstAcidLine from './your-first-acid-line.json'
 import yourFirstTechnoGroove from './your-first-techno-groove.json'
 
 /**
@@ -81,6 +88,39 @@ const TECHNO_ARC: CurriculumArc = {
 }
 
 /**
+ * The Acid Arc: one bassline, bent into a 303 line.
+ *
+ * It picks up where the techno arc's bass lessons leave off and stays on the
+ * one lane: first the busy line of sixteenths acid lives on, then movement,
+ * then the two flags that make it acid (accent before slide, because a slide
+ * needs a line already worth gliding through), then the filter envelope and
+ * the shuffle, and a capstone that asks for the whole line at once.
+ */
+const ACID_ARC: CurriculumArc = {
+  id: 'acid',
+  title: 'Acid',
+  blurb: 'One bassline, endlessly bent.',
+  lessons: [
+    sixteenths,
+    makeItWalk,
+    accentIt,
+    slideIntoIt,
+    envModSweep,
+    shuffle,
+    yourFirstAcidLine,
+  ].map(parseLesson),
+  finale: {
+    kicker: 'Acid track complete · BL-303 certified',
+    lead: 'You bent',
+    headline: 'an acid line',
+    copy: 'Accents that bite, slides that bend, a shuffle under all of it. That line came out of one synth and your hands on it.',
+    close: 'Back to the deck',
+    // Compact, like Sampling: techno stays the biggest moment on the deck.
+    scale: 'compact',
+  },
+}
+
+/**
  * The Sampling Arc: the craft the sampler exists for, taught against a break
  * the app knows well enough to be specific about.
  *
@@ -108,7 +148,7 @@ const SAMPLING_ARC: CurriculumArc = {
   },
 }
 
-export const ARCS: readonly CurriculumArc[] = [TECHNO_ARC, SAMPLING_ARC]
+export const ARCS: readonly CurriculumArc[] = [TECHNO_ARC, ACID_ARC, SAMPLING_ARC]
 
 /**
  * The track a document names, or the first one when it names nothing this

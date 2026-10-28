@@ -2,12 +2,12 @@
 
 The project's shared language: the words specs, issues, PRs, code comments and
 conversations use, and exactly what each one means here. Last reviewed
-2026-10-26: v2 (the SP-04 sampler release) is shipped, v3 is specified in
-`docs/specs/v3-groove-bank-acid.md`, and its first slices (EB3-01 swing, EB3-02
+2026-10-28: v2 (the SP-04 sampler release) is shipped, v3 is specified in
+`docs/specs/v3-groove-bank-acid.md`, and its slices (EB3-01 swing, EB3-02
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
 spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow,
-EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links, EB3-09a the bass Accent row and Env Mod, EB3-09b the bass Slide row) have shipped.
+EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links, EB3-09a the bass Accent row and Env Mod, EB3-09b the bass Slide row, EB3-10 the Acid Arc) have shipped, which closes the v3 issue track.
 
 ## How to use and maintain this file
 
@@ -67,7 +67,7 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   intro is `[0, 4, 8, 12]` in the goal.
 - **Track.**
   - A **curriculum track** is the learner-facing name for an Arc (Techno,
-    Sampling, and [v3 spec] Acid). Arc is the model word for the same thing.
+    Acid and Sampling). Arc is the model word for the same thing.
   - An **issue track** is a release's ordered set of issue files.
   - In music, a track is a song. In that sense, say "song" or "source" instead.
 - **Voice.** In the mixer, a voice is anything with its own channel: the five
@@ -440,8 +440,12 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **Sample store.** A separate IndexedDB store, split into slices (precious) and
   sources (expendable). Code: `saveSlice`, `saveSource`, `loadStoredAudio`.
 - **Session observation.** Something the user did this session that is
-  never saved: knob motion and chords played. Goals may read it. Code:
-  `SessionObservations`, `ParamMotion`, `ChordPlay`.
+  never saved: knob motion and chords played. Goals may read it. Knob motion
+  is the widest span of its travel a knob has covered over a running loop,
+  counting the position each move started from, so one keypress from the
+  bottom of a knob to the top is a full sweep; a knob turned on a stopped deck
+  leaves no trace. Code: `SessionObservations`, `ParamMotion`,
+  `observeParamMotion`, `deckParamValue`, `ChordPlay`.
 - **Version ledger.** The table recording which issue spends which ProjectState
   version. The v2 ledger is in `docs/issues/README.md`; the v3 one is in the spec's Further Notes.
 
@@ -496,8 +500,12 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 ## Curriculum
 
 - **Arc.** An ordered list of lessons plus its track title, blurb and finale.
-  Today there are Techno (14 lessons) and Sampling (6). [v3 spec] Acid (7) is added and the order becomes
-  Techno, Acid, Sampling. Founding term. Code: `CurriculumArc`, `ARCS`.
+  Three ship, in this order on the track selector: Techno (14 lessons), Acid (7,
+  id `acid`, "One bassline, endlessly bent.": Sixteenths, Make It Walk, Accent
+  It, Slide Into It, Env Mod Sweep, Shuffle, Your First Acid Line) and Sampling
+  (6). Every arc can be started at once; none waits on another. Each is
+  registered in code with one entry in `ARCS`. Founding term. Code:
+  `CurriculumArc`, `ARCS`.
 - **Capstone.** An arc's final lesson, whose goal asks for the whole arc at
   once (for example, "Your First Techno Groove"). Earning it raises the finale.
 - **Completed (earned).** Completion recorded in `lessonProgress`. It is latched, so undoing
@@ -529,14 +537,19 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   (Next ▸: put away, then scroll to spotlight).
 - **Finale (graduation moment).** The dialog raised on a capstone's incomplete →
   complete transition, never on reload or on revisiting the capstone. Its scale is `grand` (Techno, EB-01,
-  16 lights) or `compact` (Sampling as SP-04; [v3 spec] Acid as BL-303; 8 lights).
+  16 lights) or `compact` (Acid, certified as BL-303, and Sampling, as SP-04; 8 lights).
+  Techno's stays the one grand ending.
   Code: `ArcFinale`, `FinaleMoment`.
 - **Goal (goal assertion).** A declarative JSON check over the goal context. A
   lesson is met when every assertion is met. The parser rejects unknown lanes,
   knobs, pads, unreachable counts and out-of-range values when the lesson loads. Types:
   - exact placement: `stepsActive`, `stepsAccented`, `notesActive`;
   - minimum count: `notesPlaced`, `pitchesVaried`, `padStepsPlaced`, `sourceLoaded`,
-    `padAssigned`, and [v3 spec] `notesAccented` and `notesSlid`;
+    `padAssigned`, `notesAccented` and `notesSlid`. The last two count accented
+    notes and slides that glide into a following note (a slide into a rest only
+    ties, and one on an empty step does nothing, so neither counts; read with
+    `slideReach`, as the voice reads it). Their lane must be one that shows the
+    flags (`NOTE_FLAG_LANES`, the bass), so a stab flag goal fails at load;
   - range: `bpmInRange` and `swingInRange` (in percent, within 50–75);
   - observation: `paramSwept` and `chordPlayed`;
   - sampler value: `regionStartsWithin`, `regionShorterThan`, `fitTargetSet` and `padTuned`.
@@ -560,7 +573,8 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   Code: `LessonArc`, `ArcEntry`.
 - **Progress chip.** One goal assertion's progress on the lesson card, as text
   generated from the goal type and the lane's, knob's or pad's display label:
-  "Kick 3/4 · 1 extra", "Bass notes 2/4", "Cutoff sweep 60%", "Tempo 130 → 138–145",
+  "Kick 3/4 · 1 extra", "Bass notes 2/4", "Bass accents 1/3", "Bass slides 1/2",
+  "Cutoff sweep 60%", "Tempo 130 → 138–145",
   "Swing 50% → 54–70%", "Pad 1 start 0.70 s". Placement chips count wanted steps and
   extras and never say which steps are wrong; a sweep reads as a share of the travel
   asked for; range and value chips read the current value. An optional JSON `label`

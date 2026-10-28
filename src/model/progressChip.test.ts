@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseLesson, type GoalAssertion, type GoalContext } from './lesson'
-import { toggleNoteStep } from './note'
+import { toggleNoteAccent, toggleNoteSlide, toggleNoteStep } from './note'
 import { createInitialPattern, cycleStep, toggleStep } from './pattern'
 import {
   chipMetAnnouncement,
@@ -69,6 +69,29 @@ describe('progressChip — counts, sweeps and chords', () => {
     expect(text({ type: 'notesPlaced', lane: 'stab', min: 2 }, { pattern })).toBe('Stab notes 2/2')
     expect(text({ type: 'pitchesVaried', lane: 'bass', min: 3 })).toBe('Bass pitches 0/3')
     expect(text({ type: 'padStepsPlaced', min: 4 })).toBe('Pad steps 0/4')
+  })
+
+  it('reads accented and slid bass notes as counts, named by the lane', () => {
+    const line = [0, 1, 2, 3].reduce<Pattern>(
+      (p, step) => toggleNoteStep(p, 'bass', step),
+      createInitialPattern(),
+    )
+    const flagged = toggleNoteSlide(toggleNoteAccent(line, 'bass', 0), 'bass', 3)
+    expect(text({ type: 'notesAccented', lane: 'bass', min: 3 })).toBe('Bass accents 0/3')
+    expect(text({ type: 'notesAccented', lane: 'bass', min: 2 }, { pattern: flagged })).toBe(
+      'Bass accents 1/2',
+    )
+    // Step 3 is the last note and slides into an empty step 4: a tie, so it
+    // reads as no slide yet.
+    expect(text({ type: 'notesSlid', lane: 'bass', min: 2 }, { pattern: flagged })).toBe(
+      'Bass slides 0/2',
+    )
+    expect(
+      progressChip(
+        { type: 'notesSlid', lane: 'bass', min: 1 },
+        { pattern: toggleNoteSlide(flagged, 'bass', 1) },
+      ),
+    ).toEqual({ text: 'Bass slides 1/1', met: true })
   })
 
   it('reads a sweep as a percentage of the travel it asks for, named by the knob', () => {

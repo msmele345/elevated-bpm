@@ -24,24 +24,31 @@ export type ParamMotion = Record<string, ParamSpan>
 export const NO_PARAM_MOTION: ParamMotion = {}
 
 /**
- * Fold one knob position into the record. Motion is only observed while
- * playing: sound design is something you do to a running loop, so a knob
- * turned on a stopped deck leaves no trace.
+ * Fold one knob move into the record. Motion is only observed while playing:
+ * sound design is something you do to a running loop, so a knob turned on a
+ * stopped deck leaves no trace.
+ *
+ * `from` is where the knob sat just before this move. Over a running loop that
+ * was a position the learner heard too, so it counts: one keypress from the
+ * bottom of a knob to the top is a full sweep, not a single point at the top.
  */
 export function observeParamMotion(
   motion: ParamMotion,
   spec: ParamSpec,
   value: number,
   playing: boolean,
+  from: number = value,
 ): ParamMotion {
   if (!playing) return motion
   const position = normalizeParam(spec, value)
-  const span = motion[spec.id]
+  const start = normalizeParam(spec, from)
+  const span = motion[spec.id] ?? { min: start, max: start }
   return {
     ...motion,
-    [spec.id]: span
-      ? { min: Math.min(span.min, position), max: Math.max(span.max, position) }
-      : { min: position, max: position },
+    [spec.id]: {
+      min: Math.min(span.min, start, position),
+      max: Math.max(span.max, start, position),
+    },
   }
 }
 

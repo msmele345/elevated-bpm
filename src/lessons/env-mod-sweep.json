@@ -1,0 +1,7 @@
+{
+  "id": "env-mod-sweep",
+  "title": "Env Mod Sweep",
+  "intro": "Env Mod sets how far every note throws the filter open before Decay closes it again — the 'wow' at the front of each note. Press play, then turn Env Mod from nothing up to most of the way and listen to the notes go from a flat buzz to a squelch. Take it across at least half its range while the loop runs.",
+  "spotlight": ["knob:envMod"],
+  "goal": [{ "type": "paramSwept", "param": "envMod", "minTravel": 0.5 }]
+}

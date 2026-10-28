@@ -3369,6 +3369,36 @@ body::before {
   user-select: none;
 }
 
+/* The 303 flag rows under the bass lane: a thin toggle per step on the
+   lane's own step tracks (a .step-row holding a .step-grid of .step keys), so
+   step n sits under note n on desktop and on a phone. An accent parked on a
+   step with no note stays lit, at half strength, until a note comes in. */
+.flag-row {
+  margin-top: 8px;
+}
+
+.lane-label.flag-label {
+  padding-left: 15px;
+  font-size: 0.62rem;
+  color: var(--ink-dim);
+}
+
+.step.flag-step {
+  aspect-ratio: auto;
+  height: 18px;
+  padding: 0;
+  justify-content: center;
+}
+
+.flag-step .step-led {
+  width: 50%;
+  height: 4px;
+}
+
+.flag-step[data-no-note][aria-pressed='true'] .step-led {
+  opacity: 0.45;
+}
+
 /* ── Knobs ─────────────────────────────────────────────────────────── */
 .knob-row {
   display: flex;

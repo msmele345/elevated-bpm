@@ -3,7 +3,7 @@
 > Track: v3.0 · Slice 9a of 15
 > Blocked by: EB3-00, EB3-06 (rows wrap with the phone pattern), EB3-07a (schema chain: v14 follows v13)
 > Blocks: EB3-09b, EB3-10
-> Branch: `feat/bass-accent-envmod`
+> Branch: `feat/acid-groove-09a-bass-accent-envmod`
 > Schema: **v14**
 > Spec stories: 72–73, 78–84 (accent and Env Mod parts); spec "Slide, accent and Env Mod"
 
@@ -53,23 +53,77 @@ no sound. EB3-09b gives it both.
 
 ## Acceptance criteria
 
-- [ ] v13 → v14 migration: flags off, envMod 0 in every slot; the bass sounds
-      identical
-- [ ] Env Mod knob opens the filter per note and Decay closes it; Cutoff still
-      moves the base live while Env Mod is up
-- [ ] Accented bass notes are ~4 dB louder and audibly "wow" even at Env Mod 0;
-      unaccented notes are unchanged
-- [ ] Accent row: 16 named toggle buttons under the bass lane, keyboard-operable,
+- [x] v13 → v14 migration: flags off, envMod 0 in every slot; the bass sounds
+      identical — `migrateV13ToV14` runs `withNoteFlags` over every slot and
+      `createBassSettings` over the patch. `projectState.test.ts` "lifts a v13
+      document to v14: every note flag off and Env Mod 0, in every slot, sounding
+      as before" (programming in two slots, both note lanes, a hand-set patch: the
+      migrated document equals the current one). Identical sound: `bassVoicing` of
+      an unaccented note at Env Mod 0 is unity gain and 0 octaves
+      (`stepResolution.test.ts`), and the engine applies exactly that — gain 1,
+      depth 0 (`engine.test.ts` "plays an unaccented note at Env Mod 0 exactly as
+      before"); in-browser the unaccented note's 800–3000 Hz band and peak were
+      unchanged before and after accents existed on the lane (−72.4 / −71.8 dB,
+      1.072 / 1.071)
+- [x] Env Mod knob opens the filter per note and Decay closes it; Cutoff still
+      moves the base live while Env Mod is up — `envMod` (0–100 %, default 0) joins
+      `BASS_PARAMS`, so the knob, `knob:envMod`, clamping and repair come with the
+      registry. A `Tone.Envelope` scaled in cents drives the bass filter's
+      `detune`, which multiplies Cutoff: `engine.test.ts` "opens the filter by Env
+      Mod's octaves on every note, decaying with Decay" (2 octaves → 2400 cents at
+      50 %, the envelope's decay set to the Decay knob at the attack) and "keeps
+      Cutoff live with Env Mod up" (Cutoff ramps `frequency`; `detune` untouched).
+      In-browser, with Env Mod at 100 % and the loop running, Cutoff moved the live
+      filter 301 → 757 Hz
+- [x] Accented bass notes are ~4 dB louder and audibly "wow" even at Env Mod 0;
+      unaccented notes are unchanged — `bassVoicing`: accent gain =
+      `ACCENT_GAIN / UNACCENTED_GAIN` (+4.2 dB, the drum gap), applied by an accent
+      `Tone.Gain` after the filter because velocity tops out at 1, plus
+      `ACCENT_ENV_OCTAVES` (2) of extra depth decaying in half the Decay time.
+      `stepResolution.test.ts` "bassVoicing — accent and Env Mod", `engine.test.ts`
+      "applies an accent as given"
+- [x] Accent row: 16 named toggle buttons under the bass lane, keyboard-operable,
       flag kept on empty steps; wraps aligned on phones (Playwright 320/390 no
-      overflow)
-- [ ] Flags and envMod round-trip through bank slots, links and bundles;
-      non-boolean flags and out-of-range envMod rejected
-- [ ] `knob:envMod` and `accentRow:bass` are spotlightable; shipped-lessons guard
-      passes
-- [ ] In-browser FFT: with Env Mod 50% the high band rises at each note onset and
+      overflow) — `NoteFlagRow` (plain `<button>`s with `aria-pressed`, named "Bass
+      accent, step 3, on" / "… off" / "… on (no note)"), a `.step-row` holding a
+      `.step-grid` so it shares the lane's tracks. `App.test.ts` "App bass Accent row
+      and Env Mod" (16 names, after the lane, none on the stab; accent kept through
+      note off/on; saved in the selected slot the engine reads); `a11y.test.ts`
+      still green. `e2e/reflow.spec.ts` "the bass Accent row wraps with the lane,
+      each toggle under its note" at 390×844 and 320×640 (x and width within 1 px,
+      no page overflow); the row also passes the every-lane 2×8 check. Desktop
+      measured 0 px misalignment in-browser
+- [x] Flags and envMod round-trip through bank slots, links and bundles;
+      non-boolean flags and out-of-range envMod rejected — `isNoteStep` requires
+      boolean `slide`/`accent`; `isPatch` already range-checks every bass param.
+      `share.test.ts` "round-trips 303 accents in every slot, an accent parked on an
+      empty step, and Env Mod", "opens a link written before the 303 flags…",
+      "rejects a payload whose note flags are not booleans", "rejects a payload whose
+      Env Mod is missing or out of range", and the bundle's "carries 303 accents in
+      every slot and Env Mod". Copy carries flags because `withProgrammingOf` clones
+      every step
+- [x] `knob:envMod` and `accentRow:bass` are spotlightable; shipped-lessons guard
+      passes — `BassPanel.test.ts` rings the Accent row for `spotlitAccentRow` (App
+      passes `spotlitTarget('accentRow:bass')`) and the Env Mod knob for
+      `knob:envMod`; `lessons.test.ts` "spotlights a flag row only on a lane that
+      shows one" (`NOTE_FLAG_LANES`) and the existing knob guard pass
+- [x] In-browser FFT: with Env Mod 50% the high band rises at each note onset and
       decays; an accented note's peak and filter opening exceed an unaccented
-      one's at Env Mod 0
-- [ ] `GLOSSARY.md` updated
+      one's at Env Mod 0 — analyser tapped off the bass accent stage in the dev
+      build, Cutoff 301 Hz, notes on steps 1 and 9 at 130 BPM, 800–3000 Hz band:
+      Env Mod 0 peaked at −72.4 dB; Env Mod 50 % at −23.5 dB on the onset's step,
+      falling to −85.7 dB a step later and to the floor after. At Env Mod 0 with
+      step 9 accented: band −21.8 dB vs −72.7 dB and peak 1.885 vs 1.071 (×1.76),
+      step 1 unchanged. Zero console errors
+- [x] `GLOSSARY.md` updated — Accent (both meanings), Accent row, Env Mod, Note
+      step, Bass synth, Param registry, Neutral, Step resolution, ProjectState
+      (v14), Share validator, Spotlight; `[v3 spec]` dropped for what shipped
+
+**Note:** step resolution now takes the bass patch and hands each bass note its
+`voicing` (gain, filter octaves, filter decay), so the Tone callback applies it
+and decides nothing. Env Mod, like Decay, takes effect on the next note; only
+Cutoff is live mid-note. `slide` is on every note step but has no row and no
+sound until EB3-09b.
 
 ## Testing decisions
 

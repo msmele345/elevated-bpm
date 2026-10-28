@@ -9,8 +9,16 @@ import {
 import { clampParam, formatParam, normalizeParam } from './knob'
 
 describe('BASS_PARAMS', () => {
-  it('describes the cutoff, resonance and envelope knobs the panel renders', () => {
-    expect(BASS_PARAMS.map((param) => param.id)).toEqual(['cutoff', 'resonance', 'decay'])
+  it('describes the cutoff, resonance, envelope and Env Mod knobs the panel renders', () => {
+    expect(BASS_PARAMS.map((param) => param.id)).toEqual(['cutoff', 'resonance', 'decay', 'envMod'])
+  })
+
+  it('rests Env Mod at 0 % — neutral, so an untouched bass sounds as it did before the knob', () => {
+    const envMod = BASS_PARAMS.find((param) => param.id === 'envMod')!
+
+    expect(envMod).toMatchObject({ label: 'Env Mod', min: 0, max: 100, default: 0, unit: '%' })
+    expect(DEFAULT_BASS_SETTINGS.envMod).toBe(0)
+    expect(formatParam(envMod, 50)).toBe('50 %')
   })
 
   it('gives every knob a labelled, sane range containing its default', () => {
@@ -69,5 +77,12 @@ describe('createBassSettings', () => {
     expect(restored.cutoff).toBe(2400)
     expect(restored.resonance).toBe(clampParam(BASS_PARAMS[1], 1e6))
     expect(restored.decay).toBe(DEFAULT_BASS_SETTINGS.decay)
+  })
+
+  it('gives a patch saved before Env Mod existed Env Mod 0, and clamps an out-of-range one', () => {
+    expect(createBassSettings({ cutoff: 2400, resonance: 9, decay: 0.3 }).envMod).toBe(0)
+    expect(createBassSettings({ envMod: 250 }).envMod).toBe(100)
+    expect(createBassSettings({ envMod: -5 }).envMod).toBe(0)
+    expect(createBassSettings({ envMod: 40 }).envMod).toBe(40)
   })
 })

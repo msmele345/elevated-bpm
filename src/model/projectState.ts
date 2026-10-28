@@ -31,7 +31,14 @@ import {
   type VoiceId,
   type VoiceMix,
 } from './mixer'
-import { resizeNoteStep, toggleNoteStep, transposeNoteStep, withNoteLanes } from './note'
+import {
+  resizeNoteStep,
+  toggleNoteAccent,
+  toggleNoteStep,
+  transposeNoteStep,
+  withNoteFlags,
+  withNoteLanes,
+} from './note'
 import {
   createDemoPattern,
   createInitialPattern,
@@ -80,8 +87,9 @@ import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 // curriculum multi-track — one lesson pointer per arc, plus the arc on screen;
 // v11 adds swing to the transport; v12 keys the mixer by voice — bass and stab
 // join the drum and pad lanes — and gives every strip a Level; v13 makes
-// `patterns` the pattern bank: always four slots, A–D.
-export const PROJECT_STATE_VERSION = 13
+// `patterns` the pattern bank: always four slots, A–D; v14 gives every note
+// step the 303 slide and accent flags and the bass patch Env Mod.
+export const PROJECT_STATE_VERSION = 14
 
 /**
  * The arc a document that predates the multi-track curriculum was on.
@@ -260,6 +268,15 @@ export function toggleActivePatternNoteStep(
   stepIndex: number,
 ): ProjectState {
   return editActivePattern(state, (p) => toggleNoteStep(p, laneId, stepIndex))
+}
+
+/** Immutably flip one note step's 303 accent in the active pattern, note or no note. */
+export function toggleActivePatternNoteAccent(
+  state: ProjectState,
+  laneId: NoteLaneId,
+  stepIndex: number,
+): ProjectState {
+  return editActivePattern(state, (p) => toggleNoteAccent(p, laneId, stepIndex))
 }
 
 /** Immutably shift one note of the active pattern by semitones. */
@@ -611,8 +628,12 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
       // Every v12 document held exactly one pattern; one with none is corrupt,
       // and a fresh deck beats a bank invented around nothing.
       const v12 = doc as ProjectStateV12
-      return Array.isArray(v12.patterns) && v12.patterns.length > 0 ? migrateV12ToV13(v12) : null
+      return Array.isArray(v12.patterns) && v12.patterns.length > 0
+        ? migrateProjectState(migrateV12ToV13(v12))
+        : null
     }
+    case 13:
+      return migrateV13ToV14(doc as ProjectStateV13)
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:
@@ -724,6 +745,9 @@ type ProjectStateV10 = Omit<ProjectState, 'version' | 'transport' | 'mixer'> & {
 
 /** v12 had one pattern and no bank. */
 type ProjectStateV12 = Omit<ProjectState, 'version'> & { version: 12 }
+
+/** v13 had the bank, but no 303 flags on a note step and no Env Mod on the bass. */
+type ProjectStateV13 = Omit<ProjectState, 'version'> & { version: 13 }
 
 /** v11 had swing, but no Level, and bass and stab had no strip of their own. */
 type ProjectStateV11 = Omit<ProjectState, 'version' | 'mixer'> & {
@@ -861,10 +885,25 @@ function migrateV11ToV12(doc: ProjectStateV11): ProjectStateV12 {
   return { ...doc, version: 12, mixer }
 }
 
-function migrateV12ToV13(doc: ProjectStateV12): ProjectState {
+function migrateV12ToV13(doc: ProjectStateV12): ProjectStateV13 {
   // The pattern the user had becomes slot A under the same id, so the saved
   // selection still names it and it plays exactly as before; B–D arrive empty.
   const saved = doc.patterns.find((pattern) => pattern.id === doc.activePatternId) ?? doc.patterns[0]
   const patterns = createBank(saved)
   return { ...doc, version: 13, patterns, activePatternId: patterns[0].id }
+}
+
+function migrateV13ToV14(doc: ProjectStateV13): ProjectState {
+  return {
+    ...doc,
+    version: 14,
+    // Slide and accent off on every note step of every slot, and Env Mod at 0:
+    // no v13 note glided, hit harder or opened the filter, so an upgraded bass
+    // has to sound exactly the way its owner left it.
+    patterns: doc.patterns.map(withNoteFlags),
+    instrumentSettings: {
+      ...doc.instrumentSettings,
+      bass: createBassSettings(doc.instrumentSettings?.bass),
+    },
+  }
 }

@@ -45,6 +45,7 @@ import {
   cycleActivePatternStep,
   enterLesson,
   selectLesson,
+  toggleActivePatternNoteAccent,
   toggleActivePatternNoteStep,
   toggleVoiceMute,
   toggleVoiceSolo,
@@ -554,8 +555,22 @@ describe('bass note editing', () => {
       on: true,
       pitch: DEFAULT_PITCH,
       length: MIN_NOTE_LENGTH,
+      slide: false,
+      accent: false,
     })
     expect(bassSteps(state)[4].on).toBe(false)
+  })
+
+  it('toggles a bass note’s accent in the selected slot only, on an empty step too', () => {
+    const state = selectSlot(createInitialProjectState(), createInitialProjectState().patterns[0].id)
+    const accented = toggleActivePatternNoteAccent(state, 'bass', 6)
+
+    expect(bassSteps(accented)[6]).toMatchObject({ on: false, accent: true })
+    expect(bassSteps(state)[6].accent).toBe(false)
+    for (const slot of accented.patterns.slice(1)) {
+      expect(slot).toBe(state.patterns[state.patterns.indexOf(slot)])
+    }
+    expect(bassSteps(toggleActivePatternNoteAccent(accented, 'bass', 6))[6].accent).toBe(false)
   })
 
   it('transposes and resizes a note through the document', () => {
@@ -588,6 +603,16 @@ describe('setBassParamValue', () => {
     expect(setBassParamValue(state, 'resonance', 1e6).instrumentSettings.bass.resonance).toBe(
       resonance.max,
     )
+  })
+})
+
+describe('setBassParamValue — Env Mod', () => {
+  it('stores Env Mod in the bass patch, clamped to 0–100 %', () => {
+    const state = createInitialProjectState()
+
+    expect(state.instrumentSettings.bass.envMod).toBe(0)
+    expect(setBassParamValue(state, 'envMod', 60).instrumentSettings.bass.envMod).toBe(60)
+    expect(setBassParamValue(state, 'envMod', 400).instrumentSettings.bass.envMod).toBe(100)
   })
 })
 
@@ -772,6 +797,47 @@ describe('migrateProjectState', () => {
       mixer: {},
       activeArcId: DEFAULT_ARC_ID,
       activeLessonIds: {},
+    })
+  })
+
+  it('lifts a v13 document to v14: every note flag off and Env Mod 0, in every slot, sounding as before', () => {
+    // A bank with programming in two slots, both note lanes, and a hand-set bass.
+    let current = setBassParamValue(
+      setBassParamValue(createDemoProjectState(), 'cutoff', 640),
+      'decay',
+      0.4,
+    )
+    current = transposeActivePatternNote(toggleActivePatternNoteStep(current, 'bass', 2), 'bass', 2, 5)
+    current = toggleActivePatternNoteStep(current, 'stab', 8)
+    current = selectSlot(current, current.patterns[2].id)
+    current = toggleActivePatternNoteStep(current, 'bass', 0)
+
+    // v13 had neither flag on a note step and no Env Mod on the bass.
+    const v13 = JSON.parse(JSON.stringify({ ...current, version: 13 }))
+    for (const pattern of v13.patterns) {
+      for (const lane of pattern.noteLanes) {
+        for (const step of lane.steps) {
+          delete step.slide
+          delete step.accent
+        }
+      }
+    }
+    delete v13.instrumentSettings.bass.envMod
+
+    const migrated = migrateProjectState(v13)!
+
+    expect(migrated.version).toBe(14)
+    expect(migrated).toEqual(current)
+    for (const pattern of migrated.patterns) {
+      for (const lane of pattern.noteLanes) {
+        expect(lane.steps.every((step) => step.slide === false && step.accent === false)).toBe(true)
+      }
+    }
+    expect(migrated.instrumentSettings.bass).toEqual({
+      cutoff: 640,
+      resonance: DEFAULT_BASS_SETTINGS.resonance,
+      decay: 0.4,
+      envMod: 0,
     })
   })
 
@@ -1108,7 +1174,7 @@ describe('migrateProjectState', () => {
 
     expect(migrated.instrumentSettings.bass.cutoff).toBe(2400)
     const bass = migrated.patterns[0].noteLanes.find((lane) => lane.id === 'bass')!
-    expect(bass.steps[2]).toEqual({ on: true, pitch: DEFAULT_PITCH + 3, length: MIN_NOTE_LENGTH })
+    expect(bass.steps[2]).toEqual({ on: true, pitch: DEFAULT_PITCH + 3, length: MIN_NOTE_LENGTH, slide: false, accent: false })
   })
 
   it('gives a v2 document (no mixer) an empty mixer on load', () => {

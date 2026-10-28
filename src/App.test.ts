@@ -315,6 +315,8 @@ function withDenseUnrelatedSlots(project: ProjectState): ProjectState {
           on: roll() < 0.7,
           pitch: minPitch + Math.floor(roll() * (maxPitch - minPitch + 1)),
           length: 1 + Math.floor(roll() * 4),
+          slide: false,
+          accent: false,
         })),
       }
     }),
@@ -2999,5 +3001,77 @@ describe('App lesson strip and scroll to spotlight', () => {
 
       expect(scrolled).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' })
     })
+  })
+})
+
+describe('App bass Accent row and Env Mod', () => {
+  const accentRow = () => screen.getByRole('group', { name: 'Bass accent steps' })
+  const accentStep = (step: number) =>
+    within(accentRow()).getByRole('button', { name: new RegExp(`^Bass accent, step ${step},`) })
+
+  it('puts 16 named accent toggles under the bass lane, and none under the stab', async () => {
+    await hydratedDeck()
+
+    const bass = screen.getByRole('region', { name: 'Bass Line' })
+    const toggles = within(accentRow()).getAllByRole('button')
+    expect(toggles).toHaveLength(16)
+    expect(toggles.map((toggle) => toggle.getAttribute('aria-label'))).toEqual(
+      Array.from({ length: 16 }, (_, i) => `Bass accent, step ${i + 1}, off`),
+    )
+    expect(toggles.every((toggle) => toggle.getAttribute('aria-pressed') === 'false')).toBe(true)
+    // Under the lane: the note steps come first in the panel, then the row.
+    const firstNote = within(bass).getByRole('button', { name: 'Bass step 1, empty' })
+    expect(
+      firstNote.compareDocumentPosition(toggles[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    const stab = screen.getByRole('region', { name: 'Chord Stab' })
+    expect(within(stab).queryByRole('group', { name: /accent/i })).toBeNull()
+  })
+
+  it('keeps an accent set on an empty step, and says the step has no note', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(accentStep(3))
+    expect(accentStep(3).getAttribute('aria-pressed')).toBe('true')
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, on (no note)')
+
+    // Placing the note under it makes it a playing accent; clearing the note keeps it.
+    fireEvent.click(screen.getByRole('button', { name: 'Bass step 3, empty' }))
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, on')
+    fireEvent.click(screen.getByRole('button', { name: /^Bass step 3, C2/ }))
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, on (no note)')
+
+    fireEvent.click(accentStep(3))
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, off')
+  })
+
+  it('saves the accent in the selected slot, where the engine reads it', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bass step 5, empty' }))
+    fireEvent.click(accentStep(5))
+
+    const [bank, selected] = engineSpies.setBank.mock.calls.at(-1)! as [Pattern[], string]
+    const slot = bank.find((pattern) => pattern.id === selected)!
+    expect(slot.noteLanes.find((lane) => lane.id === 'bass')!.steps[4]).toMatchObject({
+      on: true,
+      accent: true,
+    })
+  })
+
+  it('turns Env Mod on the bass panel into the patch the engine plays', async () => {
+    await hydratedDeck()
+
+    const envMod = within(screen.getByRole('region', { name: 'Bass Line' })).getByRole('slider', {
+      name: 'Env Mod',
+    })
+    expect(envMod.getAttribute('aria-valuetext')).toBe('0 %')
+
+    fireEvent.keyDown(envMod, { key: 'End' })
+
+    expect(envMod.getAttribute('aria-valuetext')).toBe('100 %')
+    expect(engineSpies.setBassSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ envMod: 100 }),
+    )
   })
 })

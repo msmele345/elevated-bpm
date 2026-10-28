@@ -15,7 +15,7 @@ import {
   type Lesson,
   type SamplerGoalContext,
 } from '../model/lesson'
-import { NOTE_LANES } from '../model/note'
+import { NOTE_FLAG_LANES, NOTE_LANES } from '../model/note'
 import { progressChip, progressChips } from '../model/progressChip'
 import { createDemoPattern, createInitialPattern } from '../model/pattern'
 import { createDemoProjectState, selectSlot } from '../model/projectState'
@@ -522,6 +522,14 @@ describe('the curriculum', () => {
       }
     }
     expect(slotsAlreadyMeeting(ALL_LESSONS, opening)).toEqual(new Map())
+  })
+
+  it('spotlights a flag row only on a lane that shows one', () => {
+    for (const lesson of ALL_LESSONS) {
+      for (const target of lesson.spotlight.filter((t) => t.startsWith('accentRow:'))) {
+        expect(NOTE_FLAG_LANES).toContain(target.slice('accentRow:'.length))
+      }
+    }
   })
 
   it('names only knobs the deck actually has, on every track', () => {

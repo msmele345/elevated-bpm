@@ -85,10 +85,6 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   "… off" or "… on (no note)". It is a `.step-row` with a `.step-grid`, so it
   shares the lane's tracks and wraps 2×8 aligned on phones. Only the bass has
   one. Code: `NoteFlagRow`, `NOTE_FLAG_LANES`.
-- **Slide row.** The thin row of 16 toggles under the bass Accent row that sets
-  each step's slide flag, built exactly like the Accent row: "Bass slide, step 5,
-  on", "… off" or "… on (no note)". Spotlight `slideRow:bass`. Code:
-  `NoteFlagRow`, `toggleActivePatternNoteSlide`.
 - **Bass synth (BL-303).** A monophonic 303-style synth: a sawtooth into a
   resonant −24 dB lowpass. Its knobs are Cutoff, Resonance, Decay and Env Mod,
   and it has Accent and Slide rows under its lane. It plays the bass note lane. Code:
@@ -137,6 +133,10 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **Sampler (SP-04).** The four-pad sampler Instrument. See the Sampler section.
 - **Scope (spectrum scope).** A 16-bar canvas spectrum in the Master strip,
   drawn from rAF reading the engine. Code: `SpectrumScope`.
+- **Slide row.** The thin row of 16 toggles under the bass Accent row that sets
+  each step's slide flag, built exactly like the Accent row: "Bass slide, step 5,
+  on", "… off" or "… on (no note)". Spotlight `slideRow:bass`. Code:
+  `NoteFlagRow`, `toggleActivePatternNoteSlide`.
 - **Stab synth (CS-08).** A polyphonic chord synth with a fixed patch. It is played live
   on the on-screen keyboard or the computer keys A–K, and sequenced on the stab
   note lane. Code: `StabKeyboard`, `createStabVoices`.

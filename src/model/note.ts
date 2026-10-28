@@ -236,6 +236,12 @@ export function noteEventAtStep(
   }
 }
 
+/** The step a slid note's gate reaches, and whether a note or a rest is there. */
+export interface SlideReach {
+  step: number
+  into: 'note' | 'rest'
+}
+
 /**
  * Where a slid note's gate goes: the step right after the note ends, measured
  * from its clipped length so it agrees with what sounds. `note` when that step
@@ -244,11 +250,6 @@ export function noteEventAtStep(
  * the step has no note or no slide: a slide parked on an empty step does
  * nothing until a note comes in under it.
  */
-export interface SlideReach {
-  step: number
-  into: 'note' | 'rest'
-}
-
 export function slideReach(lane: NoteLane, stepIndex: number): SlideReach | null {
   const step = lane.steps[stepIndex]
   if (!step?.on || !step.slide) return null

@@ -192,22 +192,53 @@ export function resolveStep({
   const choked = new Set(chokes)
   // A held gate never crosses into another slot's bar: the switch releases it.
   const switching = playing.id !== playingSlotId
-  const tie = switching ? null : bassTie
-  // A switch still queued after this 16th lands on the next step 0, so a slide
-  // that would carry the gate over that bar line stops at it instead.
-  const queued = selected.id !== playing.id
-  const { notes, nextTie } = notesAtStep(playing, stepIndex, mixer, bass, tie, queued)
-  const glided = notes.some((note) => note.legato)
+  const gate: GateIn = {
+    reaching: switching ? null : bassTie,
+    // A switch still queued after this 16th lands on the next step 0, so a
+    // slide that would carry the gate over that bar line stops at it instead.
+    queued: selected.id !== playing.id,
+  }
+  const notes = notesAtStep(playing, stepIndex, mixer, bass, gate)
   return {
     playingSlotId: playing.id,
     starts: hits.filter((hit) => !choked.has(hit.laneId)),
     chokes,
     notes,
     swingOffset: swingOffsetSeconds(stepIndex, transport.bpm, transport.swing),
-    bassTie: nextTie,
-    // The gate's note didn't come: no glide where the tie said one would land.
-    releaseTie: bassTie !== null && !glided && (switching || bassTie === stepIndex),
+    ...bassGateAfter(stepIndex, notes, bassTie, switching),
   }
+}
+
+/** The bass gate as a 16th finds it. */
+interface GateIn {
+  /** The step a held gate is reaching, or null — already null when the slot is switching. */
+  reaching: number | null
+  /** A slot switch is still waiting at the next bar line. */
+  queued: boolean
+}
+
+/**
+ * Where the bass gate stands once this 16th is resolved — the one place the
+ * tie is carried on or let go. A bass note takes the gate: it holds it open to
+ * the note its slide reaches, or closes it with a release of its own. With no
+ * bass note, a held gate carries on to the step it reaches. Either way, a gate
+ * held open to here that no glide picked up — the slot changed under it, or its
+ * note was cleared or silenced — is released as the 16th begins.
+ */
+function bassGateAfter(
+  stepIndex: number,
+  notes: readonly SequencedNote[],
+  held: number | null,
+  switching: boolean,
+): Pick<StepResolution, 'bassTie' | 'releaseTie'> {
+  const note = notes.find((candidate) => candidate.laneId === 'bass')
+  const releaseTie = held !== null && !note?.legato && (switching || held === stepIndex)
+  if (note) {
+    // A note that ties on is clipped at the note it reaches, so its end is that note.
+    const bassTie = note.tiesOn ? (stepIndex + note.lengthSteps) % STEP_COUNT : null
+    return { bassTie, releaseTie }
+  }
+  return { bassTie: switching || held === stepIndex ? null : held, releaseTie }
 }
 
 /** Every audible drum and pad lane sounding on `stepIndex`, in deck order, with its velocity. */
@@ -226,57 +257,43 @@ function hitsAtStep(pattern: Pattern, stepIndex: number, mixer: Mixer): Hit[] {
 
 /**
  * Every audible melodic event starting on this 16th, one at most per note
- * lane. The bass reads its slide here: a note the held gate reaches is glided
- * into, a slid note before a note ties on into it, and a slid note before an
- * empty step holds through that step — unless the gate would cross into a
- * queued slot's bar, where it is released at the bar line.
+ * lane. A lane that plays the 303 flags reads its slide here: a note the held
+ * gate reaches is glided into, a slid note before a note ties on into it, and
+ * a slid note before an empty step holds through that step — unless the gate
+ * would cross into a queued slot's bar, where it is released at the bar line.
  */
 function notesAtStep(
   pattern: Pattern,
   stepIndex: number,
   mixer: Mixer,
   bass: BassSettings,
-  tie: number | null,
-  queued: boolean,
-): { notes: SequencedNote[]; nextTie: number | null } {
+  gate: GateIn,
+): SequencedNote[] {
   const audible = audibleVoiceIds(
     NOTE_LANES.map(({ id }) => id),
     mixer,
   )
-  // With no bass note here, a held gate carries on to the step it reaches —
-  // unless this is that step, where releaseTie closes it.
-  let nextTie = tie === stepIndex ? null : tie
-  const notes = audible.flatMap((id): SequencedNote[] => {
+  return audible.flatMap((id): SequencedNote[] => {
+    const lane = pattern.noteLanes.find((candidate) => candidate.id === id)
     const event = noteEventAtStep(pattern, id, stepIndex)
-    if (!event) return []
+    if (!lane || !event) return []
     // A lane without the 303 flags (the stab) keeps any it is given, unplayed.
-    const accent = NOTE_FLAG_LANES.includes(id) && event.accent
-    if (id !== 'bass') return [{ laneId: id, ...event, accent, legato: false, tiesOn: false }]
-    const lane = pattern.noteLanes.find((candidate) => candidate.id === id)!
-    const reach = slideReach(lane, stepIndex)
+    const flagged = NOTE_FLAG_LANES.includes(id)
+    const reach = flagged ? slideReach(lane, stepIndex) : null
     const toBarLine = STEP_COUNT - stepIndex
     let { lengthSteps } = event
     let tiesOn = false
-    if (reach && queued && lengthSteps >= toBarLine) {
+    if (reach && gate.queued && lengthSteps >= toBarLine) {
       lengthSteps = toBarLine
     } else if (reach?.into === 'note') {
       tiesOn = true
     } else if (reach?.into === 'rest') {
       lengthSteps += 1
     }
-    // A bass note takes the gate: it ties on to where its slide reaches, or closes it.
-    nextTie = tiesOn ? reach!.step : null
-    return [
-      {
-        laneId: id,
-        ...event,
-        lengthSteps,
-        accent,
-        legato: tie === stepIndex,
-        tiesOn,
-        voicing: bassVoicing(bass, accent),
-      },
-    ]
+    const accent = flagged && event.accent
+    const legato = flagged && gate.reaching === stepIndex
+    const note = { ...event, lengthSteps, accent, legato, tiesOn }
+    if (id === 'bass') return [{ laneId: id, ...note, voicing: bassVoicing(bass, accent) }]
+    return [{ laneId: id, ...note }]
   })
-  return { notes, nextTie }
 }

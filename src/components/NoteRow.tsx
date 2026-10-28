@@ -1,6 +1,6 @@
 import { memo, type KeyboardEvent, type PointerEvent } from 'react'
 import { NOTE_FLAG_LANES, midiToNoteName, slideReach } from '../model/note'
-import type { NoteLane, NoteLaneId } from '../model/types'
+import type { NoteLane, NoteLaneId, NoteStep } from '../model/types'
 
 interface NoteRowProps {
   lane: NoteLane
@@ -15,6 +15,14 @@ const OCTAVE = 12
 
 function focusNoteStep(event: PointerEvent<HTMLButtonElement>) {
   event.currentTarget.focus()
+}
+
+/** A note step's name: its pitch and length, and the step it slides into, if any. */
+function noteStepLabel(lane: NoteLane, step: NoteStep, i: number, tieTo: number | null): string {
+  if (!step.on) return `${lane.label} step ${i + 1}, empty`
+  const length = `${step.length} step${step.length === 1 ? '' : 's'} long`
+  const slide = tieTo === null ? '' : `, slides into step ${tieTo + 1}`
+  return `${lane.label} step ${i + 1}, ${midiToNoteName(step.pitch)}, ${length}${slide}`
 }
 
 /**
@@ -84,11 +92,7 @@ function NoteRowLane({
             data-tie-out={tieTo[i] !== null ? '' : undefined}
             data-tie-in={tiedIn.has(i) ? '' : undefined}
             aria-pressed={step.on}
-            aria-label={
-              step.on
-                ? `${lane.label} step ${i + 1}, ${midiToNoteName(step.pitch)}, ${step.length} step${step.length === 1 ? '' : 's'} long${tieTo[i] !== null ? `, slides into step ${tieTo[i]! + 1}` : ''}`
-                : `${lane.label} step ${i + 1}, empty`
-            }
+            aria-label={noteStepLabel(lane, step, i, tieTo[i])}
             onPointerDown={focusNoteStep}
             onClick={() => onToggleStep(lane.id, i)}
             onKeyDown={(event) => handleKeyDown(event, i)}

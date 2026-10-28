@@ -120,11 +120,13 @@ without restarting its envelope, so the line bends like a 303.
   the bar cannot cancel a switch already scheduled"). It is left as is because threading
   it would need a third gate field ("hold, then release after") for a window this short.
   A slide into a *note* is threaded and is released at the bar.
-- **Accent on a glided-into note.** A legato note keeps the chain's voicing, so its own
-  accent flag isn't applied: neither envelope restarts, and the accent gain isn't moved
-  either. The spec doesn't say what should happen here. The alternative is to ramp the
-  accent gain to the target's voicing over ~10 ms on the legato branch without touching
-  either envelope. That is open for a product call.
+- **Accent on a glided-into note.** The spec doesn't say, and keeping the chain's
+  voicing would have left an accent on a slid-into note doing nothing — against "the
+  Accent row is never a control that does nothing". Decided: the accent gets through.
+  On a legato note the accent gain stage ramps to that note's level over
+  `LEGATO_ACCENT_SECONDS` (10 ms), and neither envelope restarts, so the filter keeps
+  the chain's envelope. `engine.test.ts` "lets an accent through on a note slid into:
+  its gain glides in, neither envelope restarts".
 - **Ties across a wrap.** A tie from step 16 into step 1, or across the phone's 8 + 8
   wrap, draws as two hooks at the row ends that don't meet.
 

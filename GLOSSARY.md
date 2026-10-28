@@ -166,7 +166,9 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   through an accent gain stage after the bass filter, because synth velocity
   tops out at 1. It also gets a fixed extra 2 octaves of filter-envelope depth
   (`ACCENT_ENV_OCTAVES`) that decays in half the Decay knob's time, even at
-  Env Mod 0; unaccented at Env Mod 0 is exactly the old sound. It is edited on
+  Env Mod 0; unaccented at Env Mod 0 is exactly the old sound. On a note slid into
+  (legato) only the gain applies, gliding in over 10 ms; the filter keeps the chain's
+  envelope. It is edited on
   the bass Accent row, and kept on steps whose note is off, like pitch and
   length. Spotlight `accentRow:bass`. Code: `bassVoicing`, `BassVoicing`,
   `toggleNoteAccent`, `toggleActivePatternNoteAccent`, `NoteFlagRow`.
@@ -263,7 +265,9 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   after the note ends (measured from its clipped length). If that step holds a note,
   the line glides into it over `SLIDE_SECONDS` (60 ms) from the slid pitch, restarting
   neither the amplitude nor the filter envelope (legato), so a slid chain is one gate:
-  one attack, one release; the glided-into note keeps the chain's voicing. If the step
+  one attack, one release. A glided-into note's accent still counts: the accent gain
+  stage glides to its level over `LEGATO_ACCENT_SECONDS` (10 ms), though its filter
+  keeps the chain's envelope, since only an attack sets that. If the step
   is empty, the note ties through it and then releases. A slide on a step with no note
   does nothing and is kept, like pitch and length. A gate never crosses into another
   slot's bar: with a switch queued, a slide reaching past the bar line is released

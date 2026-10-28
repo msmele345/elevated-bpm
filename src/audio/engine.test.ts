@@ -18,7 +18,13 @@ import {
 import { DEFAULT_BASS_SETTINGS } from '../model/bass'
 import { createBank } from '../model/bank'
 import type { Pattern } from '../model/types'
-import { ACCENT_ENV_OCTAVES, ACCENT_GAIN, SLIDE_SECONDS, UNACCENTED_GAIN } from './stepResolution'
+import {
+  ACCENT_ENV_OCTAVES,
+  ACCENT_GAIN,
+  LEGATO_ACCENT_SECONDS,
+  SLIDE_SECONDS,
+  UNACCENTED_GAIN,
+} from './stepResolution'
 
 /** Hand the engine a bank of one slot, selected — the deck before the bank. */
 function playSoleSlot(engine: typeof import('./engine'), pattern: Pattern): void {
@@ -770,6 +776,35 @@ describe('the bass voice: slide', () => {
       [midiToFrequency(46), SLIDE_SECONDS, 50 + 2 * STEP],
     ])
     expect(synth.triggerRelease.mock.calls).toEqual([[closeTo(50 + 3 * STEP)]])
+    stop()
+  })
+
+  it('lets an accent through on a note slid into: its gain glides in, neither envelope restarts', async () => {
+    // 2 slides into an accented 3, which slides into an unaccented 4.
+    const line = toggleNoteAccent(slidLine([2, 3, 4], [2, 3]), 'bass', 3)
+    const { synth, envelope, fire, stop } = await started([line])
+    type Gain = { gain: { rampTo: ReturnType<typeof vi.fn>; setValueAtTime: ReturnType<typeof vi.fn> } }
+    const filter = (synth as unknown as { destination: { destination: Gain } }).destination
+    const accentGain = filter.destination
+    const depth = (envelope as unknown as { destination: Gain }).destination
+    for (const param of [accentGain.gain, depth.gain]) {
+      param.rampTo.mockClear()
+      param.setValueAtTime.mockClear()
+    }
+
+    fire(2, 50)
+    fire(3, 50 + STEP)
+    fire(4, 50 + 2 * STEP)
+
+    expect(accentGain.gain.setValueAtTime.mock.calls).toEqual([[1, 50]])
+    expect(accentGain.gain.rampTo.mock.calls).toEqual([
+      [ACCENT_GAIN / UNACCENTED_GAIN, LEGATO_ACCENT_SECONDS, 50 + STEP],
+      [1, LEGATO_ACCENT_SECONDS, 50 + 2 * STEP],
+    ])
+    // The filter envelope is neither retriggered nor re-scaled mid-chain.
+    expect(envelope.triggerAttack).toHaveBeenCalledTimes(1)
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[0, 50]])
+    expect(synth.triggerAttack).toHaveBeenCalledTimes(1)
     stop()
   })
 

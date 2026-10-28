@@ -32,6 +32,11 @@ export const ACCENT_ENV_OCTAVES = 2
 const ACCENT_DECAY_RATIO = 0.5
 /** How long a slide takes to glide from the slid pitch into the next note's. */
 export const SLIDE_SECONDS = 0.06
+/**
+ * How long a note slid into takes to move the accent gain to its own level —
+ * short enough to land with the note, long enough not to click.
+ */
+export const LEGATO_ACCENT_SECONDS = 0.01
 
 /**
  * How one bass note is voiced: a gain into the bass channel, and a filter

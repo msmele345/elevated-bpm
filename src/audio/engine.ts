@@ -48,7 +48,7 @@ import {
   type RenderableAudio,
   type Slice,
 } from '../model/slice'
-import { SLIDE_SECONDS, resolveStep } from './stepResolution'
+import { LEGATO_ACCENT_SECONDS, SLIDE_SECONDS, resolveStep } from './stepResolution'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
 import { decodeForAnalysis, decodeForRender } from './sampleDecoder'
@@ -947,9 +947,12 @@ export async function play(): Promise<void> {
         const duration = note.lengthSteps * stepSeconds
         if (note.laneId === 'bass' && bass) {
           if (note.legato) {
-            // Glided into: the gate is already open, so only the pitch moves
-            // and neither the amplitude nor the filter envelope restarts.
+            // Glided into: the gate is already open, so the pitch moves and
+            // neither the amplitude nor the filter envelope restarts. Its accent
+            // still counts — the gain stage glides to this note's level — but
+            // the filter keeps the chain's envelope, which only an attack sets.
             bass.synth.frequency.exponentialRampTo(note.frequency, SLIDE_SECONDS, at)
+            bass.accent.gain.rampTo(note.voicing.gain, LEGATO_ACCENT_SECONDS, at)
           } else {
             const { gain, filterOctaves, filterDecay } = note.voicing
             bass.accent.gain.setValueAtTime(gain, at)

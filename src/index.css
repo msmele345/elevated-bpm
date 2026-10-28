@@ -3369,6 +3369,35 @@ body::before {
   user-select: none;
 }
 
+/* A slide's tie: a slid note hooks off its right edge and the note it glides
+   into hooks in from its left, so on neighbours the two halves meet over the
+   gap as one arc. Drawn in ink rather than either key's quad colour, since a
+   tie crosses quads. Across a phone's wrap the halves simply hang at the ends
+   of the two rows. */
+.note-step[data-tie-out]::after,
+.note-step[data-tie-in]::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  height: 7px;
+  border-top: 2px solid var(--ink-dim);
+  pointer-events: none;
+}
+
+.note-step[data-tie-out]::after {
+  left: 50%;
+  right: -8px;
+  border-right: 2px solid transparent;
+  border-top-right-radius: 10px 7px;
+}
+
+.note-step[data-tie-in]::before {
+  left: -8px;
+  right: 50%;
+  border-left: 2px solid transparent;
+  border-top-left-radius: 10px 7px;
+}
+
 /* The 303 flag rows under the bass lane: a thin toggle per step on the
    lane's own step tracks (a .step-row holding a .step-grid of .step keys), so
    step n sits under note n on desktop and on a phone. An accent parked on a

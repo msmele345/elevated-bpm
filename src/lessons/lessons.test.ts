@@ -526,8 +526,9 @@ describe('the curriculum', () => {
 
   it('spotlights a flag row only on a lane that shows one', () => {
     for (const lesson of ALL_LESSONS) {
-      for (const target of lesson.spotlight.filter((t) => t.startsWith('accentRow:'))) {
-        expect(NOTE_FLAG_LANES).toContain(target.slice('accentRow:'.length))
+      for (const target of lesson.spotlight) {
+        const flagRow = /^(?:accentRow|slideRow):(.*)$/.exec(target)
+        if (flagRow) expect(NOTE_FLAG_LANES).toContain(flagRow[1])
       }
     }
   })

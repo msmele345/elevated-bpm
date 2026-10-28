@@ -9,18 +9,24 @@ import { BassPanel } from './BassPanel'
 
 afterEach(cleanup)
 
-function renderBassPanel(spotlight: { accentRow?: boolean; params?: string[] }) {
+function renderBassPanel(spotlight: {
+  accentRow?: boolean
+  slideRow?: boolean
+  params?: string[]
+}) {
   const lane = createInitialPattern().noteLanes.find((candidate) => candidate.id === 'bass')!
   render(
     createElement(BassPanel, {
       lane,
       settings: DEFAULT_BASS_SETTINGS,
       spotlitAccentRow: spotlight.accentRow,
+      spotlitSlideRow: spotlight.slideRow,
       spotlitParams: spotlight.params ?? [],
       onToggleStep: vi.fn(),
       onTranspose: vi.fn(),
       onResize: vi.fn(),
       onToggleAccent: vi.fn(),
+      onToggleSlide: vi.fn(),
       onParamChange: vi.fn(),
       muted: false,
       soloed: false,
@@ -42,6 +48,13 @@ describe('BassPanel spotlights', () => {
     const row = screen.getByRole('group', { name: 'Bass accent steps' })
     expect(row.closest(SPOTLIT)).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Bass steps' }).closest(SPOTLIT)).toBeNull()
+  })
+
+  it('rings the Slide row when a lesson points at slideRow:bass', () => {
+    renderBassPanel({ slideRow: true })
+
+    expect(screen.getByRole('group', { name: 'Bass slide steps' }).closest(SPOTLIT)).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Bass accent steps' }).closest(SPOTLIT)).toBeNull()
   })
 
   it('rings the Env Mod knob when a lesson points at knob:envMod', () => {

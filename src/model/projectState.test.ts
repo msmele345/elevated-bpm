@@ -46,6 +46,7 @@ import {
   enterLesson,
   selectLesson,
   toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
   toggleVoiceMute,
   toggleVoiceSolo,
@@ -245,6 +246,18 @@ describe('selectSlot', () => {
     expect(selected.lessonProgress).toBe(state.lessonProgress)
   })
 
+  it('keeps each slot’s own slides: a slide set in B stays in B', () => {
+    let state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id)
+    state = toggleActivePatternNoteSlide(toggleActivePatternNoteStep(state, 'bass', 3), 'bass', 3)
+    state = toggleActivePatternNoteSlide(state, 'bass', 10)
+
+    const backInA = selectSlot(state, state.patterns[0].id)
+
+    expect(backInA.patterns[1].noteLanes[0].steps[3].slide).toBe(true)
+    expect(backInA.patterns[1].noteLanes[0].steps[10].slide).toBe(true)
+    expect(activePattern(backInA).noteLanes[0].steps.some((step) => step.slide)).toBe(false)
+  })
+
   it('ignores a slot the bank does not have', () => {
     const state = createDemoProjectState()
     expect(selectSlot(state, 'no-such-slot')).toBe(state)
@@ -276,6 +289,25 @@ describe('copySlot', () => {
     expect(copied.patterns[1].lanes).toEqual(a.lanes)
     expect(copied.patterns[1].padLanes).toEqual(a.padLanes)
     expect(copied.patterns[1].noteLanes).toEqual(a.noteLanes)
+  })
+
+  it('carries the slot’s slides and accents, as fresh steps that edit independently', () => {
+    let state = toggleActivePatternNoteStep(createDemoProjectState(), 'bass', 5)
+    state = toggleActivePatternNoteSlide(toggleActivePatternNoteAccent(state, 'bass', 5), 'bass', 5)
+    state = toggleActivePatternNoteSlide(state, 'bass', 12)
+    const source = state.patterns[0].noteLanes[0]
+
+    const copied = copySlot(state, state.patterns[1].id)
+
+    const target = copied.patterns[1].noteLanes[0]
+    expect(target.steps).toEqual(source.steps)
+    expect(target.steps[5]).toMatchObject({ slide: true, accent: true })
+    expect(target.steps[12].slide).toBe(true)
+    target.steps.forEach((step, i) => expect(step).not.toBe(source.steps[i]))
+
+    const editedB = toggleActivePatternNoteSlide(copied, 'bass', 5)
+    expect(editedB.patterns[1].noteLanes[0].steps[5].slide).toBe(false)
+    expect(editedB.patterns[0].noteLanes[0].steps[5].slide).toBe(true)
   })
 
   it('selects the target, so the variation is ready to change', () => {
@@ -571,6 +603,18 @@ describe('bass note editing', () => {
       expect(slot).toBe(state.patterns[state.patterns.indexOf(slot)])
     }
     expect(bassSteps(toggleActivePatternNoteAccent(accented, 'bass', 6))[6].accent).toBe(false)
+  })
+
+  it('toggles a bass note’s slide in the selected slot only, on an empty step too', () => {
+    const state = createInitialProjectState()
+    const slid = toggleActivePatternNoteSlide(state, 'bass', 6)
+
+    expect(bassSteps(slid)[6]).toMatchObject({ on: false, slide: true, accent: false })
+    expect(bassSteps(state)[6].slide).toBe(false)
+    for (const slot of slid.patterns.slice(1)) {
+      expect(slot).toBe(state.patterns[state.patterns.indexOf(slot)])
+    }
+    expect(bassSteps(toggleActivePatternNoteSlide(slid, 'bass', 6))[6].slide).toBe(false)
   })
 
   it('transposes and resizes a note through the document', () => {

@@ -15,7 +15,9 @@ import {
   midiToNoteName,
   noteEventAtStep,
   resizeNoteStep,
+  slideReach,
   toggleNoteAccent,
+  toggleNoteSlide,
   toggleNoteStep,
   transposeNoteStep,
   withNoteFlags,
@@ -105,6 +107,58 @@ describe('303 note flags', () => {
     const accented = toggleNoteAccent(createInitialPattern(), 'bass', 7)
 
     expect(withNoteFlags(accented)).toEqual(accented)
+  })
+})
+
+describe('slide', () => {
+  /** Notes on `steps` of the bass lane, each slid where `slid` says. */
+  function line(steps: number[], slid: number[] = []): Pattern {
+    let pattern = steps.reduce((p, step) => toggleNoteStep(p, 'bass', step), createInitialPattern())
+    pattern = slid.reduce((p, step) => toggleNoteSlide(p, 'bass', step), pattern)
+    return pattern
+  }
+  const bassLane = (pattern: Pattern) => pattern.noteLanes.find((lane) => lane.id === 'bass')!
+
+  it('toggles one note step’s slide and leaves every other step alone', () => {
+    const slid = toggleNoteSlide(toggleNoteStep(createInitialPattern(), 'bass', 4), 'bass', 4)
+
+    expect(bassSteps(slid).map((step) => step.slide)).toEqual(
+      Array.from({ length: STEP_COUNT }, (_, i) => i === 4),
+    )
+    expect(bassSteps(slid).map((step) => step.accent)).toEqual(Array(STEP_COUNT).fill(false))
+    expect(bassSteps(toggleNoteSlide(slid, 'bass', 4))[4].slide).toBe(false)
+  })
+
+  it('keeps a slide set on an empty step, and through switching the note off and on', () => {
+    const parked = toggleNoteSlide(createInitialPattern(), 'bass', 5)
+
+    expect(bassSteps(parked)[5]).toMatchObject({ on: false, slide: true })
+    const placed = toggleNoteStep(parked, 'bass', 5)
+    expect(bassSteps(placed)[5]).toMatchObject({ on: true, slide: true })
+    expect(bassSteps(toggleNoteStep(placed, 'bass', 5))[5]).toMatchObject({ on: false, slide: true })
+  })
+
+  it('glides a slid note into the note on the step right after it ends', () => {
+    expect(slideReach(bassLane(line([2, 3], [2])), 2)).toEqual({ step: 3, into: 'note' })
+  })
+
+  it('measures “right after it ends” from the note’s length', () => {
+    const long = resizeNoteStep(line([2, 5], [2]), 'bass', 2, 2) // three steps: 3, 4, 5
+
+    expect(slideReach(bassLane(long), 2)).toEqual({ step: 5, into: 'note' })
+  })
+
+  it('ties through an empty step after the note instead', () => {
+    expect(slideReach(bassLane(line([2, 4], [2])), 2)).toEqual({ step: 3, into: 'rest' })
+  })
+
+  it('wraps around the loop, as step 16 runs into step 1', () => {
+    expect(slideReach(bassLane(line([0, 15], [15])), 15)).toEqual({ step: 0, into: 'note' })
+  })
+
+  it('reaches nothing from an unslid note, or from a slide parked on a step with no note', () => {
+    expect(slideReach(bassLane(line([2, 3])), 2)).toBeNull()
+    expect(slideReach(bassLane(line([3], [2])), 2)).toBeNull()
   })
 })
 

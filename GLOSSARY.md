@@ -7,7 +7,7 @@ conversations use, and exactly what each one means here. Last reviewed
 voice Level and bass/stab mute & solo, EB3-03a/b the layout seam and the fold
 layout, EB3-04a progress chips, EB3-04b the completed strip and scroll to
 spotlight, EB3-05 sampler compaction and two columns, EB3-06 phone reflow,
-EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links, EB3-09a the bass Accent row and Env Mod) have shipped.
+EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy and Clear, EB3-08 the bank in share links, EB3-09a the bass Accent row and Env Mod, EB3-09b the bass Slide row) have shipped.
 
 ## How to use and maintain this file
 
@@ -85,9 +85,13 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   "… off" or "… on (no note)". It is a `.step-row` with a `.step-grid`, so it
   shares the lane's tracks and wraps 2×8 aligned on phones. Only the bass has
   one. Code: `NoteFlagRow`, `NOTE_FLAG_LANES`.
+- **Slide row.** The thin row of 16 toggles under the bass Accent row that sets
+  each step's slide flag, built exactly like the Accent row: "Bass slide, step 5,
+  on", "… off" or "… on (no note)". Spotlight `slideRow:bass`. Code:
+  `NoteFlagRow`, `toggleActivePatternNoteSlide`.
 - **Bass synth (BL-303).** A monophonic 303-style synth: a sawtooth into a
   resonant −24 dB lowpass. Its knobs are Cutoff, Resonance, Decay and Env Mod,
-  and it has an Accent row under its lane. It plays the bass note lane. Code:
+  and it has Accent and Slide rows under its lane. It plays the bass note lane. Code:
   `BASS_PARAMS`, `BassSettings`.
 - **Deck.** The whole instrument surface: every panel, the transport strip,
   the Master strip, and the curriculum UI woven through them. Top to bottom:
@@ -214,7 +218,7 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   whole steps. A note is clipped where the next one starts. It also carries
   `slide` and `accent` booleans. Both note lanes carry them, but only the bass shows a row and plays them
   (`NOTE_FLAG_LANES`, = `['bass']`). Flags are kept on steps whose note is off,
-  like pitch and length. The slide flag has no row and no sound until EB3-09b.
+  like pitch and length.
   Code: `NoteStep`, `noteEventAtStep`, `withNoteFlags`.
 - **Pad lane.** A sampler pad's lane, with the same shape as a drum lane. Its ids are `pad1`–`pad4`.
   Code: `PadLane`, `StepLane`.
@@ -228,9 +232,8 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   and wraps its 16 steps into two rows of 8 (steps 1–8, then 9–16), each row
   holding two whole quads with a thin spacer track between them. Every `.step-grid`
   shares those tracks, so step *n* sits directly over step *n* + 8, and any
-  further row built on the same grid (the bass Accent row today, and the Slide
-  row in EB3-09b)
-  lines up under its note for free. Bass and stab keep M, S and Level on their
+  further row built on the same grid (the bass Accent and Slide rows) lines up
+  under its note for free. Bass and stab keep M, S and Level on their
   panel plate, above the lane. The keyboard, Master, region editor and finale
   fit 320px too. Held by `e2e/reflow.spec.ts`. Code: `.step-grid`, `.step-row`.
 - **Playhead.** The moving step highlight, animated from rAF reading the
@@ -256,10 +259,20 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
 - **Selected slot.** The slot being edited, which `activePatternId` names. Shown
   with `aria-pressed`, persisted, so a reload comes back to it. Code:
   `selectSlot`.
-- **Slide** [v3 spec]. The 303 flag on a bass note. The gate stays open into the step
-  right after the note ends. If that step holds a note, the line glides into it over
-  about 60 ms without restarting the envelopes (legato). If the step is empty, the note
-  ties through it and then releases.
+- **Slide.** The 303 flag on a bass note. The gate stays open into the step right
+  after the note ends (measured from its clipped length). If that step holds a note,
+  the line glides into it over `SLIDE_SECONDS` (60 ms) from the slid pitch, restarting
+  neither the amplitude nor the filter envelope (legato), so a slid chain is one gate:
+  one attack, one release; the glided-into note keeps the chain's voicing. If the step
+  is empty, the note ties through it and then releases. A slide on a step with no note
+  does nothing and is kept, like pitch and length. A gate never crosses into another
+  slot's bar: with a switch queued, a slide reaching past the bar line is released
+  there, and a gate already tied when the switch lands is released at step 0. A tied
+  gate whose note is cleared or muted before it arrives is released then too, and
+  Stop releases a gate still held. A slid note draws a **tie** on the bass row into the
+  note it glides to (`data-tie-out` / `data-tie-in`), and its name ends "slides into
+  step 6"; a slide into a rest draws none. Edited on the Slide row. Code:
+  `slideReach`, `toggleNoteSlide`, `NoteGate`, `SLIDE_SECONDS`.
 - **Slot.** One position in the pattern bank, named by its letter A–D. Each
   slot button's accessible name carries its state: "Slot B, selected, queued,
   empty". Code: `SlotLetter`, `BankSlot`, `bankSlots`.
@@ -276,9 +289,13 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   returns the playing slot after this step (see Queued switch). The
   input includes the bass patch (`bass: BassSettings`); every note event
   carries `accent` (always false for stab), and bass events carry a `voicing`
-  of gain, filter octaves and filter decay. [v3 spec] Legato and gate tie
-  arrive with EB3-09b. Code: `resolveStep`, `StepResolution`, `SequencedNote`,
-  `bassVoicing`.
+  of gain, filter octaves and filter decay. Every note event also carries its
+  gate (`legato`: glided into; `tiesOn`: its gate stays open into the next
+  note), always false for the stab. The bass gate is threaded like the playing
+  slot: the input's `bassTie` is the step the last 16th left a gate open to, the
+  result returns the next one, and `releaseTie` closes a held gate whose note
+  isn't coming. Code: `resolveStep`, `StepResolution`, `SequencedNote`,
+  `NoteGate`, `bassVoicing`.
 - **Swing.** The Transport's shuffle, from 50 to 75% (stored as 0.50–0.75, default 0.50).
   Every odd 16th of every sequenced voice is delayed by (swing − 0.5) × 2 × one step, so 66%
   is roughly a triplet feel and 75% is dotted; even 16ths never move, and note lengths stay
@@ -560,8 +577,8 @@ EB3-07a the pattern bank's slots and queued switching, EB3-07b the bank's Copy a
   `useSpotlightScroll`, `spotlightNeedsScroll`.
 - **Spotlight (spotlight target).** A `kind:id` string in lesson JSON that puts
   an amber ring on a control: `lane:`, `noteLane:`, `knob:`, `pad:`, plus the
-  single targets `transport:tempo`, `keyboard:stab` and `sampler:sources`. It also has
-  `accentRow:bass`; [v3 spec] `slideRow:bass` is added with EB3-09b. Code: `SpotlightTarget`, `spotlightsTarget`.
+  single targets `transport:tempo`, `keyboard:stab` and `sampler:sources`, and the
+  bass flag rows `accentRow:bass` and `slideRow:bass`. Code: `SpotlightTarget`, `spotlightsTarget`.
 - **Track (curriculum track).** The learner-facing name for an Arc on the track
   selector. See the first section.
 

@@ -1,5 +1,5 @@
 import { memo, type KeyboardEvent, type PointerEvent } from 'react'
-import { midiToNoteName } from '../model/note'
+import { NOTE_FLAG_LANES, midiToNoteName, slideReach } from '../model/note'
 import type { NoteLane, NoteLaneId } from '../model/types'
 
 interface NoteRowProps {
@@ -22,6 +22,10 @@ function focusNoteStep(event: PointerEvent<HTMLButtonElement>) {
  * accent. A click arms the note; the arrow keys shape it in place — up/down
  * transposes (shift for whole octaves), left/right sets how many 16ths it
  * rings — so a line can be programmed entirely from the keyboard.
+ *
+ * A slid note draws a tie into the note it glides to: a hook off its right
+ * edge and one into the target's left, which meet across the gap between
+ * neighbours. Its name says so too, for a screen reader.
  *
  * Memoized alongside the drum lanes, and for the same reason.
  */
@@ -52,6 +56,16 @@ function NoteRowLane({
     }
   }
 
+  // Where each slid note glides to, so the row can draw the tie between them.
+  // Only a lane that plays the 303 flags draws one; a slide into a rest holds
+  // the note through it and has no note to tie into.
+  const tieTo = lane.steps.map((_, i) => {
+    if (!NOTE_FLAG_LANES.includes(lane.id)) return null
+    const reach = slideReach(lane, i)
+    return reach?.into === 'note' ? reach.step : null
+  })
+  const tiedIn = new Set(tieTo.filter((step) => step !== null))
+
   return (
     <div className={['step-row', 'note-row', spotlit && 'is-spotlit'].filter(Boolean).join(' ')}>
       <div className="lane-label">
@@ -67,10 +81,12 @@ function NoteRowLane({
             data-quad={Math.floor(i / 4)}
             data-step-index={i}
             data-length={step.on ? step.length : undefined}
+            data-tie-out={tieTo[i] !== null ? '' : undefined}
+            data-tie-in={tiedIn.has(i) ? '' : undefined}
             aria-pressed={step.on}
             aria-label={
               step.on
-                ? `${lane.label} step ${i + 1}, ${midiToNoteName(step.pitch)}, ${step.length} step${step.length === 1 ? '' : 's'} long`
+                ? `${lane.label} step ${i + 1}, ${midiToNoteName(step.pitch)}, ${step.length} step${step.length === 1 ? '' : 's'} long${tieTo[i] !== null ? `, slides into step ${tieTo[i]! + 1}` : ''}`
                 : `${lane.label} step ${i + 1}, empty`
             }
             onPointerDown={focusNoteStep}

@@ -78,6 +78,7 @@ import {
   setTransportSwing,
   setLevelParamValue,
   toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
   toggleVoiceMute,
   toggleVoiceSolo,
@@ -718,6 +719,10 @@ export default function App() {
 
   const handleToggleNoteAccent = useCallback((laneId: NoteLaneId, stepIndex: number) => {
     setProject((p) => toggleActivePatternNoteAccent(p, laneId, stepIndex))
+  }, [])
+
+  const handleToggleNoteSlide = useCallback((laneId: NoteLaneId, stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteSlide(p, laneId, stepIndex))
   }, [])
 
   const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
@@ -1611,11 +1616,13 @@ export default function App() {
         settings={bassSettings}
         spotlitLane={spotlitNoteLanes.includes('bass')}
         spotlitAccentRow={spotlitTarget('accentRow:bass')}
+        spotlitSlideRow={spotlitTarget('slideRow:bass')}
         spotlitParams={spotlitParams}
         onToggleStep={handleToggleNoteStep}
         onTranspose={handleTransposeNote}
         onResize={handleResizeNote}
         onToggleAccent={handleToggleNoteAccent}
+        onToggleSlide={handleToggleNoteSlide}
         onParamChange={handleBassParamChange}
         muted={bassMix.muted}
         soloed={bassMix.soloed}

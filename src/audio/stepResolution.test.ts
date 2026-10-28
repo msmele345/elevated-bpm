@@ -6,6 +6,7 @@ import {
   midiToFrequency,
   resizeNoteStep,
   toggleNoteAccent,
+  toggleNoteSlide,
   toggleNoteStep,
   transposeNoteStep,
 } from '../model/note'
@@ -22,6 +23,7 @@ import {
   UNACCENTED_GAIN,
   bassVoicing,
   resolveStep,
+  type StepResolution,
 } from './stepResolution'
 
 /** Turn steps on (one click) or on+accented (two clicks). */
@@ -209,6 +211,8 @@ describe('resolveStep — note events', () => {
         frequency: midiToFrequency(DEFAULT_PITCH),
         lengthSteps: MIN_NOTE_LENGTH,
         accent: false,
+        legato: false,
+        tiesOn: false,
         voicing: { gain: 1, filterOctaves: 0, filterDecay: DEFAULT_BASS_SETTINGS.decay },
       },
       {
@@ -217,6 +221,8 @@ describe('resolveStep — note events', () => {
         frequency: midiToFrequency(STAB_DEFAULT_PITCH),
         lengthSteps: MIN_NOTE_LENGTH,
         accent: false,
+        legato: false,
+        tiesOn: false,
       },
     ])
   })
@@ -313,6 +319,8 @@ describe('resolveStep — 303 accent', () => {
         frequency: midiToFrequency(STAB_DEFAULT_PITCH),
         lengthSteps: MIN_NOTE_LENGTH,
         accent: false,
+        legato: false,
+        tiesOn: false,
       },
     ])
   })
@@ -347,6 +355,8 @@ describe('resolveStep — one 16th, every sound', () => {
           frequency: midiToFrequency(DEFAULT_PITCH),
           lengthSteps: 2,
           accent: false,
+          legato: false,
+          tiesOn: false,
           voicing: { gain: 1, filterOctaves: 0, filterDecay: DEFAULT_BASS_SETTINGS.decay },
         },
         {
@@ -355,8 +365,12 @@ describe('resolveStep — one 16th, every sound', () => {
           frequency: midiToFrequency(STAB_DEFAULT_PITCH + 4),
           lengthSteps: MIN_NOTE_LENGTH,
           accent: false,
+          legato: false,
+          tiesOn: false,
         },
       ],
+      bassTie: null,
+      releaseTie: false,
     })
   })
 
@@ -368,6 +382,8 @@ describe('resolveStep — one 16th, every sound', () => {
       chokes: [],
       swingOffset: 0,
       notes: [],
+      bassTie: null,
+      releaseTie: false,
     })
   })
 })
@@ -563,5 +579,222 @@ describe('resolveStep — the queued bank switch', () => {
     const resolved = resolveQueued(5, 'gone')
     expect(resolved.playingSlotId).toBe(bank[1].id)
     expect(resolved.starts.map((hit) => hit.laneId)).toEqual(['snare'])
+  })
+})
+
+describe('resolveStep — 303 slide', () => {
+  /** Bass notes on `steps`, slid on `slid`. */
+  function line(steps: number[], slid: number[] = [], pattern = createInitialPattern()): Pattern {
+    const on = steps.reduce((p, step) => toggleNoteStep(p, 'bass', step), pattern)
+    return slid.reduce((p, step) => toggleNoteSlide(p, 'bass', step), on)
+  }
+
+  /**
+   * Resolve a run of 16ths in order, handing each the bass gate the one before
+   * left open, the way the transport callback threads it.
+   */
+  function resolveRun(pattern: Pattern, steps: number[], mixers: Mixer[] = []): StepResolution[] {
+    let bassTie: number | null = null
+    return steps.map((stepIndex, i) => {
+      const resolved = resolveStep({
+        ...soleSlot(pattern),
+        mixer: mixers[i] ?? {},
+        bass: DEFAULT_BASS_SETTINGS,
+        transport: STRAIGHT,
+        stepIndex,
+        bassTie,
+      })
+      bassTie = resolved.bassTie
+      return resolved
+    })
+  }
+  const bassNote = (resolved: StepResolution) => resolved.notes.find((n) => n.laneId === 'bass')
+
+  it('plays an unslid line exactly as before: every note its own gate', () => {
+    const [first, second] = resolveRun(line([2, 3]), [2, 3])
+
+    expect(bassNote(first)).toMatchObject({ lengthSteps: 1, legato: false, tiesOn: false })
+    expect(bassNote(second)).toMatchObject({ lengthSteps: 1, legato: false, tiesOn: false })
+    expect(first.bassTie).toBeNull()
+  })
+
+  it('keeps a slid note’s gate open into the next note, which is glided into (legato)', () => {
+    const [slid, target, after] = resolveRun(line([2, 3], [2]), [2, 3, 4])
+
+    expect(bassNote(slid)).toMatchObject({ lengthSteps: 1, legato: false, tiesOn: true })
+    expect(slid.bassTie).toBe(3)
+    expect(bassNote(target)).toMatchObject({
+      midi: DEFAULT_PITCH,
+      lengthSteps: 1,
+      legato: true,
+      tiesOn: false,
+    })
+    expect(target.releaseTie).toBe(false)
+    expect(target.bassTie).toBeNull()
+    expect(after.notes).toEqual([])
+  })
+
+  it('carries the open gate across the slid note’s own length to the note it reaches', () => {
+    const long = resizeNoteStep(line([2, 5], [2]), 'bass', 2, 2)
+    const [slid, ringing, stillRinging, target] = resolveRun(long, [2, 3, 4, 5])
+
+    expect(bassNote(slid)).toMatchObject({ lengthSteps: 3, tiesOn: true })
+    expect(ringing.bassTie).toBe(5)
+    expect(stillRinging.bassTie).toBe(5)
+    expect(ringing.releaseTie || stillRinging.releaseTie).toBe(false)
+    expect(bassNote(target)).toMatchObject({ legato: true })
+  })
+
+  it('chains slides into one gate: only the first note attacks, only the last releases', () => {
+    const run = resolveRun(line([2, 3, 4], [2, 3]), [2, 3, 4])
+
+    expect(run.map((r) => bassNote(r)).map((n) => [n?.legato, n?.tiesOn])).toEqual([
+      [false, true],
+      [true, true],
+      [true, false],
+    ])
+  })
+
+  it('ties a slid note through an empty step after it, then releases', () => {
+    const [slid, tied] = resolveRun(line([2, 4], [2]), [2, 3])
+
+    expect(bassNote(slid)).toMatchObject({ lengthSteps: 2, legato: false, tiesOn: false })
+    expect(slid.bassTie).toBeNull()
+    expect(tied.notes).toEqual([])
+    expect(tied.releaseTie).toBe(false)
+  })
+
+  it('does nothing for a slide on a step with no note, and keeps it for a note placed later', () => {
+    const parked = toggleNoteSlide(line([3]), 'bass', 2)
+    const [empty] = resolveRun(parked, [2])
+    expect(empty.notes).toEqual([])
+    expect(empty.bassTie).toBeNull()
+
+    const [slid] = resolveRun(toggleNoteStep(parked, 'bass', 2), [2])
+    expect(bassNote(slid)).toMatchObject({ tiesOn: true })
+  })
+
+  it('glides from step 16 into step 1 of the same slot, around the loop', () => {
+    const [slid, target] = resolveRun(line([0, 15], [15]), [15, 0])
+
+    expect(bassNote(slid)).toMatchObject({ tiesOn: true })
+    expect(bassNote(target)).toMatchObject({ legato: true })
+  })
+
+  it('releases a tied gate when the note it was reaching has gone by the time it comes', () => {
+    // The slid note was scheduled tied, then its target was cleared.
+    let pattern = line([2, 3], [2])
+    const [slid] = resolveRun(pattern, [2])
+    pattern = toggleNoteStep(pattern, 'bass', 3)
+    const target = resolveStep({
+      ...soleSlot(pattern),
+      mixer: {},
+      bass: DEFAULT_BASS_SETTINGS,
+      transport: STRAIGHT,
+      stepIndex: 3,
+      bassTie: slid.bassTie,
+    })
+
+    expect(target.notes).toEqual([])
+    expect(target.releaseTie).toBe(true)
+    expect(target.bassTie).toBeNull()
+  })
+
+  it('releases a tied gate when the bass is muted before the note it reaches', () => {
+    const [, target] = resolveRun(line([2, 3], [2]), [2, 3], [{}, { bass: { muted: true, soloed: false, level: 1 } }])
+
+    expect(target.notes).toEqual([])
+    expect(target.releaseTie).toBe(true)
+  })
+
+  it('lets a note placed inside a held gate take the voice with an attack of its own', () => {
+    const [slid] = resolveRun(resizeNoteStep(line([2, 5], [2]), 'bass', 2, 2), [2])
+    const edited = toggleNoteStep(resizeNoteStep(line([2, 5], [2]), 'bass', 2, 2), 'bass', 3)
+    const placed = resolveStep({
+      ...soleSlot(edited),
+      mixer: {},
+      bass: DEFAULT_BASS_SETTINGS,
+      transport: STRAIGHT,
+      stepIndex: 3,
+      bassTie: slid.bassTie,
+    })
+
+    expect(bassNote(placed)).toMatchObject({ legato: false })
+    expect(placed.releaseTie).toBe(false)
+    expect(placed.bassTie).toBeNull()
+  })
+
+  it('ignores slide on the stab, which has neither row nor 303 voice', () => {
+    const pattern = toggleNoteSlide(
+      toggleNoteStep(toggleNoteStep(createInitialPattern(), 'stab', 2), 'stab', 3),
+      'stab',
+      2,
+    )
+    const [slid, next] = resolveRun(pattern, [2, 3])
+
+    expect(slid.notes).toEqual([expect.objectContaining({ laneId: 'stab', lengthSteps: 1, tiesOn: false })])
+    expect(next.notes).toEqual([expect.objectContaining({ laneId: 'stab', legato: false })])
+    expect(slid.bassTie).toBeNull()
+  })
+
+  describe('across a bar where the playing slot changes', () => {
+    /** Slot A slides from step 16 into step 1; slot B has a note of its own on step 1. */
+    function slidBank(aSteps = [0, 15]) {
+      const bank = createBank(line(aSteps, [15]))
+      bank[1] = transposeNoteStep(line([0], [], bank[1]), 'bass', 0, 7)
+      return bank
+    }
+
+    it('releases a slide at the boundary when a switch is queued', () => {
+      const bank = slidBank()
+      const resolved = resolveStep({
+        bank,
+        selectedSlotId: bank[1].id,
+        playingSlotId: bank[0].id,
+        mixer: {},
+        bass: DEFAULT_BASS_SETTINGS,
+        transport: STRAIGHT,
+        stepIndex: 15,
+        bassTie: null,
+      })
+
+      expect(bassNote(resolved)).toMatchObject({ lengthSteps: 1, tiesOn: false })
+      expect(resolved.bassTie).toBeNull()
+    })
+
+    it('does not tie through into the next slot’s first step either', () => {
+      const bank = slidBank([15])
+      const resolved = resolveStep({
+        bank,
+        selectedSlotId: bank[1].id,
+        playingSlotId: bank[0].id,
+        mixer: {},
+        bass: DEFAULT_BASS_SETTINGS,
+        transport: STRAIGHT,
+        stepIndex: 15,
+        bassTie: null,
+      })
+
+      expect(bassNote(resolved)).toMatchObject({ lengthSteps: 1, tiesOn: false })
+    })
+
+    it('releases a gate already tied across the bar when the switch lands, and attacks the new slot’s note', () => {
+      // Step 16 was scheduled tied before the slot was pressed.
+      const bank = slidBank()
+      const resolved = resolveStep({
+        bank,
+        selectedSlotId: bank[1].id,
+        playingSlotId: bank[0].id,
+        mixer: {},
+        bass: DEFAULT_BASS_SETTINGS,
+        transport: STRAIGHT,
+        stepIndex: 0,
+        bassTie: 0,
+      })
+
+      expect(resolved.playingSlotId).toBe(bank[1].id)
+      expect(resolved.releaseTie).toBe(true)
+      expect(bassNote(resolved)).toMatchObject({ midi: DEFAULT_PITCH + 7, legato: false })
+    })
   })
 })

@@ -110,6 +110,24 @@ without restarting its envelope, so the line bends like a 303.
       added, and the EB3-09b forward references in **Note step**, **Phone reflow**,
       **Step resolution**, **Spotlight** and **Bass synth** brought up to date
 
+**Notes (from review):**
+
+- **Tie-through across a switch pressed in the look-ahead.** A slide into a *rest*
+  resolves its extra step up front (`lengthSteps + 1`), so if a slot is pressed after
+  step 16's slide-into-rest was already scheduled (the ~100 ms look-ahead), the note
+  rings one 16th into the new slot's bar before releasing. Nothing sticks. It is the
+  same window the queued switch already admits ("a press in the look-ahead just before
+  the bar cannot cancel a switch already scheduled"). It is left as is because threading
+  it would need a third gate field ("hold, then release after") for a window this short.
+  A slide into a *note* is threaded and is released at the bar.
+- **Accent on a glided-into note.** A legato note keeps the chain's voicing, so its own
+  accent flag isn't applied: neither envelope restarts, and the accent gain isn't moved
+  either. The spec doesn't say what should happen here. The alternative is to ramp the
+  accent gain to the target's voicing over ~10 ms on the legato branch without touching
+  either envelope. That is open for a product call.
+- **Ties across a wrap.** A tie from step 16 into step 1, or across the phone's 8 + 8
+  wrap, draws as two hooks at the row ends that don't meet.
+
 ## Testing decisions
 
 - Step-resolution seam: legato glide-in, tie-through, slide on empty step, bar

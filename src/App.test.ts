@@ -26,8 +26,11 @@ import {
   setSamplerPadFit,
   setTransportBpm,
   setTransportSwing,
+  toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
   toggleVoiceSolo,
+  transposeActivePatternNote,
   updateLessonProgress,
   type ProjectState,
 } from './model/projectState'
@@ -2243,11 +2246,11 @@ describe('App storage durability', () => {
 
 describe('App curriculum tracks', () => {
   /** The track selector's own control, by the name a screen reader hears. */
-  function track(name: 'Techno' | 'Sampling'): HTMLElement {
+  function track(name: 'Techno' | 'Acid' | 'Sampling'): HTMLElement {
     return screen.getByRole('button', { name: new RegExp(`^${name} track`) })
   }
 
-  function switchTo(name: 'Techno' | 'Sampling'): void {
+  function switchTo(name: 'Techno' | 'Acid' | 'Sampling'): void {
     fireEvent.click(track(name))
   }
 
@@ -2278,6 +2281,58 @@ describe('App curriculum tracks', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('6')
     expect(standingOn()).toContain('Load a Sound')
   })
+
+  it('puts Acid between Techno and Sampling, ready to start with nothing else done', async () => {
+    await hydratedDeck()
+
+    const tracks = within(screen.getByRole('navigation', { name: 'Curriculum' }))
+      .getAllByRole('button', { name: / track/ })
+      .map((button) => button.getAttribute('aria-label')!.split(' track')[0])
+    expect(tracks).toEqual(['Techno', 'Acid', 'Sampling'])
+    expect(track('Acid').getAttribute('aria-label')).toContain('0 of 7 complete')
+
+    switchTo('Acid')
+
+    expect(track('Acid').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('7')
+    expect(standingOn()).toContain('Sixteenths')
+    expect(within(screen.getByRole('list', { name: 'Goal progress' })).getByText('Bass notes 0/8'))
+      .toBeTruthy()
+  })
+
+  it(
+    'raises the compact BL-303 finale when the acid capstone is earned, and not again on reload',
+    async () => {
+      // The Acid capstone, one slide short: eight notes on three pitches, two
+      // accents, one connecting slide, and swing at 60%.
+      let saved = createDemoProjectState()
+      for (let step = 0; step < 8; step += 1) saved = toggleActivePatternNoteStep(saved, 'bass', step)
+      saved = transposeActivePatternNote(saved, 'bass', 3, 7)
+      saved = transposeActivePatternNote(saved, 'bass', 5, 12)
+      for (const step of [0, 4]) saved = toggleActivePatternNoteAccent(saved, 'bass', step)
+      saved = toggleActivePatternNoteSlide(saved, 'bass', 2)
+      saved = setTransportSwing(saved, 0.6)
+      await saveProjectState(enterLessonIn(saved, 'acid', 'your-first-acid-line'))
+      await hydratedDeck()
+      expect(screen.queryByRole('dialog')).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: /^Bass slide, step 5,/ }))
+
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog.getAttribute('data-scale')).toBe('compact')
+      expect(within(dialog).getByText('Acid track complete · BL-303 certified')).toBeTruthy()
+      fireEvent.click(within(dialog).getByRole('button', { name: /Back to the deck/ }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+      await new Promise((resolve) => setTimeout(resolve, 450))
+      cleanup()
+      await hydratedDeck()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(track('Acid').getAttribute('aria-label')).toContain('1 of 7 complete')
+    },
+    5000,
+  )
 
   it('folds the path into one line that names the lesson, and unfolds it on request', async () => {
     await hydratedDeck()
@@ -2450,6 +2505,39 @@ describe('App curriculum tracks', () => {
       expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
     )
     await new Promise((resolve) => setTimeout(resolve, 450))
+  })
+})
+
+describe('App sweep goals', () => {
+  async function onEnvModSweep(): Promise<HTMLElement> {
+    await saveProjectState(enterLessonIn(createInitialProjectState(), 'acid', 'env-mod-sweep'))
+    await hydratedDeck()
+    return screen.getByRole('slider', { name: 'Env Mod' })
+  }
+
+  function announced(): string {
+    return document.querySelector('.lesson-announcer')?.textContent ?? ''
+  }
+
+  it('counts one keypress from the bottom of a knob to the top as a full sweep', async () => {
+    const envMod = await onEnvModSweep()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await screen.findByRole('button', { name: 'Stop' })
+
+    fireEvent.keyDown(envMod, { key: 'End' })
+
+    await waitFor(() => expect(announced()).toBe('Lesson complete: Env Mod Sweep'))
+  })
+
+  it('still ignores the same keypress on a stopped deck', async () => {
+    const envMod = await onEnvModSweep()
+
+    fireEvent.keyDown(envMod, { key: 'End' })
+    fireEvent.keyDown(envMod, { key: 'Home' })
+
+    expect(envMod.getAttribute('aria-valuenow')).toBe('0')
+    expect(screen.getByText('Env Mod sweep 0%')).toBeTruthy()
+    expect(announced()).not.toContain('Lesson complete')
   })
 })
 

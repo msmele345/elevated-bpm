@@ -1,6 +1,6 @@
 import { NO_CHORD_PLAY, type ChordPlay } from './chordPlay'
 import { DECK_PARAM_IDS, isDeckParamId, type DeckParamId } from './deckParams'
-import { NOTE_LANES } from './note'
+import { NOTE_FLAG_LANES, NOTE_LANES, slideReach } from './note'
 import { NO_PARAM_MOTION, paramTravel, type ParamMotion } from './paramMotion'
 import { KIT_LANES } from './pattern'
 import { MAX_SLICE_SECONDS } from './region'
@@ -80,6 +80,27 @@ export interface NotesPlacedGoal {
 /** At least `min` different pitches in the lane: the line has to move, not drone. */
 export interface PitchesVariedGoal {
   type: 'pitchesVaried'
+  lane: NoteLaneId
+  min: number
+}
+
+/**
+ * At least `min` notes of a flag lane carry the 303 accent. An open count, like
+ * notesPlaced: which notes bite is the learner's call.
+ */
+export interface NotesAccentedGoal {
+  type: 'notesAccented'
+  lane: NoteLaneId
+  min: number
+}
+
+/**
+ * At least `min` slides that glide into a following note. A slide into a rest
+ * only ties, and one on an empty step does nothing, so neither counts: the
+ * lesson is the glide, and those are not one.
+ */
+export interface NotesSlidGoal {
+  type: 'notesSlid'
   lane: NoteLaneId
   min: number
 }
@@ -199,6 +220,8 @@ export type GoalAssertion = (
   | NotesActiveGoal
   | NotesPlacedGoal
   | PitchesVariedGoal
+  | NotesAccentedGoal
+  | NotesSlidGoal
   | BpmInRangeGoal
   | SwingInRangeGoal
   | ParamSweptGoal
@@ -350,6 +373,13 @@ function notesOf(pattern: Pattern, laneId: NoteLaneId): NoteStep[] {
   return lane ? lane.steps.filter((step) => step.on) : []
 }
 
+/** Slides in one note lane whose gate reaches a note, measured as the voice measures it. */
+function connectedSlides(pattern: Pattern, laneId: NoteLaneId): number {
+  const lane = pattern.noteLanes?.find((l) => l.id === laneId)
+  if (!lane) return 0
+  return lane.steps.filter((_, index) => slideReach(lane, index)?.into === 'note').length
+}
+
 /** True when a source's origin answers what the goal asked for. */
 function matchesOrigin(origin: SampleOrigin, wanted: GoalOrigin): boolean {
   return wanted === 'user' ? origin !== 'shipped' : origin === wanted
@@ -413,6 +443,14 @@ export function assertionProgress(goal: GoalAssertion, context: GoalContext): As
         new Set(notesOf(pattern, goal.lane).map((step) => step.pitch)).size,
         goal.min,
       )
+    case 'notesAccented':
+      // An accent parked on a step with no note is silent, so not part of the line.
+      return countProgress(
+        notesOf(pattern, goal.lane).filter((step) => step.accent).length,
+        goal.min,
+      )
+    case 'notesSlid':
+      return countProgress(connectedSlides(pattern, goal.lane), goal.min)
     case 'bpmInRange': {
       const { bpm } = context
       return valueProgress(bpm !== undefined && bpm >= goal.min && bpm <= goal.max, bpm)
@@ -483,6 +521,7 @@ function fail(lessonId: string, message: string): never {
 
 const DRUM_LANE_IDS: string[] = KIT_LANES.map((lane) => lane.id)
 const NOTE_LANE_IDS: string[] = NOTE_LANES.map((lane) => lane.id)
+const FLAG_LANE_IDS: string[] = [...NOTE_FLAG_LANES]
 
 /**
  * A lane the deck actually has. Authoring a lesson is a JSON-only job, so a
@@ -595,6 +634,45 @@ function parsePitchesVariedGoal(
     lane,
     // One pitch is a line that never moves, so it is no goal at all.
     min: goal.min as number,
+  }
+}
+
+/**
+ * A note lane that shows the 303 flags. Every note lane carries them, but only
+ * these have rows to set them and a voice that plays them — a flag goal on any
+ * other lane is one the deck gives the learner no way to meet.
+ */
+function parseFlagLane(lane: unknown, lessonId: string, index: number): NoteLaneId {
+  if (typeof lane !== 'string' || !FLAG_LANE_IDS.includes(lane)) {
+    fail(
+      lessonId,
+      `goal[${index}] names lane "${String(lane)}"; only ${FLAG_LANE_IDS.join(', ')} shows accent and slide`,
+    )
+  }
+  return lane as NoteLaneId
+}
+
+function parseNotesAccentedGoal(
+  goal: Partial<NotesAccentedGoal>,
+  lessonId: string,
+  index: number,
+): NotesAccentedGoal {
+  return {
+    type: 'notesAccented',
+    lane: parseFlagLane(goal.lane, lessonId, index),
+    min: parseCount(goal.min, 'min', 1, lessonId, index),
+  }
+}
+
+function parseNotesSlidGoal(
+  goal: Partial<NotesSlidGoal>,
+  lessonId: string,
+  index: number,
+): NotesSlidGoal {
+  return {
+    type: 'notesSlid',
+    lane: parseFlagLane(goal.lane, lessonId, index),
+    min: parseCount(goal.min, 'min', 1, lessonId, index),
   }
 }
 
@@ -878,6 +956,10 @@ function parseGoalFields(
       return parseNotesPlacedGoal(goal, lessonId, index)
     case 'pitchesVaried':
       return parsePitchesVariedGoal(goal, lessonId, index)
+    case 'notesAccented':
+      return parseNotesAccentedGoal(goal, lessonId, index)
+    case 'notesSlid':
+      return parseNotesSlidGoal(goal, lessonId, index)
     case 'bpmInRange':
       return parseBpmInRangeGoal(goal, lessonId, index)
     case 'swingInRange':

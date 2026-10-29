@@ -63,6 +63,10 @@ function generatedNoun(goal: GoalAssertion): string {
       return `${noteLabel(goal.lane)} notes`
     case 'pitchesVaried':
       return `${noteLabel(goal.lane)} pitches`
+    case 'notesAccented':
+      return `${noteLabel(goal.lane)} accents`
+    case 'notesSlid':
+      return `${noteLabel(goal.lane)} slides`
     case 'bpmInRange':
       return 'Tempo'
     case 'swingInRange':
@@ -119,6 +123,8 @@ function reading(goal: GoalAssertion, progress: AssertionProgress): string {
       return extra > 0 ? `${done}/${total} · ${extra} extra` : `${done}/${total}`
     case 'notesPlaced':
     case 'pitchesVaried':
+    case 'notesAccented':
+    case 'notesSlid':
     case 'chordPlayed':
     case 'sourceLoaded':
     case 'padAssigned':

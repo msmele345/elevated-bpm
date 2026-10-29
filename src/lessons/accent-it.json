@@ -1,0 +1,7 @@
+{
+  "id": "accent-it",
+  "title": "Accent It",
+  "intro": "The Accent row under the bass line marks the notes that bite. An accented note plays louder and kicks the filter open further and faster, so it barks while the rest of the line purrs. Switch on the accent under at least three of your notes — off the beat is where it sounds most like acid — and listen to the line start to push.",
+  "spotlight": ["accentRow:bass"],
+  "goal": [{ "type": "notesAccented", "lane": "bass", "min": 3 }]
+}

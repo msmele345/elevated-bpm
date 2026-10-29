@@ -29,7 +29,7 @@ import {
   nextUnfinishedLessonId,
 } from './model/arc'
 import type { BassParamId } from './model/bass'
-import { deckParamSpec } from './model/deckParams'
+import { deckParamSpec, type DeckParamId } from './model/deckParams'
 import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
 import { FX_PARAMS, type FxParamId } from './model/fx'
 import { MASTER_PARAMS, type MasterParamId } from './model/master'
@@ -62,6 +62,7 @@ import {
   commitRegionToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
+  deckParamValue,
   enterLesson,
   openingProjectState,
   referencedAudio,
@@ -199,6 +200,10 @@ export default function App() {
   // is running can stay identity-stable across a play/stop.
   const isPlayingRef = useRef(false)
   isPlayingRef.current = isPlaying
+  // The document as last rendered, for the same reason: a knob handler reads
+  // where its knob sat before the move without changing identity per edit.
+  const projectRef = useRef(project)
+  projectRef.current = project
   // An incoming beat runs as a disposable in-memory preview. Holding the
   // recipient's opening document here lets "Back to my project" restore it
   // exactly; autosave stays suspended until the preview is explicitly kept.
@@ -725,35 +730,45 @@ export default function App() {
     setProject((p) => toggleActivePatternNoteSlide(p, laneId, stepIndex))
   }, [])
 
-  const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
-    setProject((p) => setBassParamValue(p, id, value))
-    // Sound design is something you do to a running loop, so only motion over
-    // playing audio counts toward a sweep goal. Read from the ref rather than
-    // the state so this handler never has to change identity.
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  /**
+   * Record a knob move toward sweep goals. Sound design is something you do to
+   * a running loop, so only motion over playing audio counts, and the position
+   * the knob moved *from* counts with it: one keypress from the bottom to the
+   * top is a full sweep. Read from refs so no handler has to change identity.
+   */
+  const observeKnob = useCallback((id: DeckParamId, value: number) => {
+    const from = deckParamValue(projectRef.current, id)
+    setParamMotion((m) =>
+      observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current, from),
+    )
   }, [])
+
+  const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
+    observeKnob(id, value)
+    setProject((p) => setBassParamValue(p, id, value))
+  }, [observeKnob])
 
   const handleMasterParamChange = useCallback((id: MasterParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setMasterParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   const handleFxParamChange = useCallback((id: FxParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setFxParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   const handleSamplerParamChange = useCallback((id: SamplerParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setSamplerParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   // Every Level knob is a deck param, so its motion is observed like any other
   // knob's: a future mixing lesson can ask for a sweep in JSON alone.
   const handleLevelChange = useCallback((id: LevelParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setLevelParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   /**
    * Keep new audio, and say what keeping it cost.
@@ -1144,9 +1159,9 @@ export default function App() {
   // The knob reads in percent; the Transport stores the fraction. Motion is
   // observed in the knob's own units, like every other knob's.
   const handleSwingChange = useCallback((id: TransportParamId, percent: number) => {
+    observeKnob(id, percent)
     setProject((p) => setTransportSwing(p, swingFromPercent(percent)))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), percent, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   const handleTogglePlay = useCallback(async () => {
     if (isPlayingRef.current) {

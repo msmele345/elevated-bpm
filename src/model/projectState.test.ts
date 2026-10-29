@@ -11,6 +11,7 @@ import {
   createSamplerSettings,
   samplerParamForPad,
 } from './sampler'
+import { DECK_PARAMS } from './deckParams'
 import { MAX_LEVEL } from './mixer'
 import { DEFAULT_BPM, DEFAULT_SWING } from './transport'
 import {
@@ -29,6 +30,7 @@ import {
   setSamplerPadFit,
   createDemoProjectState,
   createInitialProjectState,
+  deckParamValue,
   openingProjectState,
   selectSlot,
   PROJECT_STATE_VERSION,
@@ -694,6 +696,32 @@ describe('setFxParamValue', () => {
     expect(setFxParamValue(state, 'feedback', 1e6).instrumentSettings.fx.feedback).toBe(
       feedback.max,
     )
+  })
+})
+
+describe('deckParamValue', () => {
+  it('reads every knob on a fresh deck at its resting value', () => {
+    const state = createInitialProjectState()
+    for (const param of DECK_PARAMS) {
+      expect([param.id, deckParamValue(state, param.id)]).toEqual([param.id, param.default])
+    }
+  })
+
+  it('reads each family of knob back in the units its knob uses', () => {
+    let state = setBassParamValue(createInitialProjectState(), 'envMod', 40)
+    state = setMasterParamValue(state, 'drive', 25)
+    state = setFxParamValue(state, FX_PARAMS[0].id, FX_PARAMS[0].max)
+    state = setSamplerParamValue(state, 'pad2Tune', -7)
+    state = setLevelParamValue(state, 'bassLevel', 0.5)
+    state = setTransportSwing(state, 0.62)
+
+    expect(deckParamValue(state, 'envMod')).toBe(40)
+    expect(deckParamValue(state, 'drive')).toBe(25)
+    expect(deckParamValue(state, FX_PARAMS[0].id)).toBe(FX_PARAMS[0].max)
+    expect(deckParamValue(state, 'pad2Tune')).toBe(-7)
+    expect(deckParamValue(state, 'bassLevel')).toBe(0.5)
+    // Swing is stored as a fraction and its knob reads percent.
+    expect(deckParamValue(state, 'swing')).toBeCloseTo(62)
   })
 })
 

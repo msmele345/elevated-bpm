@@ -579,6 +579,48 @@ summary {
   }
 }
 
+/* Reference tables (field guide): a control and what it does, side by side.
+   Wrapped in .table-wrap so a wide table scrolls inside its card. */
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 1rem;
+}
+
+.ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.ref-table th,
+.ref-table td {
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.ref-table th {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ref-table td:first-child {
+  white-space: nowrap;
+}
+
+kbd {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  background: var(--well);
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
 @media print {
   :root {
     color-scheme: light;
@@ -616,8 +658,13 @@ summary {
     grid-template-columns: 1fr;
   }
 
-  .sequence-wrap {
+  .sequence-wrap,
+  .table-wrap {
     overflow: visible;
+  }
+
+  kbd {
+    background: none;
   }
 
   a {

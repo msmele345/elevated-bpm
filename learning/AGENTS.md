@@ -20,7 +20,7 @@ the most expensive mistake available here:
 | Runs where | Its own static page, outside the app | Inside the deck, in the lesson panel |
 | Verified by | The learner's ears and a checklist | `isGoalMet` — declarative assertions over `ProjectState` |
 | Length | 17–20 minute guided sessions | One goal each, seconds to minutes |
-| Count today | 5 sessions | 14 lessons (Techno) + 6 (Sampling) |
+| Count today | 5 sessions + a 5-page field guide | 14 lessons (Techno) + 7 (Acid) + 6 (Sampling) |
 
 The 5 sessions here **bundle** the 14-lesson in-app Techno arc into sit-down practice
 sessions with theory, ear experiments, and vocabulary the JSON goals can't carry. Adding
@@ -36,6 +36,26 @@ Current course (`Elevated BPM · First Groove`), covering the in-app **Techno** 
 | 03 | `03-write-bass-in-the-gaps` | Note lane, pitch, note length |
 | 04 | `04-shape-an-acid-voice` | Cutoff / resonance / decay, one-variable testing |
 | 05 | `05-finish-and-perform-the-groove` | Stabs, live chords, mute/solo, master macros, share |
+
+### The field guide (`field-guide/`)
+
+A second, separate set of pages: a **reference** to every control v3 added
+(`docs/specs/v3-groove-bank-acid.md`), not a timed course. It has its own
+`course-nav` (`Elevated BPM · Field Guide`) and never appears in the First Groove nav.
+
+| # | File stem | Covers |
+|---|---|---|
+| 00 | `field-guide/index` | What changed and where everything sits now |
+| 01 | `field-guide/01-feel-swing-and-level` | Swing, Level on every voice, bass/stab M and S |
+| 02 | `field-guide/02-find-your-way-around` | Share ▾ menu, transport strip, curriculum line, progress chips, completed strip, Show me, pad cards, wide/phone layout, skip links |
+| 03 | `field-guide/03-the-pattern-bank` | Slots A–D, queued switching, Copy, Clear, bank in links and bundles |
+| 04 | `field-guide/04-acid-accent-slide-env-mod` | Accent and Slide rows, Env Mod, the Acid track |
+
+Field-guide pages keep the pair contract, the shared stylesheet (`../assets/lesson.css`),
+the one `.card-accent`, the retrieval `<details>` and the "Ask your agent…" footer, but
+drop timecodes: they are read at the Deck, not sat through. Reference tables use
+`.table-wrap` + `.ref-table`; keys use `<kbd>`. When a v3 control changes, update its
+field-guide page in the same change.
 
 ---
 
@@ -293,12 +313,17 @@ snapshot, and the deck moves.
 | Bass Cutoff | 120 Hz – 12 kHz, default 900 Hz, log taper | `BASS_PARAMS`, `src/model/bass.ts` |
 | Bass Resonance | 0.5 – 18 Q, default 6 | `BASS_PARAMS` |
 | Bass Decay | 0.05 – 0.8 s, default 0.22 | `BASS_PARAMS` |
+| Bass Env Mod | 0 – 100 %, default 0 | `BASS_PARAMS` |
+| Bass Accent / Slide rows | 16 toggles each under the bass lane | `src/components/NoteFlagRow.tsx` |
+| Swing | 50 – 75 %, default 50 %, in the transport strip | `SWING_PARAM`, `src/model/transport.ts` |
+| Level (every voice) | −∞ to +6 dB, default 0.0 dB, after M and S | `LEVEL_PARAMS`, `src/model/mixer.ts` |
+| Pattern bank | Slots A–D, Copy, Clear, in the transport strip | `src/components/PatternBank.tsx` |
 | Master Filter | 120 Hz – 18 kHz, default 18 kHz (open), log taper | `MASTER_PARAMS`, `src/model/master.ts` |
 | Master Drive | 0 – 100 %, default 0 | `MASTER_PARAMS` |
 | Live stab keys | A W S E D F T G Y H U J K = MIDI 60–72 (C4–C5) | `STAB_KEYS`, `src/model/stab.ts` |
 | Note step keys | ↑/↓ semitone, Shift+↑/↓ octave, ←/→ length | `src/components/NoteRow.tsx` |
-| Deck sections | Curriculum, Master, Drums, Sampler, Bass, Stabs | `src/model/deckSections.ts` |
-| Tracks / arcs | Techno (14 lessons), Sampling (6) | `src/lessons/index.ts` |
+| Deck sections | Transport, Curriculum, Drum machine, Sampler, Bass synth, Stab synth, Master | `src/model/deckSections.ts` |
+| Tracks / arcs | Techno (14 lessons), Acid (7), Sampling (6) | `src/lessons/index.ts` |
 
 The **shipped demo groove** (`DEMO_GROOVE`, `src/model/pattern.ts`) deliberately leaves
 every lesson's work undone — no kick, a half-time clap on step 13, hats stopping a step

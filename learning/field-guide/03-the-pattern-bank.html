@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Field guide: how to use the pattern bank in Elevated BPM — slots A to D, queued switching at the end of the bar, Copy, Clear, and sharing a bank." />
+    <title>Field Guide 03 — The Pattern Bank · Elevated BPM</title>
+    <link rel="stylesheet" href="../assets/lesson.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#lesson">Skip to guide</a>
+    <nav class="course-nav" aria-label="Field guide pages">
+      <strong>Elevated BPM · Field Guide</strong>
+      <ol>
+        <li><a href="index.html" aria-label="Field guide index">00</a></li>
+        <li><a href="01-feel-swing-and-level.html" aria-label="Page 1, Feel: Swing and Level">01</a></li>
+        <li><a href="02-find-your-way-around.html" aria-label="Page 2, Find Your Way Around the Deck">02</a></li>
+        <li><a href="03-the-pattern-bank.html" aria-current="page" aria-label="Page 3, The Pattern Bank">03</a></li>
+        <li><a href="04-acid-accent-slide-env-mod.html" aria-label="Page 4, Acid: Accent, Slide and Env Mod">04</a></li>
+      </ol>
+      <a href="03-the-pattern-bank.md">Markdown</a>
+    </nav>
+
+    <main class="page-shell" id="lesson">
+      <header class="hero">
+        <p class="eyebrow">Field guide 03 · Any level</p>
+        <h1>Four slots, one machine.</h1>
+        <p class="hero-copy">Slots A–D hold four patterns. Switch between them on the bar line, copy one to make a variation, and send the whole bank to a friend.</p>
+        <ul class="chips" aria-label="Page focus">
+          <li>slots</li>
+          <li>queued switch</li>
+          <li>copy</li>
+          <li>clear</li>
+        </ul>
+      </header>
+
+      <div class="lesson-grid">
+        <div class="stack">
+          <section class="card card-accent">
+            <p class="kicker">The one idea</p>
+            <h2>A slot holds what is played. The Deck holds how it sounds.</h2>
+            <p>Each slot holds every drum lane with its accents, every pad lane, the bass line with its pitches, lengths, accents and slides, and the stab lane. Tempo, swing, every Level, mute and solo, the bass patch, the Master macros, the FX and the pad sounds stay put when you switch, so a variation always sounds like the same machine.</p>
+            <p>A new project starts with the demo groove in <strong>A</strong> and <strong>B–D</strong> empty. A beat made before v3 is now slot <strong>A</strong>, unchanged. The Deck remembers your slot when you reload.</p>
+          </section>
+
+          <section class="card">
+            <p class="kicker">Control behavior</p>
+            <h2>Reading the slot buttons.</h2>
+            <div class="table-wrap">
+              <table class="ref-table">
+                <thead><tr><th scope="col">What you see</th><th scope="col">What it means</th></tr></thead>
+                <tbody>
+                  <tr><td>Pressed-in button</td><td>The <strong>selected</strong> slot — the grid shows it and your edits go to it.</td></tr>
+                  <tr><td>Steady LED</td><td>The <strong>playing</strong> slot — the one you hear.</td></tr>
+                  <tr><td>Blinking LED</td><td>A <strong>queued</strong> slot — it takes over at the end of the bar.</td></tr>
+                  <tr><td>Dim letter</td><td>An <strong>empty</strong> slot — no step is on in any lane.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>A screen reader hears all of it in the button’s name, for example “Slot B, selected, queued, empty”.</p>
+          </section>
+
+          <section class="card">
+            <p class="kicker">Guided lab</p>
+            <h2>Switch on the bar line.</h2>
+            <p><strong>While stopped</strong>, a slot switches at once. <strong>While playing</strong>, it is queued: the current slot plays to the end of the bar and the new one takes over on step 1. The grid shows the queued slot straight away, so you can get it ready, and a notice hangs under the strip:</p>
+            <aside class="callout">Editing B · hearing A until the bar ends</aside>
+            <ol>
+              <li>Press <strong>Play</strong> with the demo in <strong>A</strong>.</li>
+              <li>Press <strong>B</strong>. The grid goes empty; the demo keeps playing. Watch <strong>B</strong> blink.</li>
+              <li>At the end of the bar, <strong>B</strong> comes in. The loop is silent.</li>
+              <li>Press <strong>A</strong> to bring the demo back at the next bar line.</li>
+            </ol>
+            <p>Changed your mind? Press a <strong>different</strong> slot to queue that one instead, the <strong>playing</strong> slot to cancel, or <strong>Stop</strong> to switch at once.</p>
+          </section>
+
+          <section class="card">
+            <p class="kicker">Guided lab</p>
+            <h2>Copy and Clear.</h2>
+            <p><strong>Copy — a variation in two clicks.</strong></p>
+            <ol>
+              <li>Select the slot to copy from.</li>
+              <li>Press <strong>Copy</strong>. The other slots blink to say Copy is armed.</li>
+              <li>Press the slot to copy onto. It gets an exact copy and becomes the selected slot — while playing, that means it is queued.</li>
+            </ol>
+            <p>If the target already has programming, the strip asks <strong>Overwrite B?</strong> with <strong>Overwrite</strong> and <strong>Cancel</strong>. Focus lands on <strong>Cancel</strong>, so a stray <kbd>Enter</kbd> never wipes a pattern. Press <strong>Copy</strong> again or <kbd>Escape</kbd> to back out; pressing the slot you are copying from does nothing.</p>
+            <p><strong>Clear — start a slot over.</strong> Select the slot, press <strong>Clear</strong>, answer <strong>Clear A?</strong> with <strong>Clear</strong> or <strong>Cancel</strong>. Only its steps go; the slot and the other three stay. <strong>Clear</strong> does nothing on an empty slot.</p>
+          </section>
+
+          <section class="card">
+            <p class="kicker">Patch notebook</p>
+            <h2>A breakdown and a drop.</h2>
+            <div class="table-wrap">
+              <table class="ref-table">
+                <thead><tr><th scope="col">Slot</th><th scope="col">Job</th><th scope="col">How to build it</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>A</strong></td><td>Main groove</td><td>Your full beat</td></tr>
+                  <tr><td><strong>B</strong></td><td>Breakdown</td><td><strong>Copy</strong> A onto B, then take out the kick</td></tr>
+                  <tr><td><strong>C</strong></td><td>Build</td><td><strong>Copy</strong> B onto C, then add an open hat and a few bass notes</td></tr>
+                  <tr><td><strong>D</strong></td><td>Drop</td><td><strong>Copy</strong> A onto D, then add one more percussion hit and an accent or two</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <aside class="callout listen"><strong>Perform it:</strong> A for four bars, then B, C, D, back to A. Press each slot a little before the bar line you want it on — the bank does not chain patterns for you.</aside>
+          </section>
+        </div>
+
+        <aside class="stack" aria-label="Page support">
+          <section class="card">
+            <p class="kicker">Lessons</p>
+            <h2>Built in B still counts.</h2>
+            <p>Lessons check the <strong>selected</strong> slot. When you open someone else’s beat, any lesson their bank already satisfies — in any slot — is held back, so switching to their <strong>B</strong> never earns you a lesson you did not do.</p>
+          </section>
+
+          <section class="card">
+            <p class="kicker">What travels</p>
+            <h2>Links and bundles.</h2>
+            <ul class="checklist">
+              <li><label><input type="checkbox" /><span>A <strong>share link</strong> carries every slot with programming, and the selected slot, in the same letters</span></label></li>
+              <li><label><input type="checkbox" /><span>Too big for a link? It carries the playing slot alone and says: “This link holds pattern A only — export a bundle to send all four.”</span></label></li>
+              <li><label><input type="checkbox" /><span>A <strong>bundle</strong> always carries all four slots</span></label></li>
+              <li><label><input type="checkbox" /><span>A link made before v3 opens as slot <strong>A</strong></span></label></li>
+            </ul>
+          </section>
+
+          <section class="card">
+            <p class="kicker">Retrieval check</p>
+            <h2>Which slot?</h2>
+            <p>Playing <strong>A</strong>, you press <strong>C</strong> — which slot do your clicks change? You copy A onto B and turn the kick’s Level down — is A’s kick quieter too? Your link holds pattern A only — how do you send all four?</p>
+            <details><summary>Reveal answer</summary><p><strong>C</strong> — edits follow the selected slot at once; you hear them when C comes in. Yes — Level belongs to the Deck, not a slot. Export a bundle from <strong>Share ▾</strong>.</p></details>
+          </section>
+
+          <section class="card">
+            <p class="kicker">Trusted references</p>
+            <h2>Go deeper</h2>
+            <ul class="source-list">
+              <li><a href="https://learningmusic.ableton.com/song-structure/song-structure.html">Ableton · Song structures</a></li>
+              <li><a href="https://cdn.roland.com/assets/media/pdf/TR-909_OM.pdf">Roland · TR-909 owner’s manual</a></li>
+            </ul>
+          </section>
+        </aside>
+      </div>
+
+      <footer class="lesson-footer">
+        <p><a href="02-find-your-way-around.html">← Previous: Find your way around</a></p>
+        <p>Ask your agent why a step you just clicked is not sounding yet.</p>
+        <p><a href="04-acid-accent-slide-env-mod.html">Next: Acid: Accent, Slide and Env Mod →</a></p>
+      </footer>
+    </main>
+  </body>
+</html>

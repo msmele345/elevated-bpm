@@ -4,6 +4,9 @@ import {
   activePattern,
   addSource,
   assignSourceToSamplerPad,
+  createDemoProjectState,
+  copySlot,
+  selectSlot,
   commitRegionToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
@@ -13,14 +16,21 @@ import {
   setMasterParamValue,
   setSamplerParamValue,
   setTransportBpm,
+  setTransportSwing,
   resizeActivePatternNote,
+  toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
-  toggleLaneMute,
+  toggleVoiceMute,
+  toggleVoiceSolo,
+  setVoiceLevel,
   transposeActivePatternNote,
   type ProjectState,
 } from './projectState'
+import { isPatternEmpty } from './bank'
 import { DEFAULT_FX_SETTINGS } from './fx'
 import { DEFAULT_MASTER_SETTINGS } from './master'
+import { MAX_LEVEL } from './mixer'
 import { createInitialPattern, cycleStep } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -36,6 +46,7 @@ import {
   SENDABLE_BUNDLE_LIMIT,
 } from './bundle'
 import {
+  createShareLink,
   createShareUrl,
   PRACTICAL_SHARE_URL_LIMIT,
   projectWithSharedBeat,
@@ -82,12 +93,52 @@ function v6ShareDocument(
   }
 }
 
+const DRUM_LANE_IDS: DrumLaneId[] = ['kick', 'snare', 'closedHat', 'openHat', 'perc']
+const PAD_LANE_IDS: PadLaneId[] = ['pad1', 'pad2', 'pad3', 'pad4']
+const NOTE_LANE_IDS: NoteLaneId[] = ['bass', 'stab']
+
+/**
+ * Fill the selected slot with dense programming that differs by seed — every
+ * lane busy, accents and pitches scattered — so two seeds share nothing gzip
+ * could fold together. The worst case a bank can put in a link.
+ */
+function programDensely(project: ProjectState, seed: number): ProjectState {
+  let state = seed
+  const next = () => (state = (state * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+  let source = project
+  for (const lane of [...DRUM_LANE_IDS, ...PAD_LANE_IDS]) {
+    for (let step = 0; step < 16; step += 1) {
+      const roll = next()
+      if (roll < 0.6) source = cycleActivePatternStep(source, lane, step)
+      if (roll < 0.3) source = cycleActivePatternStep(source, lane, step)
+    }
+  }
+  for (const lane of NOTE_LANE_IDS) {
+    for (let step = 0; step < 16; step += 1) {
+      if (next() >= 0.7) continue
+      source = toggleActivePatternNoteStep(source, lane, step)
+      source = transposeActivePatternNote(source, lane, step, Math.floor(next() * 12) - 5)
+      source = resizeActivePatternNote(source, lane, step, Math.floor(next() * 4))
+    }
+  }
+  return source
+}
+
+/** A bank with every slot densely programmed and unrelated: too big for a link. */
+function overLengthBank(): ProjectState {
+  let project = createInitialProjectState()
+  project.patterns.forEach((pattern, slot) => {
+    project = programDensely(selectSlot(project, pattern.id), slot + 1)
+  })
+  return selectSlot(project, project.patterns[0].id)
+}
+
 describe('share URL', () => {
   it('reproduces the active pattern and every setting that affects how it sounds', async () => {
     const source = setFxParamValue(
       setFxParamValue(
         setMasterParamValue(
-          toggleLaneMute(
+          toggleVoiceMute(
             setBassParamValue(
               setTransportBpm(
                 toggleActivePatternNoteStep(
@@ -127,7 +178,8 @@ describe('share URL', () => {
       status: 'ready',
       project: {
         version: PROJECT_STATE_VERSION,
-        patterns: [activePattern(source)],
+        // Slot A was selected, and B–D were empty: the bank arrives as it was.
+        patterns: source.patterns,
         activePatternId: source.activePatternId,
         transport: source.transport,
         instrumentSettings: source.instrumentSettings,
@@ -150,7 +202,7 @@ describe('share URL', () => {
     source = cycleActivePatternStep(source, 'pad2', 5)
     source = cycleActivePatternStep(source, 'pad2', 5)
     source = setSamplerParamValue(source, samplerParamForPad('pad2').id, -7)
-    source = toggleLaneMute(source, 'pad4')
+    source = toggleVoiceMute(source, 'pad4')
     source = {
       ...source,
       instrumentSettings: {
@@ -169,7 +221,7 @@ describe('share URL', () => {
     if (shared.status !== 'ready') throw new Error('Expected a playable shared sampler beat')
     expect(activePattern(shared.project).padLanes).toEqual(activePattern(source).padLanes)
     expect(shared.project.instrumentSettings.sampler).toEqual(source.instrumentSettings.sampler)
-    expect(shared.project.mixer.pad4).toEqual({ muted: true, soloed: false })
+    expect(shared.project.mixer.pad4).toEqual({ muted: true, soloed: false, level: 1 })
     expect(shared.project.sources).toEqual([CURATED_SAMPLE_SOURCE])
   })
 
@@ -222,13 +274,20 @@ describe('share URL', () => {
       2400,
     )
 
-    const shared = await readSharedBeat(await legacyShareUrl(6, v6ShareDocument(sender)))
+    // Before the bank, a pattern's name was free text.
+    const shared = await readSharedBeat(
+      await legacyShareUrl(
+        6,
+        v6ShareDocument(sender, { patterns: [{ ...activePattern(sender), name: 'Pattern 1' }] }),
+      ),
+    )
 
     if (shared.status !== 'ready') {
       throw new Error(`Expected an older link to open, got ${shared.status}`)
     }
     expect(shared.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(shared.project)).toEqual(activePattern(sender))
+    expect(shared.project.patterns.slice(1).every(isPatternEmpty)).toBe(true)
     expect(shared.project.transport.bpm).toBe(132)
     expect(shared.project.instrumentSettings.bass).toEqual(sender.instrumentSettings.bass)
     // The version it predates arrives at its neutral default, not missing.
@@ -256,6 +315,7 @@ describe('share URL', () => {
     }
     expect(shared.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(shared.project).lanes[0].steps[0].on).toBe(true)
+    expect(activePattern(shared.project).name).toBe('A')
     expect(shared.project.transport.bpm).toBe(125)
   })
 
@@ -340,6 +400,114 @@ describe('share URL', () => {
     })
   })
 
+  it('round-trips a swung beat with its swing and tempo intact', async () => {
+    const sender = setTransportSwing(setTransportBpm(createInitialProjectState(), 134), 0.62)
+
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error(`Expected a ready link, got ${shared.status}`)
+    expect(shared.project.transport).toEqual({ bpm: 134, swing: 0.62 })
+  })
+
+  it('opens a link written before swing existed at straight swing', async () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialProjectState())) as Record<string, unknown>
+    legacy.version = 10
+    legacy.transport = { bpm: 127 }
+
+    const shared = await readSharedBeat(await legacyShareUrl(10, legacy))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a v10 link to open, got ${shared.status}`)
+    expect(shared.project.transport).toEqual({ bpm: 127, swing: 0.5 })
+  })
+
+  it('rejects a payload whose swing is missing or out of range', async () => {
+    const invalid: unknown[] = [0.49, 0.76, 'heavy', null, undefined]
+
+    for (const swing of invalid) {
+      const doc = createInitialProjectState()
+      doc.transport = { bpm: doc.transport.bpm, swing } as typeof doc.transport
+      const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url)).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('round-trips 303 accents and slides in every slot, flags parked on empty steps, and Env Mod', async () => {
+    let sender = setBassParamValue(createInitialProjectState(), 'envMod', 65)
+    sender = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(sender, 'bass', 1), 'bass', 1)
+    sender = toggleActivePatternNoteAccent(sender, 'bass', 9)
+    sender = toggleActivePatternNoteSlide(sender, 'bass', 1)
+    sender = toggleActivePatternNoteSlide(sender, 'bass', 12)
+    sender = selectSlot(sender, sender.patterns[3].id)
+    sender = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(sender, 'bass', 4), 'bass', 4)
+    sender = toggleActivePatternNoteSlide(sender, 'bass', 4)
+
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error(`Expected a ready link, got ${shared.status}`)
+    expect(shared.project.instrumentSettings.bass.envMod).toBe(65)
+    expect(shared.project.patterns[0].noteLanes).toEqual(sender.patterns[0].noteLanes)
+    expect(shared.project.patterns[3].noteLanes).toEqual(sender.patterns[3].noteLanes)
+    expect(shared.project.patterns[0].noteLanes[0].steps[12].slide).toBe(true)
+    expect(shared.project.patterns[3].noteLanes[0].steps[4].slide).toBe(true)
+  })
+
+  it('opens a link written before the 303 flags with every flag off and Env Mod 0', async () => {
+    const programmed = toggleActivePatternNoteStep(createInitialProjectState(), 'bass', 3)
+    const legacy = JSON.parse(JSON.stringify({ ...programmed, version: 13 }))
+    for (const pattern of legacy.patterns) {
+      for (const lane of pattern.noteLanes) {
+        for (const step of lane.steps) {
+          delete step.slide
+          delete step.accent
+        }
+      }
+    }
+    delete legacy.instrumentSettings.bass.envMod
+
+    const shared = await readSharedBeat(await legacyShareUrl(13, legacy))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a v13 link to open, got ${shared.status}`)
+    expect(shared.project.patterns[0].noteLanes).toEqual(programmed.patterns[0].noteLanes)
+    expect(shared.project.instrumentSettings.bass.envMod).toBe(0)
+  })
+
+  it('rejects a payload whose note flags are not booleans', async () => {
+    for (const [flag, value] of [
+      ['accent', 1],
+      ['accent', undefined],
+      ['slide', 'yes'],
+      ['slide', null],
+    ] as const) {
+      const doc = createInitialProjectState()
+      const step = doc.patterns[0].noteLanes[0].steps[0] as unknown as Record<string, unknown>
+      step[flag] = value
+      const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url), `${flag}: ${String(value)}`).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
+  it('rejects a payload whose Env Mod is missing or out of range', async () => {
+    for (const envMod of [-1, 101, '50', undefined]) {
+      const doc = createInitialProjectState()
+      doc.instrumentSettings.bass = { ...doc.instrumentSettings.bass, envMod } as never
+      const url = await createShareUrl(doc, 'https://elevated-bpm.example/')
+      await expect(readSharedBeat(url), `envMod: ${String(envMod)}`).resolves.toMatchObject({
+        status: 'error',
+        code: 'malformed',
+      })
+    }
+  })
+
   it('rejects a payload whose master macros are missing or out of range', async () => {
     const outOfRange = createInitialProjectState()
     outOfRange.instrumentSettings.master = { filter: 18_000, drive: 400 }
@@ -394,11 +562,202 @@ describe('share URL', () => {
 
   it('rejects a mixer key for a pad the fixed deck does not have', async () => {
     const invalid = createInitialProjectState()
-    ;(invalid.mixer as Record<string, unknown>).pad5 = { muted: false, soloed: true }
+    ;(invalid.mixer as Record<string, unknown>).pad5 = { muted: false, soloed: true, level: 1 }
 
     await expect(
       readSharedBeat(await createShareUrl(invalid, 'https://elevated-bpm.example/')),
     ).resolves.toMatchObject({ status: 'error', code: 'malformed' })
+  })
+
+  it('round-trips Levels, mutes and solos on every kind of voice', async () => {
+    let sender = setVoiceLevel(createInitialProjectState(), 'closedHat', 0.25)
+    sender = setVoiceLevel(toggleVoiceSolo(sender, 'bass'), 'bass', MAX_LEVEL)
+    sender = setVoiceLevel(toggleVoiceMute(sender, 'stab'), 'stab', 0)
+    sender = toggleVoiceSolo(sender, 'pad3')
+
+    const shared = await readSharedBeat(
+      await createShareUrl(sender, 'https://elevated-bpm.example/'),
+    )
+
+    if (shared.status !== 'ready') throw new Error(`Expected a ready link, got ${shared.status}`)
+    expect(shared.project.mixer).toEqual(sender.mixer)
+  })
+
+  it('opens a link written before Level existed with every voice at unity', async () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialProjectState())) as Record<string, unknown>
+    legacy.version = 11
+    legacy.mixer = { kick: { muted: true, soloed: false } }
+
+    const shared = await readSharedBeat(await legacyShareUrl(11, legacy))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a v11 link to open, got ${shared.status}`)
+    expect(shared.project.mixer).toEqual({ kick: { muted: true, soloed: false, level: 1 } })
+  })
+
+  it('rejects a mixer strip for an unknown voice, or with a Level out of range or missing', async () => {
+    const strips: Array<[voiceId: string, strip: unknown]> = [
+      ['master', { muted: false, soloed: false, level: 1 }],
+      ['bass', { muted: false, soloed: false, level: -0.1 }],
+      ['stab', { muted: false, soloed: false, level: MAX_LEVEL + 0.01 }],
+      ['kick', { muted: false, soloed: false, level: 'loud' }],
+      ['kick', { muted: false, soloed: false, level: Number.NaN }],
+      ['pad1', { muted: false, soloed: false }],
+    ]
+    for (const [voiceId, strip] of strips) {
+      const invalid = createInitialProjectState()
+      ;(invalid.mixer as Record<string, unknown>)[voiceId] = strip
+      await expect(
+        readSharedBeat(await createShareUrl(invalid, 'https://elevated-bpm.example/')),
+      ).resolves.toMatchObject({ status: 'error', code: 'malformed' })
+    }
+  })
+
+  it('carries every slot with programming back to its own letter, filling the gaps empty', async () => {
+    // Four variations of one groove: A the demo, B and D variations of it, C empty.
+    let sender = cycleActivePatternStep(createDemoProjectState(), 'kick', 0)
+    const [, b, , d] = sender.patterns
+    sender = cycleActivePatternStep(copySlot(sender, b.id), 'kick', 8)
+    sender = cycleActivePatternStep(copySlot(selectSlot(sender, b.id), d.id), 'snare', 4)
+    sender = selectSlot(sender, b.id)
+
+    const link = await createShareLink(sender, 'https://elevated-bpm.example/')
+    const shared = await readSharedBeat(link.url)
+
+    if (shared.status !== 'ready') throw new Error(`Expected a playable bank, got ${shared.status}`)
+    expect(link.onlySlot).toBeNull()
+    const bank = shared.project.patterns
+    expect(bank.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    for (const slot of [0, 1, 3]) {
+      expect(bank[slot]).toEqual(sender.patterns[slot])
+    }
+    expect(isPatternEmpty(bank[2])).toBe(true)
+    expect(new Set(bank.map((pattern) => pattern.id)).size).toBe(4)
+    expect(activePattern(shared.project).name).toBe('B')
+  })
+
+  it('leaves empty slots out of the link, apart from the selected one', async () => {
+    const sender = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[2].id)
+
+    const empties = await createShareLink(sender, 'https://elevated-bpm.example/')
+    const shared = await readSharedBeat(empties.url)
+
+    if (shared.status !== 'ready') throw new Error(`Expected a playable bank, got ${shared.status}`)
+    // The recipient lands on the slot the sender was on, even an empty one.
+    expect(activePattern(shared.project).name).toBe('C')
+    expect(shared.project.patterns[0]).toEqual(sender.patterns[0])
+    // An empty slot is one the reader fills anyway, so it travels as nothing at all.
+    const withoutEmpties = await createShareLink(
+      { ...sender, patterns: [sender.patterns[0], sender.patterns[2]] },
+      'https://elevated-bpm.example/',
+    )
+    expect(empties.url).toBe(withoutEmpties.url)
+  })
+
+  it('falls back to the playing slot alone, under its letter, when the bank will not fit', async () => {
+    const sender = overLengthBank()
+    // A is selected and C is playing: a switch is queued, and C is what the sender hears.
+    const playing = sender.patterns[2]
+
+    const link = await createShareLink(sender, 'https://elevated-bpm.example/', playing.id)
+    const shared = await readSharedBeat(link.url)
+
+    expect(link.onlySlot).toBe('C')
+    expect(link.url.length).toBeLessThanOrEqual(PRACTICAL_SHARE_URL_LIMIT)
+    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    const bank = shared.project.patterns
+    expect(bank[2]).toEqual(playing)
+    expect(activePattern(shared.project).name).toBe('C')
+    expect([bank[0], bank[1], bank[3]].every(isPatternEmpty)).toBe(true)
+  })
+
+  it('falls back to the selected slot when nothing is playing', async () => {
+    const sender = selectSlot(overLengthBank(), overLengthBank().patterns[1].id)
+
+    const link = await createShareLink(sender, 'https://elevated-bpm.example/')
+    const shared = await readSharedBeat(link.url)
+
+    expect(link.onlySlot).toBe('B')
+    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    expect(activePattern(shared.project)).toEqual(sender.patterns[1])
+  })
+
+  it('opens a link written before the bank as slot A', async () => {
+    const sender = cycleActivePatternStep(createDemoProjectState(), 'kick', 4)
+    const v12 = {
+      ...sender,
+      version: 12,
+      patterns: [{ ...activePattern(sender), name: 'Pattern 1' }],
+      lessonProgress: {},
+    }
+
+    const shared = await readSharedBeat(await legacyShareUrl(12, v12))
+
+    if (shared.status !== 'ready') throw new Error(`Expected an old link to open, got ${shared.status}`)
+    expect(shared.project.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(activePattern(shared.project)).toEqual({ ...activePattern(sender), name: 'A' })
+    expect(shared.project.patterns.slice(1).every(isPatternEmpty)).toBe(true)
+  })
+
+  it('accepts one to four slots by letter, filling the letters a payload left out', async () => {
+    const sender = createDemoProjectState()
+    const b = { ...sender.patterns[0], id: 'their-b', name: 'B' }
+    const d = { ...sender.patterns[0], id: 'their-d', name: 'D' }
+    const payload = { ...sender, patterns: [d, b], activePatternId: 'their-d', lessonProgress: {} }
+
+    const shared = await readSharedBeat(await legacyShareUrl(PROJECT_STATE_VERSION, payload))
+
+    if (shared.status !== 'ready') throw new Error(`Expected a partial bank to open, got ${shared.status}`)
+    const bank = shared.project.patterns
+    expect(bank.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(bank[1]).toEqual(b)
+    expect(bank[3]).toEqual(d)
+    expect(isPatternEmpty(bank[0]) && isPatternEmpty(bank[2])).toBe(true)
+    expect(shared.project.activePatternId).toBe('their-d')
+  })
+
+  it('rejects a malformed bank', async () => {
+    const sender = createDemoProjectState()
+    const [a, b] = sender.patterns
+    const banks: Array<{ patterns: unknown[]; activePatternId: string }> = [
+      { patterns: [], activePatternId: a.id },
+      {
+        patterns: [...sender.patterns, { ...a, id: 'fifth', name: 'A' }],
+        activePatternId: a.id,
+      },
+      { patterns: [a, { ...b, name: 'A' }], activePatternId: a.id },
+      { patterns: [a, { ...b, name: 'E' }], activePatternId: a.id },
+      { patterns: [{ ...a, name: 'Pattern 1' }], activePatternId: a.id },
+      { patterns: [a, { ...b, id: a.id }], activePatternId: a.id },
+      { patterns: [a, b], activePatternId: 'not-in-the-bank' },
+    ]
+
+    for (const bank of banks) {
+      const url = await legacyShareUrl(PROJECT_STATE_VERSION, {
+        ...sender,
+        ...bank,
+        lessonProgress: {},
+      })
+      await expect(readSharedBeat(url)).resolves.toMatchObject({ status: 'error', code: 'malformed' })
+    }
+  })
+
+  it('previews a shared bank in place of the recipient’s, leaving theirs to come back to', async () => {
+    const recipient = cycleActivePatternStep(
+      selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id),
+      'kick',
+      0,
+    )
+    const { project: sender, slices } = senderWithChops()
+    const opened = await readBundle(
+      await exportedBytes(selectSlot(sender, sender.patterns[3].id), slices),
+    )
+    if (opened.status !== 'ready') throw new Error('Expected a playable bundle')
+
+    const preview = projectWithSharedBeat(recipient, opened.project)
+
+    expect(preview.patterns).toEqual(sender.patterns)
+    expect(activePattern(preview).name).toBe('D')
+    expect(recipient.patterns[1].lanes[0].steps[0].on).toBe(true)
   })
 
   it('previews a shared beat without mutating recipient-only project state', async () => {
@@ -418,7 +777,6 @@ describe('share URL', () => {
       14,
     )
     const senderPattern = activePattern(sender)
-    senderPattern.name = 'Warehouse signal'
     const shared = await readSharedBeat(
       await createShareUrl(sender, 'https://elevated-bpm.example/'),
     )
@@ -426,6 +784,7 @@ describe('share URL', () => {
 
     const preview = projectWithSharedBeat(recipient, shared.project)
 
+    // The sender's selected slot lands in the same letter on the recipient's deck.
     expect(activePattern(preview)).toEqual(senderPattern)
     expect(preview.transport).toEqual(sender.transport)
     expect(preview.instrumentSettings).toEqual(sender.instrumentSettings)
@@ -569,6 +928,78 @@ describe('beat bundle', () => {
     expect(opened.slices).toEqual(slices)
   })
 
+  it('carries all four slots, each in its own letter, and the selected one', async () => {
+    const { project, slices } = senderWithChops()
+    const b = cycleActivePatternStep(selectSlot(project, project.patterns[1].id), 'kick', 8)
+    const sender = selectSlot(b, b.patterns[2].id)
+
+    const opened = await readBundle(await exportedBytes(sender, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.patterns).toEqual(sender.patterns)
+    expect(opened.project.activePatternId).toBe(sender.patterns[2].id)
+  })
+
+  it('carries all four slots of a bank too big for a link', async () => {
+    const sender = overLengthBank()
+
+    const opened = await readBundle(await exportedBytes(sender, new Map()))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.patterns).toEqual(sender.patterns)
+    expect(opened.project.patterns.some(isPatternEmpty)).toBe(false)
+  })
+
+  it('carries swing so the groove arrives as it was sent', async () => {
+    const { project: sender, slices } = senderWithChops()
+
+    const opened = await readBundle(await exportedBytes(setTransportSwing(sender, 0.7), slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.transport.swing).toBe(0.7)
+  })
+
+  it('carries 303 accents in every slot and Env Mod', async () => {
+    const { project: sender, slices } = senderWithChops()
+    let acid = setBassParamValue(sender, 'envMod', 30)
+    acid = toggleActivePatternNoteAccent(toggleActivePatternNoteStep(acid, 'bass', 0), 'bass', 0)
+    acid = selectSlot(acid, acid.patterns[2].id)
+    acid = toggleActivePatternNoteAccent(acid, 'bass', 11)
+
+    const opened = await readBundle(await exportedBytes(acid, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.patterns).toEqual(acid.patterns)
+    expect(opened.project.instrumentSettings.bass.envMod).toBe(30)
+  })
+
+  it('carries bass slides in every slot through a bundle', async () => {
+    const { project: sender, slices } = senderWithChops()
+    let slid = toggleActivePatternNoteSlide(toggleActivePatternNoteStep(sender, 'bass', 2), 'bass', 2)
+    slid = toggleActivePatternNoteSlide(slid, 'bass', 13)
+    slid = selectSlot(slid, slid.patterns[2].id)
+    slid = toggleActivePatternNoteSlide(toggleActivePatternNoteStep(slid, 'bass', 7), 'bass', 7)
+
+    const opened = await readBundle(await exportedBytes(slid, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    for (const i of [0, 2]) {
+      expect(opened.project.patterns[i].noteLanes).toEqual(slid.patterns[i].noteLanes)
+    }
+    expect(opened.project.patterns[0].noteLanes[0].steps[13].slide).toBe(true)
+    expect(opened.project.patterns[2].noteLanes[0].steps[7].slide).toBe(true)
+  })
+
+  it('carries the mixer so the recipient hears the sender’s balance', async () => {
+    const { project: sender, slices } = senderWithChops()
+    const mixed = setVoiceLevel(toggleVoiceSolo(sender, 'stab'), 'perc', 0.4)
+
+    const opened = await readBundle(await exportedBytes(mixed, slices))
+
+    if (opened.status !== 'ready') throw new Error(`Expected a playable bundle, got ${opened.status}`)
+    expect(opened.project.mixer).toEqual(mixed.mixer)
+  })
+
   it('names itself after the beat and blanks the recipient-owned fields a link does', async () => {
     const { project: sender, slices } = senderWithChops()
     const withProgress: ProjectState = {
@@ -582,8 +1013,8 @@ describe('beat bundle', () => {
     const bundle = await createBundle(withProgress, slices)
 
     if (bundle.status !== 'ready') throw new Error('Expected a bundle')
-    expect(bundle.fileName.endsWith(BUNDLE_FILE_EXTENSION)).toBe(true)
-    expect(bundle.fileName).toContain(activePattern(sender).name)
+    // Named for the whole beat: a bundle carries the bank, not one slot.
+    expect(bundle.fileName).toBe(`Elevated BPM beat${BUNDLE_FILE_EXTENSION}`)
     const opened = await readBundle(await bundle.blob.arrayBuffer())
     if (opened.status !== 'ready') throw new Error('Expected a playable bundle')
     expect(opened.project.lessonProgress).toEqual({})
@@ -655,7 +1086,13 @@ describe('beat bundle', () => {
     if (opened.status !== 'ready') throw new Error(`Expected an older bundle to open, got ${opened.status}`)
     expect(opened.project.version).toBe(PROJECT_STATE_VERSION)
     expect(activePattern(opened.project).lanes).toEqual(activePattern(sender).lanes)
+    // Its one pattern opens as slot A, with B–D empty.
+    expect(opened.project.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(activePattern(opened.project).name).toBe('A')
+    expect(opened.project.patterns.slice(1).every(isPatternEmpty)).toBe(true)
     expect(opened.project.transport.bpm).toBe(138)
+    // A version that predates swing opens straight, exactly as it played.
+    expect(opened.project.transport.swing).toBe(0.5)
     // A version that predates the sampler brings empty pads, so the bundle
     // needs no audio to be complete.
     expect(opened.project.instrumentSettings.sampler.pad1.region).toBeNull()

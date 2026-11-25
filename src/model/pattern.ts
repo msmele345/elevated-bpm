@@ -54,7 +54,7 @@ export function createInitialPattern(): Pattern {
  * the clap answering the backbeat the arc has yet to build.
  *
  * The closed hat also stops short of step 14 so the open hat there rings out
- * instead of being choked (see CHOKES in audio/hits.ts) — until the offbeat
+ * instead of being choked (see CHOKES in audio/stepResolution.ts) — until the offbeat
  * hats lesson fills that step in, which is exactly what the open hat lesson
  * then teaches the user to hear and fix. That move is the one deliberate
  * exception to the rule above.

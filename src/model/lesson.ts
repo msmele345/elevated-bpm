@@ -1,6 +1,6 @@
 import { NO_CHORD_PLAY, type ChordPlay } from './chordPlay'
 import { DECK_PARAM_IDS, isDeckParamId, type DeckParamId } from './deckParams'
-import { NOTE_LANES } from './note'
+import { NOTE_FLAG_LANES, NOTE_LANES, slideReach } from './note'
 import { NO_PARAM_MOTION, paramTravel, type ParamMotion } from './paramMotion'
 import { KIT_LANES } from './pattern'
 import { MAX_SLICE_SECONDS } from './region'
@@ -17,7 +17,7 @@ import {
   type SampleSource,
   type SamplerSettings,
 } from './sampler'
-import { MAX_BPM, MIN_BPM } from './transport'
+import { MAX_BPM, MIN_BPM, SWING_PARAM, wholeSwingPercent } from './transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -84,9 +84,41 @@ export interface PitchesVariedGoal {
   min: number
 }
 
+/**
+ * At least `min` notes of a flag lane carry the 303 accent. An open count, like
+ * notesPlaced: which notes bite is the learner's call.
+ */
+export interface NotesAccentedGoal {
+  type: 'notesAccented'
+  lane: NoteLaneId
+  min: number
+}
+
+/**
+ * At least `min` slides that glide into a following note. A slide into a rest
+ * only ties, and one on an empty step does nothing, so neither counts: the
+ * lesson is the glide, and those are not one.
+ */
+export interface NotesSlidGoal {
+  type: 'notesSlid'
+  lane: NoteLaneId
+  min: number
+}
+
 /** The transport sits in a tempo range — the goal of a "find the tempo" lesson. */
 export interface BpmInRangeGoal {
   type: 'bpmInRange'
+  min: number
+  max: number
+}
+
+/**
+ * The transport's swing sits in a range — the goal of a "shuffle" lesson. In
+ * percent, as the Swing knob reads, so a lesson author writes what the learner
+ * sees.
+ */
+export interface SwingInRangeGoal {
+  type: 'swingInRange'
   min: number
   max: number
 }
@@ -182,13 +214,16 @@ export interface PadStepsPlacedGoal {
   min: number
 }
 
-export type GoalAssertion =
+export type GoalAssertion = (
   | StepsActiveGoal
   | StepsAccentedGoal
   | NotesActiveGoal
   | NotesPlacedGoal
   | PitchesVariedGoal
+  | NotesAccentedGoal
+  | NotesSlidGoal
   | BpmInRangeGoal
+  | SwingInRangeGoal
   | ParamSweptGoal
   | ChordPlayedGoal
   | SourceLoadedGoal
@@ -198,6 +233,13 @@ export type GoalAssertion =
   | FitTargetSetGoal
   | PadTunedGoal
   | PadStepsPlacedGoal
+) & {
+  /**
+   * Overrides the noun on this goal's progress chip ("Downbeats 3/4" rather
+   * than "Kick 3/4"). Optional; validated non-empty when present.
+   */
+  label?: string
+}
 
 export interface Lesson {
   id: string
@@ -264,30 +306,65 @@ export interface GoalContext {
   motion?: ParamMotion
   /** The transport tempo the document is set to. */
   bpm?: number
+  /** The transport swing the document is set to, as the stored 0.50–0.75 fraction. */
+  swing?: number
   /** Live keyboard playing observed this session. */
   chord?: ChordPlay
   /** The sampler's pads and the sources behind them. */
   sampler?: SamplerGoalContext
 }
 
-/** True when exactly the wanted step indexes satisfy `holds`, and no others. */
-function exactlyOn<T>(steps: T[], wanted: number[], holds: (step: T) => boolean): boolean {
+/**
+ * How far one assertion is from being met, read against the live session.
+ *
+ * Every goal type answers in the same shape so a chip can show it and so
+ * completion can be derived from it: a lesson is met when every assertion
+ * reports `met`, which means progress and completion can never disagree.
+ *
+ * - `done` of `total`: wanted steps placed, a count capped at its minimum, a
+ *   sweep's travel against `minTravel`. A goal that is only met or not reports
+ *   1 or 0 of 1.
+ * - `extra`: for exact-placement goals, steps that hold but were not wanted.
+ *   A count, never a position — progress must not give away which steps.
+ * - `current`: for range and value goals, the value the deck holds now, when
+ *   it means something (absent with no chop, no fit, or no transport; a pad
+ *   with no tune reads 0, its neutral).
+ */
+export interface AssertionProgress {
+  met: boolean
+  done: number
+  total: number
+  extra: number
+  current?: number
+}
+
+/** Wanted steps that satisfy `holds`, and steps that do but were not wanted. */
+function placementProgress<T>(
+  steps: T[] | undefined,
+  wanted: number[],
+  holds: (step: T) => boolean,
+): AssertionProgress {
   const set = new Set(wanted)
+  let done = 0
+  let extra = 0
+  for (const [i, step] of (steps ?? []).entries()) {
+    if (!holds(step)) continue
+    if (set.has(i)) done += 1
+    else extra += 1
+  }
   // Exact match: every goal step on, every other step off — wrong or extra
   // steps must never falsely complete a lesson.
-  return steps.every((step, i) => holds(step) === set.has(i))
+  return { met: done === wanted.length && extra === 0, done, total: wanted.length, extra }
 }
 
-function isStepsActiveMet(goal: StepsActiveGoal, pattern: Pattern): boolean {
-  const lane = pattern.lanes.find((l) => l.id === goal.lane)
-  if (!lane) return false
-  return exactlyOn(lane.steps, goal.steps, (step) => step.on)
+/** A minimum-count goal: the count so far, capped at the minimum it asks for. */
+function countProgress(count: number, min: number): AssertionProgress {
+  return { met: count >= min, done: Math.min(count, min), total: min, extra: 0 }
 }
 
-function isStepsAccentedMet(goal: StepsAccentedGoal, pattern: Pattern): boolean {
-  const lane = pattern.lanes.find((l) => l.id === goal.lane)
-  if (!lane) return false
-  return exactlyOn(lane.steps, goal.steps, (step) => step.on && step.accent)
+/** A goal that is only met or not, with the value the deck holds now. */
+function valueProgress(met: boolean, current: number | undefined): AssertionProgress {
+  return { met, done: met ? 1 : 0, total: 1, extra: 0, current }
 }
 
 /** The programmed notes of one note lane, silent steps left out. */
@@ -296,10 +373,11 @@ function notesOf(pattern: Pattern, laneId: NoteLaneId): NoteStep[] {
   return lane ? lane.steps.filter((step) => step.on) : []
 }
 
-function isNotesActiveMet(goal: NotesActiveGoal, pattern: Pattern): boolean {
-  const lane = pattern.noteLanes?.find((l) => l.id === goal.lane)
-  if (!lane) return false
-  return exactlyOn(lane.steps, goal.steps, (step) => step.on)
+/** Slides in one note lane whose gate reaches a note, measured as the voice measures it. */
+function connectedSlides(pattern: Pattern, laneId: NoteLaneId): number {
+  const lane = pattern.noteLanes?.find((l) => l.id === laneId)
+  if (!lane) return 0
+  return lane.steps.filter((_, index) => slideReach(lane, index)?.into === 'note').length
 }
 
 /** True when a source's origin answers what the goal asked for. */
@@ -335,65 +413,106 @@ function assignedPads(context: GoalContext, origin?: GoalOrigin): number {
   }).length
 }
 
-function isAssertionMet(goal: GoalAssertion, context: GoalContext): boolean {
+/** One assertion's progress against the live session. */
+export function assertionProgress(goal: GoalAssertion, context: GoalContext): AssertionProgress {
+  const { pattern } = context
   switch (goal.type) {
     case 'stepsActive':
-      return isStepsActiveMet(goal, context.pattern)
+      return placementProgress(
+        pattern.lanes.find((l) => l.id === goal.lane)?.steps,
+        goal.steps,
+        (step) => step.on,
+      )
     case 'stepsAccented':
-      return isStepsAccentedMet(goal, context.pattern)
+      return placementProgress(
+        pattern.lanes.find((l) => l.id === goal.lane)?.steps,
+        goal.steps,
+        (step) => step.on && step.accent,
+      )
     case 'notesActive':
-      return isNotesActiveMet(goal, context.pattern)
+      return placementProgress(
+        pattern.noteLanes?.find((l) => l.id === goal.lane)?.steps,
+        goal.steps,
+        (step) => step.on,
+      )
     case 'notesPlaced':
-      return notesOf(context.pattern, goal.lane).length >= goal.min
+      return countProgress(notesOf(pattern, goal.lane).length, goal.min)
     case 'pitchesVaried':
       // Pitch parked under a step that is switched off is not part of the line.
-      return new Set(notesOf(context.pattern, goal.lane).map((step) => step.pitch)).size >= goal.min
-    case 'bpmInRange':
-      return context.bpm !== undefined && context.bpm >= goal.min && context.bpm <= goal.max
-    case 'paramSwept':
-      return paramTravel(context.motion ?? NO_PARAM_MOTION, goal.param) >= goal.minTravel
+      return countProgress(
+        new Set(notesOf(pattern, goal.lane).map((step) => step.pitch)).size,
+        goal.min,
+      )
+    case 'notesAccented':
+      // An accent parked on a step with no note is silent, so not part of the line.
+      return countProgress(
+        notesOf(pattern, goal.lane).filter((step) => step.accent).length,
+        goal.min,
+      )
+    case 'notesSlid':
+      return countProgress(connectedSlides(pattern, goal.lane), goal.min)
+    case 'bpmInRange': {
+      const { bpm } = context
+      return valueProgress(bpm !== undefined && bpm >= goal.min && bpm <= goal.max, bpm)
+    }
+    case 'swingInRange': {
+      const percent = context.swing === undefined ? undefined : wholeSwingPercent(context.swing)
+      return valueProgress(
+        percent !== undefined && percent >= goal.min && percent <= goal.max,
+        percent,
+      )
+    }
+    case 'paramSwept': {
+      const travel = paramTravel(context.motion ?? NO_PARAM_MOTION, goal.param)
+      return { met: travel >= goal.minTravel, done: travel, total: goal.minTravel, extra: 0 }
+    }
     case 'chordPlayed':
-      return (context.chord ?? NO_CHORD_PLAY).maxNotes >= goal.minNotes
+      return countProgress((context.chord ?? NO_CHORD_PLAY).maxNotes, goal.minNotes)
     case 'sourceLoaded':
-      return (
+      return countProgress(
         (context.sampler?.sources ?? []).filter((source) =>
           matchesOrigin(source.origin, goal.origin),
-        ).length >= goal.min
+        ).length,
+        goal.min,
       )
     case 'padAssigned':
-      return assignedPads(context, goal.origin) >= goal.min
+      return countProgress(assignedPads(context, goal.origin), goal.min)
     case 'regionStartsWithin': {
       const chop = chopOf(context, goal.pad)
       // The file matters as much as the window: the same offset in the
       // learner's own break is a different chop entirely.
-      if (!chop || chop.region.sourceId !== goal.source) return false
-      return chop.region.start >= goal.from && chop.region.start <= goal.to
+      if (!chop || chop.region.sourceId !== goal.source) return valueProgress(false, undefined)
+      const { start } = chop.region
+      return valueProgress(start >= goal.from && start <= goal.to, start)
     }
     case 'regionShorterThan': {
-      const chop = chopOf(context, goal.pad)
-      return chop !== undefined && chop.region.duration <= goal.seconds
+      const duration = chopOf(context, goal.pad)?.region.duration
+      return valueProgress(duration !== undefined && duration <= goal.seconds, duration)
     }
     case 'fitTargetSet': {
       const pad = padOf(context, goal.pad)
       // A fit target on a pad with nothing on it is not fitting anything.
-      if (!pad?.region || pad.fit === null) return false
-      return pad.fit >= goal.minSteps
+      const fit = pad?.region && pad.fit !== null ? pad.fit : undefined
+      return valueProgress(fit !== undefined && fit >= goal.minSteps, fit)
     }
-    case 'padTuned':
-      return Math.abs(padOf(context, goal.pad)?.tune ?? 0) >= goal.minSemitones
+    case 'padTuned': {
+      const tune = padOf(context, goal.pad)?.tune ?? 0
+      return valueProgress(Math.abs(tune) >= goal.minSemitones, tune)
+    }
     case 'padStepsPlaced':
-      return (
-        context.pattern.padLanes.reduce(
+      return countProgress(
+        pattern.padLanes.reduce(
           (placed, lane) => placed + lane.steps.filter((step) => step.on).length,
           0,
-        ) >= goal.min
+        ),
+        goal.min,
       )
   }
 }
 
 /** True when every goal assertion of the lesson holds against the live session. */
 export function isGoalMet(lesson: Lesson, context: GoalContext): boolean {
-  return lesson.goal.every((goal) => isAssertionMet(goal, context))
+  return lesson.goal.every((goal) => assertionProgress(goal, context).met)
 }
 
 function fail(lessonId: string, message: string): never {
@@ -402,6 +521,7 @@ function fail(lessonId: string, message: string): never {
 
 const DRUM_LANE_IDS: string[] = KIT_LANES.map((lane) => lane.id)
 const NOTE_LANE_IDS: string[] = NOTE_LANES.map((lane) => lane.id)
+const FLAG_LANE_IDS: string[] = [...NOTE_FLAG_LANES]
 
 /**
  * A lane the deck actually has. Authoring a lesson is a JSON-only job, so a
@@ -517,6 +637,45 @@ function parsePitchesVariedGoal(
   }
 }
 
+/**
+ * A note lane that shows the 303 flags. Every note lane carries them, but only
+ * these have rows to set them and a voice that plays them — a flag goal on any
+ * other lane is one the deck gives the learner no way to meet.
+ */
+function parseFlagLane(lane: unknown, lessonId: string, index: number): NoteLaneId {
+  if (typeof lane !== 'string' || !FLAG_LANE_IDS.includes(lane)) {
+    fail(
+      lessonId,
+      `goal[${index}] names lane "${String(lane)}"; only ${FLAG_LANE_IDS.join(', ')} shows accent and slide`,
+    )
+  }
+  return lane as NoteLaneId
+}
+
+function parseNotesAccentedGoal(
+  goal: Partial<NotesAccentedGoal>,
+  lessonId: string,
+  index: number,
+): NotesAccentedGoal {
+  return {
+    type: 'notesAccented',
+    lane: parseFlagLane(goal.lane, lessonId, index),
+    min: parseCount(goal.min, 'min', 1, lessonId, index),
+  }
+}
+
+function parseNotesSlidGoal(
+  goal: Partial<NotesSlidGoal>,
+  lessonId: string,
+  index: number,
+): NotesSlidGoal {
+  return {
+    type: 'notesSlid',
+    lane: parseFlagLane(goal.lane, lessonId, index),
+    min: parseCount(goal.min, 'min', 1, lessonId, index),
+  }
+}
+
 function parseBpmInRangeGoal(
   goal: Partial<BpmInRangeGoal>,
   lessonId: string,
@@ -535,6 +694,29 @@ function parseBpmInRangeGoal(
     fail(lessonId, `goal[${index}] bpm range must run min → max inside [${MIN_BPM}, ${MAX_BPM}]`)
   }
   return { type: 'bpmInRange', min, max }
+}
+
+function parseSwingInRangeGoal(
+  goal: Partial<SwingInRangeGoal>,
+  lessonId: string,
+  index: number,
+): SwingInRangeGoal {
+  const { min, max } = goal
+  // Percent, the knob's own units: a range written as the stored fraction
+  // (0.56) would sit below the knob and fail here rather than never complete.
+  if (
+    typeof min !== 'number' ||
+    typeof max !== 'number' ||
+    min < SWING_PARAM.min ||
+    max > SWING_PARAM.max ||
+    min > max
+  ) {
+    fail(
+      lessonId,
+      `goal[${index}] swing range must run min → max inside [${SWING_PARAM.min}, ${SWING_PARAM.max}] percent`,
+    )
+  }
+  return { type: 'swingInRange', min, max }
 }
 
 function parseChordPlayedGoal(
@@ -743,9 +925,26 @@ function parsePadStepsPlacedGoal(
   }
 }
 
+/**
+ * A goal's own fields plus its optional chip label. The label is copied only
+ * when the JSON carries one, so a goal without it parses to exactly its fields.
+ */
 function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion {
   const goal = raw as Partial<GoalAssertion> | null
   if (goal === null || typeof goal !== 'object') fail(lessonId, `goal[${index}] must be an object`)
+  const parsed = parseGoalFields(goal, lessonId, index)
+  if (goal.label === undefined) return parsed
+  if (typeof goal.label !== 'string' || goal.label.trim() === '') {
+    fail(lessonId, `goal[${index}] label must be a non-empty string when present`)
+  }
+  return { ...parsed, label: goal.label }
+}
+
+function parseGoalFields(
+  goal: Partial<GoalAssertion>,
+  lessonId: string,
+  index: number,
+): GoalAssertion {
   switch (goal.type) {
     case 'stepsActive':
       return parseStepsActiveGoal(goal, lessonId, index)
@@ -757,8 +956,14 @@ function parseGoal(raw: unknown, lessonId: string, index: number): GoalAssertion
       return parseNotesPlacedGoal(goal, lessonId, index)
     case 'pitchesVaried':
       return parsePitchesVariedGoal(goal, lessonId, index)
+    case 'notesAccented':
+      return parseNotesAccentedGoal(goal, lessonId, index)
+    case 'notesSlid':
+      return parseNotesSlidGoal(goal, lessonId, index)
     case 'bpmInRange':
       return parseBpmInRangeGoal(goal, lessonId, index)
+    case 'swingInRange':
+      return parseSwingInRangeGoal(goal, lessonId, index)
     case 'paramSwept':
       return parseParamSweptGoal(goal, lessonId, index)
     case 'chordPlayed':

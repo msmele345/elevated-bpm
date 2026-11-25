@@ -3,18 +3,24 @@ import { BASS_PARAMS, DEFAULT_BASS_SETTINGS } from './bass'
 import { DEFAULT_FX_SETTINGS, FX_PARAMS } from './fx'
 import { DEFAULT_MASTER_SETTINGS, MASTER_PARAMS } from './master'
 import { DEFAULT_PITCH, MIN_NOTE_LENGTH, STAB_DEFAULT_PITCH } from './note'
+import { createBank, isPatternEmpty } from './bank'
+import type { Pattern } from './types'
 import { createDemoPattern, createInitialPattern } from './pattern'
 import {
   CURATED_SAMPLE_SOURCE,
   createSamplerSettings,
   samplerParamForPad,
 } from './sampler'
-import { DEFAULT_BPM } from './transport'
+import { DECK_PARAMS } from './deckParams'
+import { MAX_LEVEL } from './mixer'
+import { DEFAULT_BPM, DEFAULT_SWING } from './transport'
 import {
   DEFAULT_ARC_ID,
   activeLessonIdFor,
   activePattern,
   addSource,
+  clearSlot,
+  copySlot,
   selectArc,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
@@ -22,8 +28,11 @@ import {
   relinkSamplerPad,
   removeSource,
   setSamplerPadFit,
+  createDemoProjectState,
   createInitialProjectState,
+  deckParamValue,
   openingProjectState,
+  selectSlot,
   PROJECT_STATE_VERSION,
   migrateProjectState,
   resizeActivePatternNote,
@@ -32,23 +41,31 @@ import {
   setMasterParamValue,
   setSamplerParamValue,
   setTransportBpm,
+  setTransportSwing,
+  setVoiceLevel,
+  setLevelParamValue,
   cycleActivePatternStep,
   enterLesson,
   selectLesson,
+  toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
-  toggleLaneMute,
-  toggleLaneSolo,
+  toggleVoiceMute,
+  toggleVoiceSolo,
   transposeActivePatternNote,
   updateLessonProgress,
+  type ProjectState,
 } from './projectState'
 
 describe('createInitialProjectState', () => {
-  it('creates a current-version document with one active pattern and default transport', () => {
+  it('creates a current-version document with a four-slot bank, slot A selected, and default transport', () => {
     const state = createInitialProjectState()
     expect(state.version).toBe(PROJECT_STATE_VERSION)
-    expect(state.patterns).toHaveLength(1)
+    expect(state.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(state.patterns.every(isPatternEmpty)).toBe(true)
     expect(state.activePatternId).toBe(state.patterns[0].id)
     expect(state.transport.bpm).toBe(DEFAULT_BPM)
+    expect(state.transport.swing).toBe(DEFAULT_SWING)
     expect(state.lessonProgress).toEqual({})
     expect(state.instrumentSettings).toEqual({
       bass: DEFAULT_BASS_SETTINGS,
@@ -187,16 +204,209 @@ describe('enterLesson', () => {
 })
 
 describe('openingProjectState', () => {
-  it('seeds the demo groove when nothing is saved', () => {
+  it('seeds the demo groove in slot A when nothing is saved, with B–D empty', () => {
     const opening = openingProjectState(null)
     expect(opening.version).toBe(PROJECT_STATE_VERSION)
-    expect(activePattern(opening)).toEqual(createDemoPattern())
+    expect(opening.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    expect(opening.activePatternId).toBe(opening.patterns[0].id)
+    expect(activePattern(opening)).toEqual({ ...createDemoPattern(), name: 'A' })
+    expect(opening.patterns.slice(1).every(isPatternEmpty)).toBe(true)
     expect(opening.lessonProgress).toEqual({})
   })
 
   it('returns a saved document untouched — a returning beat is never replaced', () => {
     const saved = cycleActivePatternStep(createInitialProjectState(), 'kick', 3)
     expect(openingProjectState(saved)).toBe(saved)
+  })
+})
+
+describe('selectSlot', () => {
+  it('makes the pressed slot the one the grid shows and edits go to', () => {
+    const state = createDemoProjectState()
+    const b = state.patterns[1]
+
+    const selected = selectSlot(state, b.id)
+
+    expect(selected.activePatternId).toBe(b.id)
+    expect(activePattern(selected)).toBe(b)
+    const edited = cycleActivePatternStep(selected, 'kick', 0)
+    expect(edited.patterns[1].lanes[0].steps[0].on).toBe(true)
+    // Slot A, the demo, is left exactly as it was.
+    expect(edited.patterns[0]).toBe(state.patterns[0])
+  })
+
+  it('changes nothing about how the Deck sounds — switching is not a patch edit', () => {
+    const state = setTransportSwing(toggleVoiceMute(createDemoProjectState(), 'perc'), 0.6)
+
+    const selected = selectSlot(state, state.patterns[2].id)
+
+    expect(selected.patterns).toBe(state.patterns)
+    expect(selected.transport).toBe(state.transport)
+    expect(selected.mixer).toBe(state.mixer)
+    expect(selected.instrumentSettings).toBe(state.instrumentSettings)
+    expect(selected.sources).toBe(state.sources)
+    expect(selected.lessonProgress).toBe(state.lessonProgress)
+  })
+
+  it('keeps each slot’s own slides: a slide set in B stays in B', () => {
+    let state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id)
+    state = toggleActivePatternNoteSlide(toggleActivePatternNoteStep(state, 'bass', 3), 'bass', 3)
+    state = toggleActivePatternNoteSlide(state, 'bass', 10)
+
+    const backInA = selectSlot(state, state.patterns[0].id)
+
+    expect(backInA.patterns[1].noteLanes[0].steps[3].slide).toBe(true)
+    expect(backInA.patterns[1].noteLanes[0].steps[10].slide).toBe(true)
+    expect(activePattern(backInA).noteLanes[0].steps.some((step) => step.slide)).toBe(false)
+  })
+
+  it('ignores a slot the bank does not have', () => {
+    const state = createDemoProjectState()
+    expect(selectSlot(state, 'no-such-slot')).toBe(state)
+  })
+
+  it('remembers the selected slot through a save and reload', () => {
+    const state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[3].id)
+    const reloaded = migrateProjectState(JSON.parse(JSON.stringify(state)))!
+    expect(activePattern(reloaded).name).toBe('D')
+  })
+})
+
+describe('copySlot', () => {
+  /** The demo in A, with a bass note transposed and stretched so every field is exercised. */
+  function programmed(): ProjectState {
+    let state = toggleActivePatternNoteStep(createDemoProjectState(), 'bass', 2)
+    state = transposeActivePatternNote(state, 'bass', 2, 5)
+    return resizeActivePatternNote(state, 'bass', 2, 1)
+  }
+
+  it("copies the selected slot's lanes onto the target, which keeps its own id and letter", () => {
+    const state = programmed()
+    const [a, b] = state.patterns
+
+    const copied = copySlot(state, b.id)
+
+    expect(copied.patterns[1].id).toBe(b.id)
+    expect(copied.patterns[1].name).toBe('B')
+    expect(copied.patterns[1].lanes).toEqual(a.lanes)
+    expect(copied.patterns[1].padLanes).toEqual(a.padLanes)
+    expect(copied.patterns[1].noteLanes).toEqual(a.noteLanes)
+  })
+
+  it('carries the slot’s slides and accents, as fresh steps that edit independently', () => {
+    let state = toggleActivePatternNoteStep(createDemoProjectState(), 'bass', 5)
+    state = toggleActivePatternNoteSlide(toggleActivePatternNoteAccent(state, 'bass', 5), 'bass', 5)
+    state = toggleActivePatternNoteSlide(state, 'bass', 12)
+    const source = state.patterns[0].noteLanes[0]
+
+    const copied = copySlot(state, state.patterns[1].id)
+
+    const target = copied.patterns[1].noteLanes[0]
+    expect(target.steps).toEqual(source.steps)
+    expect(target.steps[5]).toMatchObject({ slide: true, accent: true })
+    expect(target.steps[12].slide).toBe(true)
+    target.steps.forEach((step, i) => expect(step).not.toBe(source.steps[i]))
+
+    const editedB = toggleActivePatternNoteSlide(copied, 'bass', 5)
+    expect(editedB.patterns[1].noteLanes[0].steps[5].slide).toBe(false)
+    expect(editedB.patterns[0].noteLanes[0].steps[5].slide).toBe(true)
+  })
+
+  it('selects the target, so the variation is ready to change', () => {
+    const state = programmed()
+    const copied = copySlot(state, state.patterns[2].id)
+    expect(copied.activePatternId).toBe(state.patterns[2].id)
+  })
+
+  it('makes a deep copy: editing either slot afterwards never changes the other', () => {
+    const state = programmed()
+    const copied = copySlot(state, state.patterns[1].id)
+
+    // Edit the copy in B — kick, accent and a bass note's pitch and length.
+    let editedB = cycleActivePatternStep(copied, 'kick', 0)
+    editedB = transposeActivePatternNote(editedB, 'bass', 2, 2)
+    editedB = resizeActivePatternNote(editedB, 'bass', 2, 1)
+    expect(editedB.patterns[0]).toEqual(state.patterns[0])
+
+    // And the original in A.
+    const editedA = cycleActivePatternStep(selectSlot(copied, copied.patterns[0].id), 'closedHat', 2)
+    expect(editedA.patterns[1].lanes).toEqual(state.patterns[0].lanes)
+
+    // No step object is shared between the two slots.
+    const steps = (pattern: Pattern): object[] => [
+      ...pattern.lanes.flatMap((lane) => lane.steps),
+      ...pattern.padLanes.flatMap((lane) => lane.steps),
+      ...pattern.noteLanes.flatMap((lane) => lane.steps),
+    ]
+    const bSteps = new Set<object>(steps(copied.patterns[1]))
+    expect(steps(copied.patterns[0]).some((step) => bSteps.has(step))).toBe(false)
+  })
+
+  it('overwrites programming already in the target', () => {
+    let state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id)
+    state = cycleActivePatternStep(state, 'kick', 0)
+    state = selectSlot(state, state.patterns[0].id)
+
+    const copied = copySlot(state, state.patterns[1].id)
+
+    expect(copied.patterns[1].lanes[0].steps[0].on).toBe(false)
+    expect(copied.patterns[1].lanes).toEqual(state.patterns[0].lanes)
+  })
+
+  it('leaves the other slots and the sound of the Deck alone', () => {
+    const state = setTransportSwing(toggleVoiceMute(programmed(), 'perc'), 0.6)
+
+    const copied = copySlot(state, state.patterns[3].id)
+
+    expect(copied.patterns[0]).toBe(state.patterns[0])
+    expect(copied.patterns[1]).toBe(state.patterns[1])
+    expect(copied.patterns[2]).toBe(state.patterns[2])
+    expect(copied.transport).toBe(state.transport)
+    expect(copied.mixer).toBe(state.mixer)
+    expect(copied.instrumentSettings).toBe(state.instrumentSettings)
+    expect(copied.sources).toBe(state.sources)
+    expect(copied.lessonProgress).toBe(state.lessonProgress)
+  })
+
+  it('does nothing when copying onto the selected slot itself, or onto a slot the bank does not have', () => {
+    const state = programmed()
+    expect(copySlot(state, state.activePatternId)).toBe(state)
+    expect(copySlot(state, 'no-such-slot')).toBe(state)
+  })
+})
+
+describe('clearSlot', () => {
+  it('empties the selected slot, which keeps its id and letter', () => {
+    const state = toggleActivePatternNoteStep(createDemoProjectState(), 'bass', 0)
+    const a = state.patterns[0]
+
+    const cleared = clearSlot(state)
+
+    expect(isPatternEmpty(cleared.patterns[0])).toBe(true)
+    expect(cleared.patterns[0].id).toBe(a.id)
+    expect(cleared.patterns[0].name).toBe('A')
+    expect(cleared.activePatternId).toBe(a.id)
+    expect(cleared.patterns).toHaveLength(4)
+  })
+
+  it('empties only the selected slot', () => {
+    let state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[1].id)
+    state = cycleActivePatternStep(state, 'kick', 0)
+
+    const cleared = clearSlot(state)
+
+    expect(isPatternEmpty(cleared.patterns[1])).toBe(true)
+    expect(cleared.patterns[0]).toBe(state.patterns[0])
+    expect(cleared.patterns[2]).toBe(state.patterns[2])
+    expect(cleared.patterns[3]).toBe(state.patterns[3])
+    expect(cleared.transport).toBe(state.transport)
+    expect(cleared.mixer).toBe(state.mixer)
+    expect(cleared.instrumentSettings).toBe(state.instrumentSettings)
+  })
+
+  it('hands an already empty slot back unchanged', () => {
+    const state = selectSlot(createDemoProjectState(), createDemoProjectState().patterns[2].id)
+    expect(clearSlot(state)).toBe(state)
   })
 })
 
@@ -379,8 +589,34 @@ describe('bass note editing', () => {
       on: true,
       pitch: DEFAULT_PITCH,
       length: MIN_NOTE_LENGTH,
+      slide: false,
+      accent: false,
     })
     expect(bassSteps(state)[4].on).toBe(false)
+  })
+
+  it('toggles a bass note’s accent in the selected slot only, on an empty step too', () => {
+    const state = selectSlot(createInitialProjectState(), createInitialProjectState().patterns[0].id)
+    const accented = toggleActivePatternNoteAccent(state, 'bass', 6)
+
+    expect(bassSteps(accented)[6]).toMatchObject({ on: false, accent: true })
+    expect(bassSteps(state)[6].accent).toBe(false)
+    for (const slot of accented.patterns.slice(1)) {
+      expect(slot).toBe(state.patterns[state.patterns.indexOf(slot)])
+    }
+    expect(bassSteps(toggleActivePatternNoteAccent(accented, 'bass', 6))[6].accent).toBe(false)
+  })
+
+  it('toggles a bass note’s slide in the selected slot only, on an empty step too', () => {
+    const state = createInitialProjectState()
+    const slid = toggleActivePatternNoteSlide(state, 'bass', 6)
+
+    expect(bassSteps(slid)[6]).toMatchObject({ on: false, slide: true, accent: false })
+    expect(bassSteps(state)[6].slide).toBe(false)
+    for (const slot of slid.patterns.slice(1)) {
+      expect(slot).toBe(state.patterns[state.patterns.indexOf(slot)])
+    }
+    expect(bassSteps(toggleActivePatternNoteSlide(slid, 'bass', 6))[6].slide).toBe(false)
   })
 
   it('transposes and resizes a note through the document', () => {
@@ -413,6 +649,16 @@ describe('setBassParamValue', () => {
     expect(setBassParamValue(state, 'resonance', 1e6).instrumentSettings.bass.resonance).toBe(
       resonance.max,
     )
+  })
+})
+
+describe('setBassParamValue — Env Mod', () => {
+  it('stores Env Mod in the bass patch, clamped to 0–100 %', () => {
+    const state = createInitialProjectState()
+
+    expect(state.instrumentSettings.bass.envMod).toBe(0)
+    expect(setBassParamValue(state, 'envMod', 60).instrumentSettings.bass.envMod).toBe(60)
+    expect(setBassParamValue(state, 'envMod', 400).instrumentSettings.bass.envMod).toBe(100)
   })
 })
 
@@ -453,32 +699,114 @@ describe('setFxParamValue', () => {
   })
 })
 
+describe('deckParamValue', () => {
+  it('reads every knob on a fresh deck at its resting value', () => {
+    const state = createInitialProjectState()
+    for (const param of DECK_PARAMS) {
+      expect([param.id, deckParamValue(state, param.id)]).toEqual([param.id, param.default])
+    }
+  })
+
+  it('reads each family of knob back in the units its knob uses', () => {
+    let state = setBassParamValue(createInitialProjectState(), 'envMod', 40)
+    state = setMasterParamValue(state, 'drive', 25)
+    state = setFxParamValue(state, FX_PARAMS[0].id, FX_PARAMS[0].max)
+    state = setSamplerParamValue(state, 'pad2Tune', -7)
+    state = setLevelParamValue(state, 'bassLevel', 0.5)
+    state = setTransportSwing(state, 0.62)
+
+    expect(deckParamValue(state, 'envMod')).toBe(40)
+    expect(deckParamValue(state, 'drive')).toBe(25)
+    expect(deckParamValue(state, FX_PARAMS[0].id)).toBe(FX_PARAMS[0].max)
+    expect(deckParamValue(state, 'pad2Tune')).toBe(-7)
+    expect(deckParamValue(state, 'bassLevel')).toBe(0.5)
+    // Swing is stored as a fraction and its knob reads percent.
+    expect(deckParamValue(state, 'swing')).toBeCloseTo(62)
+  })
+})
+
+describe('setTransportSwing', () => {
+  it('stores swing on the Transport, clamped to 50–75%, without touching anything else', () => {
+    const state = setTransportBpm(createInitialProjectState(), 124)
+    const shuffled = setTransportSwing(state, 0.62)
+
+    expect(shuffled.transport).toEqual({ bpm: 124, swing: 0.62 })
+    expect(shuffled.instrumentSettings).toBe(state.instrumentSettings)
+    expect(activePattern(shuffled)).toBe(activePattern(state))
+    expect(state.transport.swing).toBe(DEFAULT_SWING)
+
+    expect(setTransportSwing(state, 0.9).transport.swing).toBe(0.75)
+    expect(setTransportSwing(state, 0.1).transport.swing).toBe(0.5)
+    expect(setTransportSwing(state, Number.NaN).transport.swing).toBe(DEFAULT_SWING)
+  })
+
+  it('keeps its swing when the tempo moves, and its tempo when swing moves', () => {
+    const shuffled = setTransportSwing(createInitialProjectState(), 0.66)
+    expect(setTransportBpm(shuffled, 140).transport).toEqual({ bpm: 140, swing: 0.66 })
+    expect(setTransportSwing(setTransportBpm(shuffled, 140), 0.54).transport).toEqual({
+      bpm: 140,
+      swing: 0.54,
+    })
+  })
+})
+
 describe('mixer', () => {
-  it('starts with an empty mixer — every lane audible', () => {
+  it('starts with an empty mixer — every voice audible at unity', () => {
     expect(createInitialProjectState().mixer).toEqual({})
   })
 
   it('toggles a lane mute immutably in the document', () => {
     const state = createInitialProjectState()
-    const muted = toggleLaneMute(state, 'closedHat')
-    expect(muted.mixer.closedHat).toEqual({ muted: true, soloed: false })
+    const muted = toggleVoiceMute(state, 'closedHat')
+    expect(muted.mixer.closedHat).toEqual({ muted: true, soloed: false, level: 1 })
     expect(state.mixer.closedHat).toBeUndefined()
 
-    const unmuted = toggleLaneMute(muted, 'closedHat')
+    const unmuted = toggleVoiceMute(muted, 'closedHat')
     expect(unmuted.mixer.closedHat?.muted).toBe(false)
   })
 
   it('toggles a lane solo without clearing its mute flag', () => {
-    const state = toggleLaneMute(createInitialProjectState(), 'kick')
-    const soloed = toggleLaneSolo(state, 'kick')
-    expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true })
+    const state = toggleVoiceMute(createInitialProjectState(), 'kick')
+    const soloed = toggleVoiceSolo(state, 'kick')
+    expect(soloed.mixer.kick).toEqual({ muted: true, soloed: true, level: 1 })
   })
 
-  it('stores pad mute and solo in the same mixer as the kit', () => {
-    const state = toggleLaneMute(createInitialProjectState(), 'pad2')
-    const soloed = toggleLaneSolo(state, 'pad2')
+  it('stores pad, bass and stab mute and solo in the same mixer as the kit', () => {
+    let state = toggleVoiceSolo(toggleVoiceMute(createInitialProjectState(), 'pad2'), 'pad2')
+    state = toggleVoiceSolo(state, 'bass')
+    state = toggleVoiceMute(state, 'stab')
 
-    expect(soloed.mixer.pad2).toEqual({ muted: true, soloed: true })
+    expect(state.mixer.pad2).toEqual({ muted: true, soloed: true, level: 1 })
+    expect(state.mixer.bass).toEqual({ muted: false, soloed: true, level: 1 })
+    expect(state.mixer.stab).toEqual({ muted: true, soloed: false, level: 1 })
+  })
+
+  it('sets one voice’s Level, clamped to silence…+6 dB, without touching its mute or solo', () => {
+    const muted = toggleVoiceMute(createInitialProjectState(), 'closedHat')
+    const lowered = setVoiceLevel(muted, 'closedHat', 0.25)
+
+    expect(lowered.mixer.closedHat).toEqual({ muted: true, soloed: false, level: 0.25 })
+    expect(muted.mixer.closedHat?.level).toBe(1)
+    expect(setVoiceLevel(muted, 'bass', 9).mixer.bass?.level).toBe(MAX_LEVEL)
+    expect(setVoiceLevel(muted, 'bass', -1).mixer.bass?.level).toBe(0)
+  })
+
+  it('keeps a voice’s Level through mute and solo toggles', () => {
+    const lowered = setVoiceLevel(createInitialProjectState(), 'stab', 0.5)
+    const toggled = toggleVoiceSolo(toggleVoiceMute(lowered, 'stab'), 'stab')
+    expect(toggled.mixer.stab).toEqual({ muted: true, soloed: true, level: 0.5 })
+  })
+
+  it('sets a Level by its knob id, so the deck can hand every Level knob one handler', () => {
+    const state = setLevelParamValue(createInitialProjectState(), 'pad1Level', 0.4)
+    expect(state.mixer.pad1).toEqual({ muted: false, soloed: false, level: 0.4 })
+  })
+
+  it('carries Level, mute and solo on every voice through a save and reload', () => {
+    let state = setVoiceLevel(createInitialProjectState(), 'kick', 1.5)
+    state = setVoiceLevel(toggleVoiceSolo(state, 'bass'), 'bass', 0.7)
+    state = toggleVoiceMute(state, 'stab')
+    expect(migrateProjectState(JSON.parse(JSON.stringify(state)))!.mixer).toEqual(state.mixer)
   })
 })
 
@@ -526,9 +854,9 @@ describe('migrateProjectState', () => {
     const migrated = migrateProjectState({ version: 0, pattern, bpm: 125 })
     expect(migrated).toEqual({
       version: PROJECT_STATE_VERSION,
-      patterns: [pattern],
+      patterns: createBank(pattern),
       activePatternId: pattern.id,
-      transport: { bpm: 125 },
+      transport: { bpm: 125, swing: DEFAULT_SWING },
       instrumentSettings: {
         bass: DEFAULT_BASS_SETTINGS,
         master: DEFAULT_MASTER_SETTINGS,
@@ -542,6 +870,149 @@ describe('migrateProjectState', () => {
       activeArcId: DEFAULT_ARC_ID,
       activeLessonIds: {},
     })
+  })
+
+  it('lifts a v13 document to v14: every note flag off and Env Mod 0, in every slot, sounding as before', () => {
+    // A bank with programming in two slots, both note lanes, and a hand-set bass.
+    let current = setBassParamValue(
+      setBassParamValue(createDemoProjectState(), 'cutoff', 640),
+      'decay',
+      0.4,
+    )
+    current = transposeActivePatternNote(toggleActivePatternNoteStep(current, 'bass', 2), 'bass', 2, 5)
+    current = toggleActivePatternNoteStep(current, 'stab', 8)
+    current = selectSlot(current, current.patterns[2].id)
+    current = toggleActivePatternNoteStep(current, 'bass', 0)
+
+    // v13 had neither flag on a note step and no Env Mod on the bass.
+    const v13 = JSON.parse(JSON.stringify({ ...current, version: 13 }))
+    for (const pattern of v13.patterns) {
+      for (const lane of pattern.noteLanes) {
+        for (const step of lane.steps) {
+          delete step.slide
+          delete step.accent
+        }
+      }
+    }
+    delete v13.instrumentSettings.bass.envMod
+
+    const migrated = migrateProjectState(v13)!
+
+    expect(migrated.version).toBe(14)
+    expect(migrated).toEqual(current)
+    for (const pattern of migrated.patterns) {
+      for (const lane of pattern.noteLanes) {
+        expect(lane.steps.every((step) => step.slide === false && step.accent === false)).toBe(true)
+      }
+    }
+    expect(migrated.instrumentSettings.bass).toEqual({
+      cutoff: 640,
+      resonance: DEFAULT_BASS_SETTINGS.resonance,
+      decay: 0.4,
+      envMod: 0,
+    })
+  })
+
+  it('lifts a v12 document’s pattern into slot A under the same id, with B–D empty', () => {
+    const current = updateLessonProgress(
+      setTransportSwing(
+        toggleVoiceMute(cycleActivePatternStep(createDemoProjectState(), 'kick', 0), 'perc'),
+        0.58,
+      ),
+      'four-on-the-floor',
+      { completed: true },
+    )
+    const v12 = JSON.parse(JSON.stringify({ ...current, version: 12 })) as Record<string, unknown>
+    const saved = { ...activePattern(current), id: 'pattern-1', name: 'Pattern 1' }
+    v12.patterns = [saved]
+    v12.activePatternId = 'pattern-1'
+
+    const migrated = migrateProjectState(v12)!
+
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+    expect(migrated.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    // Same id, so the saved selection still names it, and the same programming,
+    // so it plays exactly as its owner left it.
+    expect(migrated.activePatternId).toBe('pattern-1')
+    expect(activePattern(migrated)).toEqual({ ...saved, name: 'A' })
+    expect(migrated.patterns.slice(1).every(isPatternEmpty)).toBe(true)
+    expect(new Set(migrated.patterns.map((pattern) => pattern.id)).size).toBe(4)
+    // Everything that shapes the sound comes through untouched.
+    expect(migrated.transport).toEqual(current.transport)
+    expect(migrated.mixer).toEqual(current.mixer)
+    expect(migrated.instrumentSettings).toEqual(current.instrumentSettings)
+    expect(migrated.lessonProgress).toEqual(current.lessonProgress)
+  })
+
+  it('treats a v12 document with no pattern as corrupt rather than inventing a bank', () => {
+    const v12 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 12 }),
+    ) as Record<string, unknown>
+    v12.patterns = []
+
+    expect(migrateProjectState(v12)).toBeNull()
+  })
+
+  it('lifts a v10 document to straight swing, and it plays exactly as before', () => {
+    // v10 had no swing, so every 16th sat on the grid: 50% is the only value
+    // that keeps an upgraded beat sounding the way its owner left it.
+    const current = updateLessonProgress(
+      setTransportBpm(cycleActivePatternStep(createInitialProjectState(), 'kick', 4), 126),
+      'four-on-the-floor',
+      { completed: true, dismissed: true },
+    )
+    const v10 = JSON.parse(JSON.stringify({ ...current, version: 10 })) as Record<string, unknown>
+    v10.transport = { bpm: 126 }
+
+    const migrated = migrateProjectState(v10)!
+
+    expect(migrated).toEqual({ ...current, transport: { bpm: 126, swing: 0.5 } })
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+  })
+
+  it('lifts a v11 document’s mixer to unity Level, keeping every mute and solo', () => {
+    // v11 had no Level, so every voice ran at unity: 1 is the only value that
+    // keeps an upgraded beat sounding the way its owner left it.
+    const current = toggleVoiceSolo(
+      toggleVoiceMute(setTransportSwing(createInitialProjectState(), 0.6), 'closedHat'),
+      'kick',
+    )
+    const v11 = JSON.parse(JSON.stringify({ ...current, version: 11 })) as Record<string, unknown>
+    v11.mixer = {
+      closedHat: { muted: true, soloed: false },
+      kick: { muted: false, soloed: true },
+    }
+
+    const migrated = migrateProjectState(v11)!
+
+    expect(migrated).toEqual(current)
+    expect(migrated.version).toBe(PROJECT_STATE_VERSION)
+  })
+
+  it('repairs a v11 mixer strip missing a field to its resting value', () => {
+    const v11 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 11 }),
+    ) as Record<string, unknown>
+    v11.mixer = { perc: { muted: true }, snare: {} }
+
+    expect(migrateProjectState(v11)!.mixer).toEqual({
+      perc: { muted: true, soloed: false, level: 1 },
+      snare: { muted: false, soloed: false, level: 1 },
+    })
+  })
+
+  it('opens a v10 document at straight swing, whatever stray swing field it carries', () => {
+    const v10 = JSON.parse(
+      JSON.stringify({ ...createInitialProjectState(), version: 10 }),
+    ) as Record<string, unknown>
+    v10.transport = { bpm: 130, swing: 'heavy' }
+
+    expect(migrateProjectState(v10)!.transport).toEqual({ bpm: 130, swing: DEFAULT_SWING })
+  })
+
+  it('carries swing through a save and reload of the current version', () => {
+    const shuffled = setTransportSwing(createInitialProjectState(), 0.58)
+    expect(migrateProjectState(JSON.parse(JSON.stringify(shuffled)))!.transport.swing).toBe(0.58)
   })
 
   it('lifts a v9 document’s single lesson pointer into the techno track', () => {
@@ -775,7 +1246,7 @@ describe('migrateProjectState', () => {
 
     expect(migrated.instrumentSettings.bass.cutoff).toBe(2400)
     const bass = migrated.patterns[0].noteLanes.find((lane) => lane.id === 'bass')!
-    expect(bass.steps[2]).toEqual({ on: true, pitch: DEFAULT_PITCH + 3, length: MIN_NOTE_LENGTH })
+    expect(bass.steps[2]).toEqual({ on: true, pitch: DEFAULT_PITCH + 3, length: MIN_NOTE_LENGTH, slide: false, accent: false })
   })
 
   it('gives a v2 document (no mixer) an empty mixer on load', () => {

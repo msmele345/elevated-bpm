@@ -1,0 +1,7 @@
+{
+  "id": "slide-into-it",
+  "title": "Slide Into It",
+  "intro": "Slide is the 303's signature: a slid note keeps its gate open and bends into the next note instead of starting it again. Switch on the slide under a note that has another note right after it — a tie mark joins the two — and do it at least twice. A slide into an empty step only holds the note longer, so it does not count here. Moving between two different pitches makes the bend easy to hear.",
+  "spotlight": ["slideRow:bass"],
+  "goal": [{ "type": "notesSlid", "lane": "bass", "min": 2 }]
+}

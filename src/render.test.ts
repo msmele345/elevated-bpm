@@ -3,6 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { indexedDB } from 'fake-indexeddb'
 import { createElement, memo } from 'react'
+import { createInitialProjectState, cycleActivePatternStep } from './model/projectState'
+import { saveProjectState } from './storage/projectStore'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -19,6 +21,7 @@ const recorded = vi.hoisted(() => ({
   stepRow: [] as Record<string, unknown>[],
   noteRow: [] as Record<string, unknown>[],
   panel: [] as { name: string; props: Record<string, unknown> }[],
+  lessonPanel: [] as Record<string, unknown>[],
 }))
 
 vi.mock('./components/StepRow', async () => {
@@ -52,13 +55,15 @@ vi.mock('./audio/engine', async () => {
     MIN_BPM: transport.MIN_BPM,
     MAX_BPM: transport.MAX_BPM,
     TICKS_PER_16TH: 48,
-    setPattern: () => undefined,
+    setBank: () => undefined,
+    getSlotLights: () => ({ playing: null, queued: null }),
     setMixer: () => undefined,
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
     setFxSettings: () => undefined,
     setSamplerSettings: () => undefined,
     setBpm: () => undefined,
+    setSwing: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
     stop: () => undefined,
@@ -106,6 +111,23 @@ vi.mock('./components/StabKeyboard', async () => {
   }
 })
 
+/**
+ * The lesson card, kept apart from `panel` so the instrument-panel counts
+ * below stay about instruments. Its chips are recomputed on every edit, and
+ * must come back as the same array whenever nothing on them changed.
+ */
+vi.mock('./components/LessonPanel', async () => {
+  const actual = await vi.importActual<typeof import('./components/LessonPanel')>(
+    './components/LessonPanel',
+  )
+  return {
+    LessonPanel: memo((props: Record<string, unknown>) => {
+      recorded.lessonPanel.push(props)
+      return createElement(actual.LessonPanel as never, props as never)
+    }),
+  }
+})
+
 vi.mock('./components/SamplerPanel', async () => {
   const actual = await vi.importActual<typeof import('./components/SamplerPanel')>(
     './components/SamplerPanel',
@@ -127,12 +149,21 @@ function laneId(props: Record<string, unknown>): string {
   return (props.lane as { id: string }).id
 }
 
+/**
+ * A deck with every pad lane drawn: a pad with no sound and no programming is
+ * a compact card instead, so each pad gets a step 1.
+ */
 async function renderReadyDeck() {
+  let seeded = createInitialProjectState()
+  for (const id of ['pad1', 'pad2', 'pad3', 'pad4'] as const) {
+    seeded = cycleActivePatternStep(seeded, id, 0)
+  }
+  await saveProjectState(seeded)
   render(createElement(App))
   await waitFor(
     () =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     // fake-indexeddb is normally effectively instant, but a shared CI runner
     // can take longer than Testing Library's one-second default.
@@ -181,6 +212,7 @@ beforeEach(() => {
   recorded.stepRow.length = 0
   recorded.noteRow.length = 0
   recorded.panel.length = 0
+  recorded.lessonPanel.length = 0
   vi.stubGlobal('indexedDB', indexedDB)
   vi.stubGlobal('requestAnimationFrame', () => 1)
   vi.stubGlobal('cancelAnimationFrame', () => undefined)
@@ -192,7 +224,42 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Props of the lesson card that changed since `mark`, across every render after it. */
+function changedLessonProps(mark: number): string[] {
+  const before = recorded.lessonPanel[mark - 1]
+  expect(before, 'the lesson card never rendered').toBeDefined()
+  return [
+    ...new Set(
+      recorded.lessonPanel
+        .slice(mark)
+        .flatMap((props) => Object.keys(props).filter((key) => !Object.is(props[key], before[key]))),
+    ),
+  ]
+}
+
 describe('deck render cost', () => {
+  it('leaves the lesson card and its chips on identical props when a knob moves mid-playback', async () => {
+    await renderReadyDeck()
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const mark = recorded.lessonPanel.length
+    const masterFilter = screen.getByRole('slider', { name: 'Filter' })
+    fireEvent.keyDown(masterFilter, { key: 'ArrowDown' })
+    fireEvent.keyDown(masterFilter, { key: 'ArrowDown' })
+
+    expect(changedLessonProps(mark)).toEqual([])
+  })
+
+  it('hands the lesson card new chips only when an edit moves one', async () => {
+    await renderReadyDeck()
+
+    const mark = recorded.lessonPanel.length
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+
+    expect(changedLessonProps(mark)).toEqual(['chips'])
+  })
+
   it('leaves every drum and note lane on identical props when a master knob moves mid-playback', async () => {
     await renderReadyDeck()
     fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
@@ -243,6 +310,50 @@ describe('deck render cost', () => {
     expect(changedPropsPerLane(recorded.noteRow, noteMark).size).toBe(2)
     // Bass, stab, and sampler panels were all on the deck beforehand.
     expect(changedPropsPerPanel(panelMark).size).toBe(3)
+  })
+
+  it('rebuilds only the turned voice when a Level moves mid-playback', async () => {
+    // A Level is dragged at pointer rate like any knob. The lane it belongs to
+    // has to take the new level; every other lane — and every panel that does
+    // not hold that voice — must sit the drag out.
+    await renderReadyDeck()
+    fireEvent.click(screen.getByRole('button', { name: /^Play$/ }))
+    await screen.findByRole('button', { name: /^Stop$/ })
+
+    const drumMark = recorded.stepRow.length
+    const noteMark = recorded.noteRow.length
+    const panelMark = recorded.panel.length
+    const hats = screen.getByRole('slider', { name: 'Closed Hat Level' })
+    fireEvent.keyDown(hats, { key: 'ArrowDown' })
+    fireEvent.keyDown(hats, { key: 'ArrowDown' })
+
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, drumMark)) {
+      expect(changed, `drum lane ${id}`).toEqual(id === 'closedHat' ? ['level'] : [])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, noteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
+    for (const [name, changed] of changedPropsPerPanel(panelMark)) {
+      expect(changed, `panel ${name}`).toEqual([])
+    }
+    expect(changedPropsPerLane(recorded.stepRow, drumMark).size).toBe(9)
+    expect(changedPropsPerPanel(panelMark).size).toBe(3)
+
+    // The bass Level lives in the bass panel's header: that panel takes the
+    // new level, and its note lane — like every other lane — does not move.
+    const bassMark = recorded.panel.length
+    const laneMark = recorded.stepRow.length
+    const bassNoteMark = recorded.noteRow.length
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Bass Level' }), { key: 'ArrowDown' })
+    for (const [name, changed] of changedPropsPerPanel(bassMark)) {
+      expect(changed, `panel ${name}`).toEqual(name === 'BassPanel' ? ['level'] : [])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.stepRow, laneMark)) {
+      expect(changed, `drum lane ${id}`).toEqual([])
+    }
+    for (const [id, changed] of changedPropsPerLane(recorded.noteRow, bassNoteMark)) {
+      expect(changed, `note lane ${id}`).toEqual([])
+    }
   })
 
   it('rebuilds no lane when the tempo fader moves, though the sampler now reads the tempo', async () => {

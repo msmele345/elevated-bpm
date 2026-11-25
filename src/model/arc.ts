@@ -40,10 +40,57 @@ export function goalContextFor(
   return {
     pattern: activePattern(state),
     bpm: state.transport.bpm,
+    swing: state.transport.swing,
     motion: session.motion ?? NO_PARAM_MOTION,
     chord: session.chord ?? NO_CHORD_PLAY,
     sampler: { pads: state.instrumentSettings.sampler, sources: state.sources },
   }
+}
+
+/**
+ * Every slot of an arriving bank that already satisfies each lesson, by
+ * lesson id. A lesson met in no slot is absent.
+ *
+ * Inheritance is held per slot rather than per lesson: the work that arrived
+ * is the sender's *in the slots it arrived in*. Selecting another slot and
+ * coming back is not taking that work apart, so the shared slot stays held
+ * until its own goal stops being met — while a lesson the learner builds in a
+ * slot of their own is theirs, and earns credit at once.
+ */
+export function slotsAlreadyMeeting(
+  lessons: Lesson[],
+  state: ProjectState,
+): Map<string, Set<string>> {
+  const meeting = new Map<string, Set<string>>()
+  for (const slot of state.patterns) {
+    const context = goalContextFor({ ...state, activePatternId: slot.id })
+    for (const lessonId of lessonsAlreadyMet(lessons, context)) {
+      meeting.set(lessonId, (meeting.get(lessonId) ?? new Set()).add(slot.id))
+    }
+  }
+  return meeting
+}
+
+/**
+ * What is held back after the selected slot is copied onto another. A copy of
+ * a held slot is still the sender's work, so the target is held wherever the
+ * source was — otherwise copying a shared slot onto an empty one would launder
+ * credit. A target overwritten by a slot that was not held now holds nothing
+ * of the sender's, so it is released. Never edits `held` in place.
+ */
+export function heldAfterCopy(
+  held: ReadonlyMap<string, ReadonlySet<string>>,
+  sourceId: string,
+  targetId: string,
+): Map<string, Set<string>> {
+  const after = new Map<string, Set<string>>()
+  for (const [lessonId, slots] of held) {
+    const next = new Set(slots)
+    if (slots.has(sourceId)) next.add(targetId)
+    else next.delete(targetId)
+    if (next.size > 0) after.set(lessonId, next)
+  }
+  return after
 }
 
 /** One rung of the path as the arc UI renders it. */

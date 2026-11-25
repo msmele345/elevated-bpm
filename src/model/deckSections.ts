@@ -8,12 +8,13 @@
  * `src/a11y.test.ts` fails on.
  */
 export const DECK_SECTION_IDS = {
+  transport: 'deck-transport',
   curriculum: 'deck-curriculum',
-  master: 'deck-master',
   drums: 'deck-drums',
   sampler: 'deck-sampler',
   bass: 'deck-bass',
   stabs: 'deck-stabs',
+  master: 'deck-master',
 } as const
 
 export interface DeckSection {
@@ -24,12 +25,14 @@ export interface DeckSection {
 }
 
 export const DECK_SECTIONS: readonly DeckSection[] = [
+  { id: DECK_SECTION_IDS.transport, label: 'Transport' },
   { id: DECK_SECTION_IDS.curriculum, label: 'Curriculum' },
-  { id: DECK_SECTION_IDS.master, label: 'Master' },
   { id: DECK_SECTION_IDS.drums, label: 'Drum machine' },
   { id: DECK_SECTION_IDS.sampler, label: 'Sampler' },
   { id: DECK_SECTION_IDS.bass, label: 'Bass synth' },
   { id: DECK_SECTION_IDS.stabs, label: 'Stab synth' },
+  // Last on screen as in the signal chain: every voice ends up here.
+  { id: DECK_SECTION_IDS.master, label: 'Master' },
 ]
 
 /** The id of a section's heading — what its `aria-labelledby` points at. */

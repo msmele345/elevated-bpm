@@ -17,6 +17,19 @@ const LINEAR: ParamSpec = {
   unit: 'Q',
 }
 
+const FADER: ParamSpec = {
+  id: 'kickLevel',
+  label: 'Kick Level',
+  min: 0,
+  max: 10 ** (6 / 20),
+  default: 1,
+  unit: 'dB',
+  taper: 'fader',
+}
+
+/** Linear gain → dB, the way an engineer reads a fader. */
+const db = (gain: number) => 20 * Math.log10(gain)
+
 const LOG: ParamSpec = {
   id: 'cutoff',
   label: 'Cutoff',
@@ -96,5 +109,55 @@ describe('formatParam', () => {
 
   it('reads out plain params with their unit', () => {
     expect(formatParam(LINEAR, 6.25)).toBe('6.3 Q')
+  })
+})
+
+describe('the fader taper (Level)', () => {
+  it('parks silence at the bottom and +6 dB at the top', () => {
+    expect(normalizeParam(FADER, 0)).toBe(0)
+    expect(denormalizeParam(FADER, 0)).toBe(0)
+    expect(normalizeParam(FADER, FADER.max)).toBeCloseTo(1, 12)
+    expect(db(denormalizeParam(FADER, 1))).toBeCloseTo(6, 9)
+  })
+
+  it('spends most of its travel between −24 and +6 dB', () => {
+    const bottomOfRange = normalizeParam(FADER, 10 ** (-24 / 20))
+    expect(1 - bottomOfRange).toBeGreaterThanOrEqual(0.75)
+    // Inside that range a step of travel is a step of dB, wherever you are.
+    const a = db(denormalizeParam(FADER, 0.5))
+    const b = db(denormalizeParam(FADER, 0.6))
+    const c = db(denormalizeParam(FADER, 0.9))
+    const d = db(denormalizeParam(FADER, 1))
+    expect(b - a).toBeCloseTo(d - c, 9)
+  })
+
+  it('rises continuously out of silence, with no jump at −24 dB', () => {
+    const knee = normalizeParam(FADER, 10 ** (-24 / 20))
+    const below = denormalizeParam(FADER, knee - 1e-9)
+    const above = denormalizeParam(FADER, knee + 1e-9)
+    expect(above - below).toBeLessThan(1e-6)
+    expect(denormalizeParam(FADER, knee / 2)).toBeGreaterThan(0)
+  })
+
+  it('round-trips gain through travel', () => {
+    for (const gain of [0, 0.01, 0.0631, 0.25, 0.5, 1, 1.5, FADER.max]) {
+      expect(denormalizeParam(FADER, normalizeParam(FADER, gain))).toBeCloseTo(gain, 9)
+    }
+  })
+
+  it('nudges in even dB steps across the main range', () => {
+    const up = nudgeParam(FADER, 1, 0.02)
+    const down = nudgeParam(FADER, 1, -0.02)
+    expect(db(up)).toBeGreaterThan(0)
+    expect(db(up)).toBeCloseTo(-db(down), 9)
+  })
+
+  it('reads out in dB, with −∞ for silence and 0 dB at unity', () => {
+    expect(formatParam(FADER, 0)).toBe('−∞ dB')
+    expect(formatParam(FADER, 1)).toBe('0.0 dB')
+    expect(formatParam(FADER, 1.0000001)).toBe('0.0 dB')
+    expect(formatParam(FADER, 0.9999999)).toBe('0.0 dB')
+    expect(formatParam(FADER, 0.5)).toBe('−6.0 dB')
+    expect(formatParam(FADER, FADER.max)).toBe('+6.0 dB')
   })
 })

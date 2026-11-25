@@ -6,10 +6,11 @@ import {
   type InstrumentSettings,
   type ProjectState,
 } from './projectState'
+import { bankWithSlots, isPatternEmpty, isSlotLetter, SLOT_LETTERS } from './bank'
 import { BASS_PARAMS } from './bass'
 import { FX_PARAMS } from './fx'
 import { MASTER_PARAMS } from './master'
-import type { Mixer } from './mixer'
+import { MAX_LEVEL, VOICES, type Mixer } from './mixer'
 import { MAX_NOTE_LENGTH, MIN_NOTE_LENGTH, NOTE_LANES } from './note'
 import { KIT_LANES } from './pattern'
 import {
@@ -21,7 +22,7 @@ import {
   type SamplerSettings,
 } from './sampler'
 import { STEP_COUNT, type Pattern } from './types'
-import { MAX_BPM, MIN_BPM } from './transport'
+import { MAX_BPM, MAX_SWING, MIN_BPM, MIN_SWING } from './transport'
 
 /**
  * What a shared beat *is*, independent of how it travels.
@@ -68,13 +69,38 @@ export function recipientOwnedBlanks(): Pick<
   }
 }
 
-/** The document a payload carries: the active pattern and everything shaping it. */
-export function projectForSharing(project: ProjectState): ProjectState {
-  const pattern = activePattern(project)
+/**
+ * The document a link carries: every slot with programming, each under its own
+ * letter, plus the selected slot even when it is empty — the reader fills every
+ * letter left out, so an empty slot travels as nothing at all. Given
+ * `onlySlotId`, that one slot alone, selected: the fallback for a bank too big
+ * for a link.
+ */
+export function projectForLink(project: ProjectState, onlySlotId?: string): ProjectState {
+  const whole = projectForBundle(project)
+  if (onlySlotId !== undefined) {
+    const slot =
+      project.patterns.find((pattern) => pattern.id === onlySlotId) ?? activePattern(project)
+    return { ...whole, patterns: [slot], activePatternId: slot.id }
+  }
+  return {
+    ...whole,
+    patterns: project.patterns.filter(
+      (pattern) => pattern.id === project.activePatternId || !isPatternEmpty(pattern),
+    ),
+  }
+}
+
+/**
+ * The document a bundle carries: the whole bank — all four slots, in their
+ * letters — with the selected slot still selected, and everything shaping how
+ * it sounds. A bundle is the lossless way to send a bank.
+ */
+export function projectForBundle(project: ProjectState): ProjectState {
   return {
     version: PROJECT_STATE_VERSION,
-    patterns: [pattern],
-    activePatternId: pattern.id,
+    patterns: project.patterns,
+    activePatternId: project.activePatternId,
     transport: project.transport,
     instrumentSettings: project.instrumentSettings,
     sources: project.sources,
@@ -176,7 +202,10 @@ function isNoteStep(value: unknown, minPitch: number, maxPitch: number): boolean
     (value.pitch as number) <= maxPitch &&
     Number.isInteger(value.length) &&
     (value.length as number) >= MIN_NOTE_LENGTH &&
-    (value.length as number) <= MAX_NOTE_LENGTH
+    (value.length as number) <= MAX_NOTE_LENGTH &&
+    // Both note lanes carry the 303 flags, whether or not they play them.
+    typeof value.slide === 'boolean' &&
+    typeof value.accent === 'boolean'
   )
 }
 
@@ -294,18 +323,39 @@ function isSources(value: unknown): value is SampleSource[] {
   return true
 }
 
+const VOICE_IDS: ReadonlySet<string> = new Set(VOICES.map(({ id }) => id))
+
+/**
+ * Every strip names a voice the deck has and is complete: mute and solo as
+ * booleans, Level a gain from silence to +6 dB. Older payloads reach here
+ * already repaired by migration, so a strip missing a field is a damaged one.
+ */
 function isMixer(value: unknown): value is Mixer {
   if (!isRecord(value)) return false
-  const laneIds = new Set<string>([
-    ...KIT_LANES.map(({ id }) => id),
-    ...PAD_LANES.map(({ id }) => id),
-  ])
   return Object.entries(value).every(
-    ([laneId, mix]) =>
-      laneIds.has(laneId) &&
+    ([voiceId, mix]) =>
+      VOICE_IDS.has(voiceId) &&
       isRecord(mix) &&
       typeof mix.muted === 'boolean' &&
-      typeof mix.soloed === 'boolean',
+      typeof mix.soloed === 'boolean' &&
+      isFiniteNumber(mix.level) &&
+      mix.level >= 0 &&
+      mix.level <= MAX_LEVEL,
+  )
+}
+
+/**
+ * One to four slots, each a whole pattern named by a slot letter, no letter or
+ * id twice — a payload may leave empty slots out, and the reader fills them.
+ */
+function isBank(value: unknown, activePatternId: unknown): value is Pattern[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > SLOT_LETTERS.length) return false
+  if (!value.every((pattern) => isPattern(pattern) && isSlotLetter(pattern.name))) return false
+  const patterns = value as Pattern[]
+  return (
+    new Set(patterns.map((pattern) => pattern.name)).size === patterns.length &&
+    new Set(patterns.map((pattern) => pattern.id)).size === patterns.length &&
+    patterns.some((pattern) => pattern.id === activePatternId)
   )
 }
 
@@ -313,15 +363,14 @@ export function isSharedProject(value: unknown): value is ProjectState {
   return (
     isRecord(value) &&
     value.version === PROJECT_STATE_VERSION &&
-    Array.isArray(value.patterns) &&
-    value.patterns.length === 1 &&
-    isPattern(value.patterns[0]) &&
-    typeof value.activePatternId === 'string' &&
-    value.activePatternId === value.patterns[0].id &&
+    isBank(value.patterns, value.activePatternId) &&
     isRecord(value.transport) &&
     isFiniteNumber(value.transport.bpm) &&
     value.transport.bpm >= MIN_BPM &&
     value.transport.bpm <= MAX_BPM &&
+    isFiniteNumber(value.transport.swing) &&
+    value.transport.swing >= MIN_SWING &&
+    value.transport.swing <= MAX_SWING &&
     isInstrumentSettings(value.instrumentSettings) &&
     isSources(value.sources) &&
     isRecord(value.lessonProgress) &&
@@ -358,5 +407,7 @@ export function readSharedDocument(document: unknown): ProjectState | null {
   // thing that narrows it — migration hands back the current version by
   // assertion, not by checking.
   const project: unknown = { ...migrated, ...recipientOwnedBlanks() }
-  return isSharedProject(project) ? project : null
+  if (!isSharedProject(project)) return null
+  // A payload may carry fewer than four slots; the deck always runs four.
+  return { ...project, patterns: bankWithSlots(project.patterns) }
 }

@@ -30,13 +30,15 @@ vi.mock('./audio/engine', async () => {
     MIN_BPM: transport.MIN_BPM,
     MAX_BPM: transport.MAX_BPM,
     TICKS_PER_16TH: 48,
-    setPattern: () => undefined,
+    setBank: () => undefined,
+    getSlotLights: () => ({ playing: null, queued: null }),
     setMixer: () => undefined,
     setBassSettings: () => undefined,
     setMasterSettings: () => undefined,
     setFxSettings: () => undefined,
     setSamplerSettings: () => undefined,
     setBpm: () => undefined,
+    setSwing: () => undefined,
     unlockAudio: () => Promise.resolve(),
     play: () => Promise.resolve(),
     stop: () => undefined,
@@ -79,7 +81,7 @@ async function renderHydratedDeck() {
   const view = render(createElement(App))
   await waitFor(() =>
     expect(
-      (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
     ).toBe(false),
   )
   return view

@@ -12,8 +12,8 @@ import {
   masterBusParams,
   type MasterSettings,
 } from '../model/master'
-import { laneIsAudible, type Mixer } from '../model/mixer'
-import { midiToFrequency, noteEventsAtStep } from '../model/note'
+import { VOICES, voiceIsAudible, voiceLevel, type Mixer, type VoiceId } from '../model/mixer'
+import { midiToFrequency } from '../model/note'
 import { SCOPE_SPEC } from '../model/scope'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -26,7 +26,13 @@ import {
   type SamplerSettings,
 } from '../model/sampler'
 import { createStabNoteHolds, createStabSoundingNotes } from '../model/stab'
-import { clampBpm, DEFAULT_BPM, secondsPerStep } from '../model/transport'
+import {
+  clampBpm,
+  clampSwing,
+  DEFAULT_BPM,
+  DEFAULT_SWING,
+  secondsPerStep,
+} from '../model/transport'
 import {
   STEP_COUNT,
   type DrumLaneId,
@@ -42,7 +48,7 @@ import {
   type RenderableAudio,
   type Slice,
 } from '../model/slice'
-import { voiceStep } from './hits'
+import { LEGATO_ACCENT_SECONDS, SLIDE_SECONDS, resolveStep } from './stepResolution'
 import { CURATED_SAMPLE_URL, KIT_SAMPLES } from './kit'
 import { createPadVoice, type PadVoice } from './padVoice'
 import { decodeForAnalysis, decodeForRender } from './sampleDecoder'
@@ -63,7 +69,39 @@ export { DEFAULT_BPM, MAX_BPM, MIN_BPM } from '../model/transport'
 export const TICKS_PER_16TH = Tone.getTransport().PPQ / 4
 
 let bpm = DEFAULT_BPM
-let currentPattern: Pattern | null = null
+/**
+ * The Deck's swing, applied by the step callback itself. Tone's own transport
+ * swing is never touched and stays at 0 — see `swingOffsetSeconds`.
+ */
+let currentSwing = DEFAULT_SWING
+/** The pattern bank, slots A–D, read live on every 16th. */
+let currentBank: readonly Pattern[] = []
+/** The slot the user selected: the one the grid shows and edits go to. */
+let selectedSlotId = ''
+/**
+ * The slot being sounded. It follows the selected slot only when step
+ * resolution reaches step 0, so a slot pressed mid-bar is queued for the next
+ * bar; while stopped it always equals the selected slot.
+ */
+let playingSlotId = ''
+/**
+ * The last switch of the playing slot, on the audio clock. The step callback
+ * runs a look-ahead early, so the switch is recorded with the time its bar is
+ * *heard*, and the LEDs read it against the audio clock rather than lighting
+ * the new slot before its first beat.
+ */
+let slotSwitch: { at: number; from: string } | null = null
+/**
+ * The step a slid bass note's gate is held open to, as the last 16th's
+ * resolution left it, threaded into the next one like the playing slot.
+ */
+let bassTie: number | null = null
+/**
+ * When the bass gate was last attacked or glided on the audio clock. A stop
+ * releases a held gate no earlier than this, so the release can never land
+ * ahead of a note the look-ahead has already scheduled.
+ */
+let bassGateAt = 0
 let currentMixer: Mixer = {}
 let currentSamplerSettings: SamplerSettings = createSamplerSettings()
 let repeatScheduled = false
@@ -84,6 +122,13 @@ let voices: Record<LaneId, Voice> | null = null
  * rebuild them.
  */
 let padVoices: Record<PadLaneId, PadVoice> | null = null
+/**
+ * One channel gain per voice — the Level knob. It sits after everything that
+ * shapes a single hit or note (the accent gain, the synth's velocity, the bass
+ * filter), so live and sequenced sound pass through it alike and an accent
+ * keeps its headroom whatever the Level.
+ */
+let channels: Record<VoiceId, Tone.Gain> | null = null
 let samplesLoaded: Promise<void> | null = null
 
 /**
@@ -117,10 +162,23 @@ let auditionPlayer: Tone.Player | null = null
  * A single Tone.Synth is monophonic by construction — a new note takes the
  * voice from the one still ringing — and the filter sits after it so cutoff
  * and resonance shape the sound continuously, audible even mid-note.
+ *
+ * The 303 half rides on top. A filter envelope, scaled to each note's depth in
+ * cents, drives the filter's detune rather than its frequency: detune
+ * multiplies the cutoff, so the envelope opens the filter above wherever the
+ * Cutoff knob is, and the knob keeps moving that base live, mid-note. After
+ * the filter an accent gain stage lifts an accented note above unity, which a
+ * synth's velocity (capped at 1) cannot.
  */
 interface BassVoice {
   synth: Tone.Synth
   filter: Tone.Filter
+  /** Unity, or the accent boost: set per note at its start. */
+  accent: Tone.Gain
+  /** 0→1→0 on every note: attack, then Decay back down to Cutoff. */
+  filterEnvelope: Tone.Envelope
+  /** The envelope's depth in cents, set per note from its voicing. */
+  envelopeDepth: Tone.Gain
 }
 let bass: BassVoice | null = null
 let bassSettings: BassSettings = DEFAULT_BASS_SETTINGS
@@ -376,14 +434,54 @@ export function auditionRegion(region: SampleRegion): void {
   auditionPlayer.start(Tone.immediate(), region.start, region.duration)
 }
 
-/** Point the scheduler at the latest pattern state. Cheap; call on every edit. */
-export function setPattern(pattern: Pattern): void {
-  currentPattern = pattern
+/**
+ * Point the scheduler at the latest bank and selected slot. Cheap; call on
+ * every edit — edits to the playing slot are heard on the very next 16th.
+ * While stopped, the selected slot is the playing one at once; while playing,
+ * a different selection waits for step 0 (the queued bank switch), and
+ * selecting the playing slot again cancels the wait.
+ */
+export function setBank(bank: readonly Pattern[], selectedId: string): void {
+  currentBank = bank
+  selectedSlotId = selectedId
+  if (Tone.getTransport().state !== 'started') playOnSelectedSlot()
 }
 
-/** Point the scheduler at the latest mute/solo state. Cheap; call on every edit. */
+/** Put the playing slot on the selected one, with nothing pending. */
+function playOnSelectedSlot(): void {
+  playingSlotId = selectedSlotId
+  slotSwitch = null
+}
+
+/**
+ * What the slot LEDs show, read from rAF: the slot being heard, and the one
+ * queued to take over at the next bar. Both null while stopped — nothing is
+ * playing then, and a press switches at once.
+ */
+export function getSlotLights(): { playing: string | null; queued: string | null } {
+  if (Tone.getTransport().state !== 'started') return { playing: null, queued: null }
+  const heard =
+    slotSwitch !== null && Tone.immediate() < slotSwitch.at ? slotSwitch.from : playingSlotId
+  // Queued is what comes in next: a selection the sequencer has yet to reach,
+  // or else a switch already scheduled inside the look-ahead but not yet heard.
+  // A press in that window cannot cancel the scheduled bar, so the slot pressed
+  // is honestly shown queued behind it rather than silently waiting a bar.
+  const queued =
+    selectedSlotId !== playingSlotId ? selectedSlotId : heard !== playingSlotId ? playingSlotId : null
+  return { playing: heard, queued }
+}
+
+/**
+ * Point the scheduler at the latest mixer. Cheap; call on every edit. Mute and
+ * solo are read per 16th and per live hit; Level ramps each channel over a few
+ * milliseconds so a dragged knob fades rather than clicks.
+ */
 export function setMixer(mixer: Mixer): void {
   currentMixer = mixer
+  if (!channels) return
+  for (const { id } of VOICES) {
+    channels[id].gain.rampTo(voiceLevel(mixer, id), 0.02)
+  }
 }
 
 /** Point pad hits at the latest regions and Tune values. Cheap; call on every edit. */
@@ -394,7 +492,8 @@ export function setSamplerSettings(settings: SamplerSettings): void {
 /**
  * Apply the bass patch. Cheap and idempotent, so knob motion can call it on
  * every pointer move: cutoff ramps over a few milliseconds (a jump in filter
- * frequency zippers audibly), the rest take effect on the next note.
+ * frequency zippers audibly), the rest take effect on the next note — Env Mod
+ * included, since step resolution voices each note from the patch it reads.
  */
 export function setBassSettings(next: BassSettings): void {
   bassSettings = next
@@ -435,6 +534,15 @@ export function setFxSettings(next: FxSettings): void {
   fx.taps.sampler.send.gain.rampTo(bus.samplerSend, 0.02)
   fx.delay.feedback.rampTo(bus.feedback, 0.02)
   fx.reverb.wet.rampTo(bus.reverbWet, 0.02)
+}
+
+/**
+ * Point the scheduler at the latest swing. Cheap; call on every edit — the step
+ * callback reads it on each 16th, so a dragged knob changes the feel on the
+ * very next off-beat with no restart.
+ */
+export function setSwing(next: number): void {
+  currentSwing = clampSwing(next)
 }
 
 export function setBpm(next: number): void {
@@ -551,8 +659,11 @@ function createSendTap(dry: Tone.ToneAudioNode, fxInput: Tone.ToneAudioNode): Se
   return { input, send }
 }
 
+const CENTS_PER_OCTAVE = 1200
+
 function createBassVoice(destination: Tone.ToneAudioNode): BassVoice {
-  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 })
+  const accent = new Tone.Gain(1).connect(destination)
+  const filter = new Tone.Filter({ type: 'lowpass', rolloff: -24 }).connect(accent)
   const synth = new Tone.Synth({
     oscillator: { type: 'sawtooth' },
     // Short attack + low sustain: a plucked 303-style note whose tail the
@@ -560,8 +671,18 @@ function createBassVoice(destination: Tone.ToneAudioNode): BassVoice {
     envelope: { attack: 0.004, decay: DEFAULT_BASS_SETTINGS.decay, sustain: 0.25, release: 0.08 },
     volume: Tone.gainToDb(BASS_GAIN),
   }).connect(filter)
-  filter.connect(destination)
-  return { synth, filter }
+  // Resting at depth 0, so the detune stays at 0 and the filter sits exactly
+  // on Cutoff until a note with Env Mod or an accent opens it.
+  const envelopeDepth = new Tone.Gain(0).connect(filter.detune)
+  const filterEnvelope = new Tone.Envelope({
+    // A near-instant attack is the 303's "wow"; with no sustain the envelope
+    // always falls all the way back to Cutoff.
+    attack: 0.003,
+    decay: DEFAULT_BASS_SETTINGS.decay,
+    sustain: 0,
+    release: 0.01,
+  }).connect(envelopeDepth)
+  return { synth, filter, accent, filterEnvelope, envelopeDepth }
 }
 
 function createStabSynth(destination: Tone.ToneAudioNode): Tone.PolySynth<Tone.Synth> {
@@ -583,11 +704,23 @@ function ensureVoices(): void {
   // Every instrument reaches the master through its own send tap, so each one
   // is already on the FX bus rather than being retrofitted onto it later.
   const taps = (fx = createFxBus(master.input)).taps
+  // Each voice's channel feeds its instrument's send tap.
+  const tapOf = (id: VoiceId): SendTap =>
+    isPadLaneId(id) ? taps.sampler : id === 'bass' || id === 'stab' ? taps[id] : taps.drums
+  // Built at the mixer's Level rather than ramped to it: a Tone ramp starts a
+  // look-ahead from now, and a first live note must not hear unity meanwhile.
+  const voiceChannels = (channels = Object.fromEntries(
+    VOICES.map(({ id }) => [
+      id,
+      new Tone.Gain(voiceLevel(currentMixer, id)).connect(tapOf(id).input),
+    ]),
+  ) as Record<VoiceId, Tone.Gain>)
   // One send for the whole kit and one for the sampler. Per-lane accent gains
-  // sit before those taps, so velocity rides through to the echo.
+  // and channel Levels sit before those taps, so velocity and Level ride
+  // through to the echo.
   const drumEntries = (Object.entries(KIT_SAMPLES) as [DrumLaneId, string][]).map(
     ([laneId, url]) => {
-      const gain = new Tone.Gain(1).connect(taps.drums.input)
+      const gain = new Tone.Gain(1).connect(voiceChannels[laneId])
       const player = new Tone.Player(url).connect(gain)
       return [laneId, { player, gain }] as const
     },
@@ -595,7 +728,7 @@ function ensureVoices(): void {
   // Pad players are built empty. A pad has no file of its own — its audio
   // arrives from the registry at trigger time, whichever source it points at.
   const padEntries = PAD_LANES.map((pad) => {
-    const gain = new Tone.Gain(1).connect(taps.sampler.input)
+    const gain = new Tone.Gain(1).connect(voiceChannels[pad.id])
     const player = new Tone.Player().connect(gain)
     return [pad.id, { player, gain }] as const
   })
@@ -606,9 +739,10 @@ function ensureVoices(): void {
       createPadVoice(player, gain, sliceRegistry, padId),
     ]),
   ) as Record<PadLaneId, PadVoice>
-  bass = createBassVoice(taps.bass.input)
-  // Live and sequenced stabs share the tap, so both are on the send.
-  stab = createStabVoices(() => createStabSynth(taps.stab.input))
+  bass = createBassVoice(voiceChannels.bass)
+  // Live and sequenced stabs share one channel — and with it the tap — so a
+  // pool rebuilt after stop lands on the same Level and the same send.
+  stab = createStabVoices(() => createStabSynth(voiceChannels.stab))
   analyser = new Tone.Analyser('fft', SCOPE_SPEC.binCount)
   // Snappier than the analyser's 0.8 default: the scope does its own fall
   // decay, so internal smoothing only has to keep single frames from jittering.
@@ -635,6 +769,9 @@ function ensureVoices(): void {
       stab,
       master,
       fx,
+      channels,
+      /** What the slot LEDs read: the slot heard now, and any queued one. */
+      slotLights: getSlotLights,
       /**
        * Bytes the open editor is holding. Reading a `let` through a function,
        * so it reports what the engine holds *now* — closing the editor has to
@@ -671,6 +808,9 @@ export function attackStabNote(source: string, midi: number): void {
   void Tone.start().then(() => {
     ensureVoices()
     if (!stabNoteHolds.isCurrent(attack)) return
+    // The stab is a voice like any other: a muted (or out-soloed) stab takes no
+    // live notes either, and lights no keys, exactly as a muted pad does.
+    if (!voiceIsAudible('stab', currentMixer)) return
     stab?.attackLive(midiToFrequency(attack.midi), Tone.immediate(), 0.82)
     stabSoundingNotes.attackLive(attack.midi)
   })
@@ -692,7 +832,7 @@ export function attackPad(inputSourceId: string, padId: PadLaneId): void {
   // Queue the first gesture behind the shared preload instead of throwing it
   // away while the audio graph is still being built.
   void unlockAudio().then(() => {
-    if (!laneIsAudible(padId, currentMixer)) return
+    if (!voiceIsAudible(padId, currentMixer)) return
     const now = Tone.immediate()
     triggerPlayablePad(padId, 1, now, now, 'live')
   })
@@ -744,43 +884,92 @@ export function getSpectrum(): Float32Array | null {
 export async function play(): Promise<void> {
   await unlockAudio()
   const transport = Tone.getTransport()
+  // A loop always starts on the slot the user is looking at, with no gate held.
+  playOnSelectedSlot()
+  bassTie = null
   if (!repeatScheduled) {
     transport.scheduleRepeat((time) => {
       // Derive the step from transport ticks at the scheduled time so the
       // sequence stays locked across stop/start and BPM changes.
       const ticks = transport.getTicksAtTime(time)
       const stepIndex = Math.round(ticks / TICKS_PER_16TH) % STEP_COUNT
-      if (!currentPattern || !voices) return
-      // Resolve the 16th through the mixer and choke groups: muted/soloed
-      // lanes are filtered out and a firing closed hat cuts the open hat.
-      const { starts, chokes } = voiceStep(currentPattern, stepIndex, currentMixer)
+      if (currentBank.length === 0 || !voices) return
+      // Step resolution decides everything that sounds on this 16th; the
+      // callback only applies it to the voices. The tempo is read once, live,
+      // so the swing offset and every note length on this 16th are measured
+      // in the same step even mid-ramp.
+      const liveBpm = transport.bpm.value
+      const stepSeconds = secondsPerStep(liveBpm)
+      const resolved = resolveStep({
+        bank: currentBank,
+        selectedSlotId,
+        playingSlotId,
+        mixer: currentMixer,
+        bass: bassSettings,
+        transport: { bpm: liveBpm, swing: currentSwing },
+        stepIndex,
+        bassTie,
+      })
+      bassTie = resolved.bassTie
+      const { starts, chokes, notes, swingOffset } = resolved
+      // Every sequenced sound on this 16th lands at the same, possibly swung,
+      // moment. The step index above came from the straight grid, so swing
+      // moves *when* a step sounds and never *which* step it is.
+      const at = time + swingOffset
+      if (resolved.playingSlotId !== playingSlotId) {
+        slotSwitch = { at, from: playingSlotId }
+        playingSlotId = resolved.playingSlotId
+      }
       // Cut ringing choked voices first so a same-time restart isn't clipped.
       for (const laneId of chokes) {
-        voices[laneId].player.stop(time)
+        voices[laneId].player.stop(at)
       }
+      // Likewise a held bass gate whose note isn't coming closes before
+      // anything on this 16th attacks.
+      if (resolved.releaseTie) bass?.synth.triggerRelease(at)
       // All voices share the transport, so lanes stay independent and
       // sample-locked; each fires at its own accent velocity.
       for (const hit of starts) {
         if (isPadLaneId(hit.laneId)) {
-          triggerPlayablePad(hit.laneId, hit.gain, time, Tone.immediate(), 'sequenced')
+          triggerPlayablePad(hit.laneId, hit.gain, at, Tone.immediate(), 'sequenced')
         } else {
           const voice = voices[hit.laneId]
-          voice.gain.gain.setValueAtTime(hit.gain, time)
-          voice.player.start(time)
+          voice.gain.gain.setValueAtTime(hit.gain, at)
+          voice.player.start(at)
         }
       }
       // Every note lane resolves from this same scheduled 16th as the drums.
-      // Bass uses its monophonic voice. Programmed stabs use a separate
-      // polyphonic pool from live input so same-pitch releases cannot steal a
-      // held live key.
-      for (const note of noteEventsAtStep(currentPattern, stepIndex)) {
-        const duration = note.lengthSteps * secondsPer16th()
+      // Bass uses its monophonic voice, gated in attack/release pairs so a
+      // slid chain is one gate. Programmed stabs use a separate polyphonic
+      // pool from live input so same-pitch releases cannot steal a held live
+      // key.
+      for (const note of notes) {
+        const duration = note.lengthSteps * stepSeconds
         if (note.laneId === 'bass' && bass) {
-          bass.synth.triggerAttackRelease(note.frequency, duration, time)
+          if (note.legato) {
+            // Glided into: the gate is already open, so the pitch moves and
+            // neither the amplitude nor the filter envelope restarts. Its accent
+            // still counts — the gain stage glides to this note's level — but
+            // the filter keeps the chain's envelope, which only an attack sets.
+            bass.synth.frequency.exponentialRampTo(note.frequency, SLIDE_SECONDS, at)
+            bass.accent.gain.rampTo(note.voicing.gain, LEGATO_ACCENT_SECONDS, at)
+          } else {
+            const { gain, filterOctaves, filterDecay } = note.voicing
+            bass.accent.gain.setValueAtTime(gain, at)
+            bass.envelopeDepth.gain.setValueAtTime(filterOctaves * CENTS_PER_OCTAVE, at)
+            // Tone computes an envelope's curve when it is triggered, so each
+            // note in the look-ahead keeps its own decay.
+            bass.filterEnvelope.decay = filterDecay
+            bass.filterEnvelope.triggerAttack(at)
+            bass.synth.triggerAttack(note.frequency, at)
+          }
+          // A note tied on leaves its gate for the note it slides into to close.
+          if (!note.tiesOn) bass.synth.triggerRelease(at + duration)
+          bassGateAt = at
         }
         if (note.laneId === 'stab' && stab) {
-          stab.triggerSequenced(note.frequency, duration, time, 0.72)
-          stabSoundingNotes.schedule(note.midi, time, time + duration)
+          stab.triggerSequenced(note.frequency, duration, at, 0.72)
+          stabSoundingNotes.schedule(note.midi, at, at + duration)
         }
       }
     }, '16n')
@@ -792,6 +981,12 @@ export async function play(): Promise<void> {
 export function stop(): void {
   const transport = Tone.getTransport()
   transport.stop()
+  // Stop clears a queued switch: stopped, the selected slot is the one playing.
+  playOnSelectedSlot()
+  // A held gate's release was left to the note it slides into, which will
+  // never come now. Other notes keep their own releases and ring out.
+  if (bassTie !== null) bass?.synth.triggerRelease(Math.max(Tone.immediate(), bassGateAt))
+  bassTie = null
   stab?.stopSequenced()
   stabSoundingNotes.clearSequenced()
   padSoundingLanes.clearSequenced()

@@ -9,6 +9,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import { computeAccessibleName } from 'dom-accessibility-api'
 import { IDBObjectStore, indexedDB } from 'fake-indexeddb'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,11 +19,24 @@ import {
   addSource,
   commitRegionToSamplerPad,
   createInitialProjectState,
+  createDemoProjectState,
   cycleActivePatternStep,
+  enterLesson as enterLessonIn,
+  selectSlot,
   setSamplerPadFit,
   setTransportBpm,
+  setTransportSwing,
+  toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
+  toggleActivePatternNoteStep,
+  toggleVoiceSolo,
+  transposeActivePatternNote,
+  updateLessonProgress,
   type ProjectState,
 } from './model/projectState'
+import { DEFAULT_ARC_ID } from './model/projectState'
+import { CELEBRATION_MS } from './components/LessonPanel'
+import fourOnTheFloor from './lessons/four-on-the-floor.json'
 import { MAX_SOURCE_BYTES, MAX_SOURCE_SECONDS } from './model/intake'
 import {
   MICROPHONE_DENIED_MESSAGE,
@@ -34,19 +48,23 @@ import { RECORDER_UNAVAILABLE } from './audio/microphone'
 import { CURATED_SAMPLE_SOURCE, type SampleRegion } from './model/sampler'
 import { sliceKey } from './model/slice'
 import { createBundle, readBundle } from './model/bundle'
-import { createShareUrl, readSharedBeat } from './model/share'
-import type { PadLane } from './model/types'
+import { createShareUrl, PRACTICAL_SHARE_URL_LIMIT, readSharedBeat } from './model/share'
+import { NOTE_LANES } from './model/note'
+import { isPatternEmpty } from './model/bank'
+import type { LaneId, PadLane, Pattern } from './model/types'
 import { loadProjectState, saveProjectState } from './storage/projectStore'
 import { loadSlice, loadSource, saveSlice, saveSource } from './storage/sampleStore'
 
 const engineSpies = vi.hoisted(() => ({
-  setPattern: vi.fn(),
+  setBank: vi.fn(),
+  getSlotLights: vi.fn(() => ({ playing: null, queued: null })),
   setMixer: vi.fn(),
   setBassSettings: vi.fn(),
   setMasterSettings: vi.fn(),
   setFxSettings: vi.fn(),
   setSamplerSettings: vi.fn(),
   setBpm: vi.fn(),
+  setSwing: vi.fn(),
   unlockAudio: vi.fn().mockResolvedValue(undefined),
   play: vi.fn().mockResolvedValue(undefined),
   stop: vi.fn(),
@@ -65,6 +83,16 @@ const engineSpies = vi.hoisted(() => ({
   auditionRegion: vi.fn(),
   getSoundingPadIds: vi.fn((): string[] => []),
 }))
+
+/** The selected slot's pattern from the bank the engine was last handed. */
+function lastPatternHanded() {
+  const [bank, selectedId] = engineSpies.setBank.mock.calls.at(-1)! as unknown as [
+    Pattern[],
+    string,
+  ]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return bank.find((pattern) => pattern.id === selectedId)! as any
+}
 
 /**
  * Real decoding is never exercised: the decoder is injected and the tests
@@ -267,10 +295,55 @@ beforeEach(async () => {
   await deleteProjectDatabase()
 })
 
+/**
+ * Every slot densely programmed and unrelated to the others — steps, accents
+ * and pitches scattered by seed — so the bank is too big for one link.
+ */
+function withDenseUnrelatedSlots(project: ProjectState): ProjectState {
+  let state = 7
+  const roll = () => (state = (state * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+  const drumStep = () => {
+    const r = roll()
+    return { on: r < 0.6, accent: r < 0.3 }
+  }
+  const patterns = project.patterns.map((pattern) => ({
+    ...pattern,
+    lanes: pattern.lanes.map((lane) => ({ ...lane, steps: lane.steps.map(drumStep) })),
+    padLanes: pattern.padLanes.map((lane) => ({ ...lane, steps: lane.steps.map(drumStep) })),
+    noteLanes: pattern.noteLanes.map((lane) => {
+      const { minPitch, maxPitch } = NOTE_LANES.find((spec) => spec.id === lane.id)!
+      return {
+        ...lane,
+        steps: lane.steps.map(() => ({
+          on: roll() < 0.7,
+          pitch: minPitch + Math.floor(roll() * (maxPitch - minPitch + 1)),
+          length: 1 + Math.floor(roll() * 4),
+          slide: false,
+          accent: false,
+        })),
+      }
+    }),
+  }))
+  return { ...project, patterns }
+}
+
+/** Open the header's Share menu, unless it is already open. */
+function openShareMenu(): void {
+  const trigger = screen.getByRole('button', { name: 'Share' })
+  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger)
+}
+
 /** The deck mounts on a placeholder document and swaps in the stored one. */
+/** A saved project with a programmed step on each of the given pads, so every one renders as a full strip and lane. */
+async function savePadsProgrammed(padIds: LaneId[] = ['pad1', 'pad2', 'pad3', 'pad4']): Promise<void> {
+  let state = createInitialProjectState()
+  for (const id of padIds) state = cycleActivePatternStep(state, id, 0)
+  await saveProjectState(state)
+}
+
 async function hydratedDeck(): Promise<void> {
   render(createElement(App))
-  const shareButton = screen.getByRole('button', { name: 'Share beat' })
+  const shareButton = screen.getByRole('button', { name: 'Share' })
   await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
 }
 
@@ -360,7 +433,7 @@ describe('App audio intake', () => {
     await hydratedDeck()
     decoder.newSourceId.mockReturnValue('upload-dropped')
 
-    const pad = screen.getByRole('button', { name: 'Play Pad 3 — empty' }).parentElement!
+    const pad = screen.getByRole('group', { name: 'Pad 3: load a sound' })
     fireEvent.drop(pad, { dataTransfer: { files: [audioFile('Rim Hit.wav')] } })
 
     expect(await screen.findByRole('button', { name: 'Play Pad 3 — Rim Hit' })).toBeTruthy()
@@ -383,18 +456,18 @@ describe('App audio intake', () => {
   it('adds a source without assigning it when the drop lands on the panel', async () => {
     await hydratedDeck()
 
-    const panel = screen.getByRole('button', { name: 'Play Pad 1 — empty' }).closest('section')!
+    const panel = screen.getByRole('group', { name: 'Pad 1: load a sound' }).closest('section')!
     fireEvent.drop(panel, { dataTransfer: { files: [audioFile('Warehouse Break.wav')] } })
 
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
     expect(await within(sourceList).findByText('Warehouse Break')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Play Pad 1 — empty' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Pad 1: load a sound' })).toBeTruthy()
   })
 
   it('shows which pad a dragged file would land on, not just the panel', async () => {
     await hydratedDeck()
 
-    const strip = screen.getByRole('button', { name: 'Play Pad 2 — empty' }).parentElement!
+    const strip = screen.getByRole('group', { name: 'Pad 2: load a sound' })
     fireEvent.dragOver(strip, { dataTransfer: { files: [audioFile('Rim Hit.wav')] } })
 
     expect(strip.hasAttribute('data-drop-active')).toBe(true)
@@ -665,7 +738,7 @@ describe('App microphone recording', () => {
       expect(settings.pad2.region.sourceId).toBe('recording-1')
       expect(settings.pad2.tune).toBeGreaterThan(0)
     })
-    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const pattern = lastPatternHanded()
     expect(pattern.padLanes.find((lane: { id: string }) => lane.id === 'pad2').steps[4].on).toBe(
       true,
     )
@@ -680,7 +753,7 @@ describe('App microphone recording', () => {
 describe('App sampler workflow', () => {
   it('assigns the curated source, programs its lane, and plays it live without changing the pattern', async () => {
     render(createElement(App))
-    const shareButton = screen.getByRole('button', { name: 'Share beat' })
+    const shareButton = screen.getByRole('button', { name: 'Share' })
     await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
 
     const sourceList = screen.getByRole('group', { name: 'Sample sources' })
@@ -714,7 +787,7 @@ describe('App sampler workflow', () => {
     render(createElement(App))
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     )
     const input = document.createElement('input')
@@ -735,7 +808,7 @@ describe('App sampler workflow', () => {
     render(createElement(App))
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     )
 
@@ -758,10 +831,11 @@ describe('App sampler workflow', () => {
       frames.push(callback)
       return frames.length
     })
+    await savePadsProgrammed(['pad2'])
     render(createElement(App))
     await waitFor(() =>
       expect(
-        (screen.getByRole('button', { name: 'Share beat' }) as HTMLButtonElement).disabled,
+        (screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled,
       ).toBe(false),
     )
     const pad = screen.getByRole('button', { name: 'Play Pad 2 — empty' })
@@ -787,9 +861,11 @@ describe('App sharing workflow', () => {
 
     render(createElement(App))
 
-    const shareButton = screen.getByRole('button', { name: 'Share beat' })
-    expect((shareButton as HTMLButtonElement).disabled).toBe(true)
-    await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
+    // The whole Share menu waits for the real project, so nothing in it can
+    // reach the placeholder.
+    const shareMenu = screen.getByRole('button', { name: 'Share' })
+    expect((shareMenu as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect((shareMenu as HTMLButtonElement).disabled).toBe(false))
     // Let this mounted project's own debounced save settle before the next
     // isolated IndexedDB fixture starts.
     await new Promise((resolve) => setTimeout(resolve, 450))
@@ -825,10 +901,12 @@ describe('App sharing workflow', () => {
     await new Promise((resolve) => setTimeout(resolve, 450))
   })
 
-  it('persists an incoming beat only after the recipient explicitly keeps it', async () => {
+  it('persists an incoming bank only after the recipient explicitly keeps it', async () => {
     const recipient = cycleActivePatternStep(createInitialProjectState(), 'kick', 2)
+    // Slots A and D programmed, B and C empty, D selected.
+    const opening = cycleActivePatternStep(createInitialProjectState(), 'kick', 8)
     const sender = setTransportBpm(
-      cycleActivePatternStep(createInitialProjectState(), 'kick', 8),
+      cycleActivePatternStep(selectSlot(opening, opening.patterns[3].id), 'kick', 12),
       145,
     )
     await saveProjectState(recipient)
@@ -842,7 +920,10 @@ describe('App sharing workflow', () => {
 
     await waitFor(() => expect(screen.queryByText('Shared beat preview')).toBeNull())
     const kept = (await loadProjectState())!
-    expect(activePattern(kept)).toEqual(activePattern(sender))
+    expect(kept.patterns[0]).toEqual(sender.patterns[0])
+    expect(kept.patterns[3]).toEqual(sender.patterns[3])
+    expect(isPatternEmpty(kept.patterns[1]) && isPatternEmpty(kept.patterns[2])).toBe(true)
+    expect(activePattern(kept).name).toBe('D')
     expect(kept.transport.bpm).toBe(145)
     expect(window.location.search).toBe('')
     await new Promise((resolve) => setTimeout(resolve, 450))
@@ -905,10 +986,14 @@ describe('App sharing workflow', () => {
     })
 
     render(createElement(App))
-    const shareButton = screen.getByRole('button', { name: 'Share beat' })
-    await waitFor(() => expect((shareButton as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    )
 
-    fireEvent.click(shareButton)
+    openShareMenu()
+    fireEvent.click(screen.getByRole('button', { name: 'Share beat' }))
 
     await screen.findByText('Share URL copied to your clipboard.')
     expect(writeText).toHaveBeenCalledOnce()
@@ -918,6 +1003,38 @@ describe('App sharing workflow', () => {
       expect(activePattern(shared.project)).toEqual(activePattern(source))
       expect(shared.project.transport.bpm).toBe(139)
     }
+    // The whole bank fit, so there is nothing to own up to.
+    expect(screen.queryByText(/This link holds pattern/)).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 450))
+  })
+
+  it('tells the sender a bank too big for a link went as the playing slot alone', async () => {
+    const source = withDenseUnrelatedSlots(createInitialProjectState())
+    await saveProjectState(source)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    // A is selected, but the loop is still sounding C: that is what the sender hears.
+    engineSpies.getSlotLights.mockReturnValue({ playing: source.patterns[2].id, queued: null } as never)
+
+    await hydratedDeck()
+    openShareMenu()
+    fireEvent.click(screen.getByRole('button', { name: 'Share beat' }))
+
+    const copied = await screen.findByText('Share URL copied to your clipboard.')
+    const notice = screen.getByText(
+      'This link holds pattern C only — export a bundle to send all four.',
+    )
+    // Announced with the result it qualifies, not left for the sender to find.
+    expect(notice.closest('[role="status"]')).toBe(copied.closest('[role="status"]'))
+    const url = writeText.mock.calls[0][0] as string
+    expect(url.length).toBeLessThanOrEqual(PRACTICAL_SHARE_URL_LIMIT)
+    const shared = await readSharedBeat(url)
+    if (shared.status !== 'ready') throw new Error(`Expected a playable beat, got ${shared.status}`)
+    expect(activePattern(shared.project)).toEqual(source.patterns[2])
+    engineSpies.getSlotLights.mockReturnValue({ playing: null, queued: null })
     await new Promise((resolve) => setTimeout(resolve, 450))
   })
 
@@ -955,7 +1072,7 @@ describe('App sharing workflow', () => {
     expect(notice.textContent).toContain('Ask whoever sent it for a bundle file')
     // Pad programming, tune and fit all arrived, so loading their own audio is
     // all the recipient has to do.
-    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const pattern = lastPatternHanded()
     expect(pattern.padLanes.find((lane: PadLane) => lane.id === 'pad1').steps[0].on).toBe(true)
     const settings = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
     expect(settings.pad1.fit).toBe(4)
@@ -979,6 +1096,412 @@ describe('App sharing workflow', () => {
     expect((tempo as HTMLInputElement).value).toBe('127')
     await new Promise((resolve) => setTimeout(resolve, 450))
     expect(await loadProjectState()).toEqual(recipient)
+  })
+})
+
+describe('App pattern bank', () => {
+  /** What a screen reader announces for an element, whitespace tidied. */
+  function accessibleName(element: Element): string {
+    return computeAccessibleName(element).replace(/\s+/g, ' ').trim()
+  }
+
+  /** The bank's slot buttons, A to D. */
+  function slots(): HTMLElement[] {
+    return within(screen.getByRole('group', { name: 'Pattern bank' }))
+      .getAllByRole('button')
+      .filter((button) => button.hasAttribute('data-slot-id'))
+  }
+
+  it('puts four slots in the transport strip: A holds the demo and is selected, B–D are empty', async () => {
+    await hydratedDeck()
+
+    const transport = screen.getByRole('region', { name: 'Transport' })
+    expect(within(transport).getByRole('group', { name: 'Pattern bank' })).toBeTruthy()
+    expect(slots().map(accessibleName)).toEqual([
+      'Slot A, selected',
+      'Slot B, empty',
+      'Slot C, empty',
+      'Slot D, empty',
+    ])
+    expect(slots().map((slot) => slot.getAttribute('aria-pressed'))).toEqual([
+      'true',
+      'false',
+      'false',
+      'false',
+    ])
+  })
+
+  it('switches grid and sound at once when a slot is pressed while stopped', async () => {
+    await hydratedDeck()
+    const [slotA, slotB] = slots()
+    // The demo's closed hat on step 3 is slot A's programming.
+    expect(screen.getByRole('button', { name: 'Closed Hat step 3' }).getAttribute('aria-pressed'))
+      .toBe('true')
+
+    fireEvent.click(slotB)
+
+    expect(slotB.getAttribute('aria-pressed')).toBe('true')
+    expect(slotA.getAttribute('aria-pressed')).toBe('false')
+    expect(accessibleName(slotB)).toBe('Slot B, selected, empty')
+    expect(screen.getByRole('button', { name: 'Closed Hat step 3' }).getAttribute('aria-pressed'))
+      .toBe('false')
+    expect(lastPatternHanded().name).toBe('B')
+
+    // Edits go to the selected slot; A keeps the demo.
+    fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+    expect(lastPatternHanded().lanes[0].steps[0].on).toBe(true)
+    expect(accessibleName(slotB)).toBe('Slot B, selected')
+    fireEvent.click(slotA)
+    expect(screen.getByRole('button', { name: 'Kick step 1' }).getAttribute('aria-pressed'))
+      .toBe('false')
+  })
+
+  it('lights the playing slot and blinks the queued one from animation frames, naming both', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    await hydratedDeck()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+    const [slotA, slotB] = slots()
+    const bank = engineSpies.setBank.mock.calls.at(-1)![0] as Pattern[]
+
+    fireEvent.click(slotB)
+    engineSpies.getSlotLights.mockReturnValue({ playing: bank[0].id, queued: bank[1].id } as never)
+    for (const frame of [...frames]) frame(16)
+
+    // Selected at once — the grid already shows B — but A is still what is heard.
+    expect(slotB.getAttribute('aria-pressed')).toBe('true')
+    expect(slotA.hasAttribute('data-playing')).toBe(true)
+    expect(slotB.hasAttribute('data-queued')).toBe(true)
+    expect(accessibleName(slotA)).toBe('Slot A, playing')
+    expect(accessibleName(slotB)).toBe('Slot B, selected, queued, empty')
+    expect(screen.getByText(/Editing B · hearing A/)).toBeTruthy()
+
+    // The bar turns over: B is heard, nothing is queued.
+    engineSpies.getSlotLights.mockReturnValue({ playing: bank[1].id, queued: null } as never)
+    for (const frame of [...frames]) frame(32)
+    expect(slotA.hasAttribute('data-playing')).toBe(false)
+    expect(slotB.hasAttribute('data-playing')).toBe(true)
+    expect(slotB.hasAttribute('data-queued')).toBe(false)
+    expect(accessibleName(slotB)).toBe('Slot B, selected, playing, empty')
+    expect(screen.queryByText(/Editing B · hearing A/)).toBeNull()
+    engineSpies.getSlotLights.mockReturnValue({ playing: null, queued: null })
+  })
+
+  it('remembers the selected slot across a reload', async () => {
+    await hydratedDeck()
+    fireEvent.click(slots()[2])
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    cleanup()
+
+    await hydratedDeck()
+    expect(slots()[2].getAttribute('aria-pressed')).toBe('true')
+    expect(activePattern((await loadProjectState())!).name).toBe('C')
+  })
+
+  it('holds back a lesson any slot of an incoming bank already meets, whichever slot is selected', async () => {
+    await saveProjectState(createInitialProjectState())
+    // The sender built the four-on-the-floor in slot B, and is looking at A.
+    const sender = createInitialProjectState()
+    let built = selectSlot(sender, sender.patterns[1].id)
+    for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+    built = selectSlot(built, built.patterns[0].id)
+    window.history.replaceState(null, '', new URL(await createShareUrl(built, window.location.href)).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const [slotA, slotB] = slots()
+
+    // Over to B, where the work is: theirs, not the recipient's.
+    fireEvent.click(slotB)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    // Away to the empty A and back again is not taking the work apart.
+    fireEvent.click(slotA)
+    fireEvent.click(slotB)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+  })
+
+  it('still credits a lesson the learner builds in a slot of their own while the shared slot meets it', async () => {
+    await saveProjectState(createInitialProjectState())
+    const sender = createInitialProjectState()
+    let built = selectSlot(sender, sender.patterns[1].id)
+    for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+    window.history.replaceState(null, '', new URL(await createShareUrl(built, window.location.href)).search)
+
+    render(createElement(App))
+    await screen.findByText('Shared beat preview')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    // Slot C is empty: a four-on-the-floor built there is the learner's own.
+    fireEvent.click(slots()[2])
+    for (const step of [1, 5, 9, 13]) {
+      fireEvent.click(screen.getByRole('button', { name: `Kick step ${step}` }))
+    }
+
+    await waitFor(() =>
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
+    )
+  })
+
+  describe('Copy and Clear', () => {
+    const bankGroup = () => screen.getByRole('group', { name: 'Pattern bank' })
+    const closedHat3 = () =>
+      screen.getByRole('button', { name: 'Closed Hat step 3' }).getAttribute('aria-pressed')
+    const kick1 = () => screen.getByRole('button', { name: 'Kick step 1' }).getAttribute('aria-pressed')
+
+    /** The demo in A, a kick on step 1 of B, and A selected again. */
+    async function deckWithKickInB() {
+      await hydratedDeck()
+      fireEvent.click(slots()[1])
+      fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+      fireEvent.click(slots()[0])
+    }
+
+    let browserConfirm: ReturnType<typeof vi.spyOn>
+    beforeEach(() => {
+      browserConfirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    })
+    afterEach(() => {
+      // Never a browser dialog: it would block the session.
+      expect(browserConfirm).not.toHaveBeenCalled()
+      browserConfirm.mockRestore()
+    })
+
+    it('arms Copy, then copies the selected slot onto an empty slot and selects it', async () => {
+      await hydratedDeck()
+      const copy = screen.getByRole('button', { name: 'Copy slot A' })
+
+      fireEvent.click(copy)
+      expect(copy.getAttribute('aria-pressed')).toBe('true')
+      expect(bankGroup().hasAttribute('data-copy-armed')).toBe(true)
+
+      fireEvent.click(slots()[1])
+
+      expect(slots()[1].getAttribute('aria-pressed')).toBe('true')
+      expect(accessibleName(slots()[1])).toBe('Slot B, selected')
+      expect(closedHat3()).toBe('true')
+      expect(lastPatternHanded().name).toBe('B')
+      expect(lastPatternHanded().lanes[2].steps[2].on).toBe(true)
+      // Disarmed, and the Copy key now names the slot it would copy.
+      expect(bankGroup().hasAttribute('data-copy-armed')).toBe(false)
+      expect(
+        screen.getByRole('button', { name: 'Copy slot B' }).getAttribute('aria-pressed'),
+      ).toBe('false')
+    })
+
+    it('makes a copy that editing never reaches back through', async () => {
+      await hydratedDeck()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Kick step 1' }))
+      expect(kick1()).toBe('true')
+      fireEvent.click(slots()[0])
+      expect(kick1()).toBe('false')
+      expect(closedHat3()).toBe('true')
+    })
+
+    it('queues the copy while playing, like any other press: A plays on, C waits for the bar', async () => {
+      const frames: FrameRequestCallback[] = []
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+        frames.push(callback)
+        return frames.length
+      })
+      await hydratedDeck()
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+      await waitFor(() => expect(engineSpies.play).toHaveBeenCalledTimes(1))
+      const before = engineSpies.setBank.mock.calls.at(-1)![0] as Pattern[]
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[2])
+
+      // The copy is a document edit handed to the running engine — C selected,
+      // A's programming untouched — never a restart, so the engine's queue
+      // rule (step 0 only) is what brings C in.
+      const [bank, selectedId] = engineSpies.setBank.mock.calls.at(-1)! as unknown as [
+        Pattern[],
+        string,
+      ]
+      expect(selectedId).toBe(before[2].id)
+      expect(bank[0]).toBe(before[0])
+      expect(bank[2].lanes).toEqual(before[0].lanes)
+      expect(engineSpies.stop).not.toHaveBeenCalled()
+      expect(engineSpies.play).toHaveBeenCalledTimes(1)
+
+      // Until the bar turns, the engine reports A playing and C queued, and the
+      // bank says so.
+      engineSpies.getSlotLights.mockReturnValue({ playing: before[0].id, queued: before[2].id } as never)
+      for (const frame of [...frames]) frame(16)
+      const [slotA, , slotC] = slots()
+      expect(slotC.getAttribute('aria-pressed')).toBe('true')
+      expect(slotA.hasAttribute('data-playing')).toBe(true)
+      expect(slotC.hasAttribute('data-queued')).toBe(true)
+      expect(accessibleName(slotA)).toBe('Slot A, playing')
+      expect(accessibleName(slotC)).toBe('Slot C, selected, queued')
+      expect(screen.getByText(/Editing C · hearing A/)).toBeTruthy()
+      engineSpies.getSlotLights.mockReturnValue({ playing: null, queued: null })
+    })
+
+    it('asks inline before overwriting a slot with programming; Cancel leaves it intact', async () => {
+      await deckWithKickInB()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      const confirm = within(bankGroup()).getByRole('group', { name: 'Overwrite B?' })
+      expect(confirm.textContent).toContain('Overwrite B?')
+      const cancel = within(confirm).getByRole('button', { name: 'Cancel' })
+      // The safe answer has focus, so Enter never wipes a pattern by accident.
+      expect(document.activeElement).toBe(cancel)
+      // Nothing has happened yet.
+      expect(lastPatternHanded().name).toBe('A')
+
+      fireEvent.click(cancel)
+
+      expect(within(bankGroup()).queryByRole('group', { name: 'Overwrite B?' })).toBeNull()
+      expect(slots()[0].getAttribute('aria-pressed')).toBe('true')
+      expect(document.activeElement).toBe(slots()[1])
+      fireEvent.click(slots()[1])
+      expect(kick1()).toBe('true')
+      expect(closedHat3()).toBe('false')
+    })
+
+    it('overwrites the slot once the inline confirm is answered', async () => {
+      await deckWithKickInB()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Overwrite B' }))
+
+      expect(slots()[1].getAttribute('aria-pressed')).toBe('true')
+      expect(kick1()).toBe('false')
+      expect(closedHat3()).toBe('true')
+      expect(document.activeElement).toBe(slots()[1])
+    })
+
+    it('cancels an armed copy with Escape or by pressing Copy again', async () => {
+      await hydratedDeck()
+      const copy = screen.getByRole('button', { name: 'Copy slot A' })
+
+      fireEvent.click(copy)
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+      expect(copy.getAttribute('aria-pressed')).toBe('false')
+      // A slot pressed now is an ordinary press, not a copy.
+      fireEvent.click(slots()[1])
+      expect(accessibleName(slots()[1])).toBe('Slot B, selected, empty')
+
+      fireEvent.click(slots()[0])
+      fireEvent.click(copy)
+      fireEvent.click(copy)
+      expect(copy.getAttribute('aria-pressed')).toBe('false')
+      fireEvent.click(slots()[2])
+      expect(accessibleName(slots()[2])).toBe('Slot C, selected, empty')
+    })
+
+    it('lets Escape close an open Share menu without also disarming Copy', async () => {
+      await hydratedDeck()
+      const copy = screen.getByRole('button', { name: 'Copy slot A' })
+      fireEvent.click(copy)
+      const share = screen.getByRole('button', { name: 'Share' })
+      // A real press focuses the trigger; fireEvent does not.
+      share.focus()
+      fireEvent.click(share)
+      expect(share.getAttribute('aria-expanded')).toBe('true')
+
+      // Escape is the menu's: it closes, focus goes back to its trigger, and
+      // the armed copy is still waiting for a slot.
+      fireEvent.keyDown(share, { key: 'Escape' })
+      expect(share.getAttribute('aria-expanded')).toBe('false')
+      expect(copy.getAttribute('aria-pressed')).toBe('true')
+
+      // With nothing else open, the next Escape backs out of the copy.
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+      expect(copy.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('cancels an open overwrite confirm with Escape', async () => {
+      await deckWithKickInB()
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+      fireEvent.click(slots()[1])
+
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+
+      expect(within(bankGroup()).queryByRole('group', { name: 'Overwrite B?' })).toBeNull()
+      expect(slots()[0].getAttribute('aria-pressed')).toBe('true')
+      fireEvent.click(slots()[1])
+      expect(kick1()).toBe('true')
+    })
+
+    it('does nothing when the armed copy lands on its own slot', async () => {
+      await hydratedDeck()
+      const before = engineSpies.setBank.mock.calls.length
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot A' }))
+
+      fireEvent.click(slots()[0])
+
+      expect(engineSpies.setBank.mock.calls.length).toBe(before)
+      expect(within(bankGroup()).queryByRole('group')).toBeNull()
+      expect(bankGroup().hasAttribute('data-copy-armed')).toBe(false)
+      expect(slots()[0].getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('clears only the selected slot, after asking inline', async () => {
+      await deckWithKickInB()
+      fireEvent.click(slots()[1])
+      const clear = screen.getByRole('button', { name: 'Clear slot B' })
+
+      fireEvent.click(clear)
+      const confirm = within(bankGroup()).getByRole('group', { name: 'Clear B?' })
+      expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
+
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Clear B' }))
+
+      expect(kick1()).toBe('false')
+      expect(accessibleName(slots()[1])).toBe('Slot B, selected, empty')
+      expect(accessibleName(slots()[0])).toBe('Slot A')
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Clear slot B' }))
+      fireEvent.click(slots()[0])
+      expect(closedHat3()).toBe('true')
+    })
+
+    it('keeps the slot when Clear is cancelled, by button or by Escape', async () => {
+      await hydratedDeck()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear slot A' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(closedHat3()).toBe('true')
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Clear slot A' }))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear slot A' }))
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(within(bankGroup()).queryByRole('group', { name: 'Clear A?' })).toBeNull()
+      expect(closedHat3()).toBe('true')
+    })
+
+    it('carries a held shared slot’s hold onto its copy, so copying never earns credit', async () => {
+      await saveProjectState(createInitialProjectState())
+      const sender = createInitialProjectState()
+      let built = selectSlot(sender, sender.patterns[1].id)
+      for (const step of [0, 4, 8, 12]) built = cycleActivePatternStep(built, 'kick', step)
+      window.history.replaceState(null, '', new URL(await createShareUrl(built, window.location.href)).search)
+
+      render(createElement(App))
+      await screen.findByText('Shared beat preview')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      // The sender's B, copied onto the empty C, is still the sender's work.
+      fireEvent.click(screen.getByRole('button', { name: 'Copy slot B' }))
+      fireEvent.click(slots()[2])
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      expect(accessibleName(slots()[2])).toBe('Slot C, selected')
+      expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0')
+    })
   })
 })
 
@@ -1011,6 +1534,7 @@ describe('App beat bundles', () => {
   }
 
   function openBundle(file: File): void {
+    openShareMenu()
     fireEvent.change(screen.getByLabelText('Open a bundle'), { target: { files: [file] } })
   }
 
@@ -1029,6 +1553,7 @@ describe('App beat bundles', () => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL }))
 
     await hydratedDeck()
+    openShareMenu()
     fireEvent.click(screen.getByRole('button', { name: 'Export bundle' }))
 
     await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
@@ -1049,6 +1574,7 @@ describe('App beat bundles', () => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() }))
 
     await hydratedDeck()
+    openShareMenu()
     fireEvent.click(screen.getByRole('button', { name: 'Export bundle' }))
 
     const alert = await screen.findByRole('alert')
@@ -1312,7 +1838,7 @@ describe('App region editor', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(engineSpies.commitPadRegion).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'Play Pad 1 — empty' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Pad 1: load a sound' })).toBeTruthy()
   })
 
   it('locks a chop to steps and says what that did to its speed and pitch', async () => {
@@ -1399,6 +1925,118 @@ describe('App sample storage', () => {
   })
 })
 
+describe('App sampler compaction', () => {
+  it('shows an empty pad as a compact card, and its lane as soon as it has a sound', async () => {
+    await hydratedDeck()
+
+    // A fresh deck's pads have neither a sound nor programming.
+    expect(screen.getByRole('group', { name: 'Pad 1: load a sound' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pad 1 step 1' })).toBeNull()
+    expect(screen.queryByRole('slider', { name: /Pad 1 Tune/ })).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Pad 1 sound source'), {
+      target: { value: CURATED_SAMPLE_SOURCE.id },
+    })
+
+    expect(await screen.findByRole('button', { name: 'Pad 1 step 1' })).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+    // The other three pads are still cards.
+    expect(screen.getByRole('group', { name: 'Pad 2: load a sound' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pad 2 step 1' })).toBeNull()
+  })
+
+  it('keeps the lane of a pad that lost its audio but has programming', async () => {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    // Chopped and programmed, but no slice was ever stored: the pad is silent.
+    await saveProjectState(
+      commitRegionToSamplerPad(
+        cycleActivePatternStep(addSource(createInitialProjectState(), uploaded), 'pad1', 4),
+        'pad1',
+        REGION,
+      ),
+    )
+
+    await hydratedDeck()
+
+    expect(screen.getByRole('button', { name: /^Pad 1 step 5/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    )
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+  })
+
+  it('keeps a silent pad drawn even with no steps, so its relink is never folded away', async () => {
+    const uploaded = {
+      id: 'upload-1',
+      name: 'Warehouse Break',
+      origin: 'upload' as const,
+      duration: 4,
+      channels: 2,
+    }
+    // A region but no stored slice, and nothing programmed.
+    await saveProjectState(
+      commitRegionToSamplerPad(addSource(createInitialProjectState(), uploaded), 'pad1', REGION),
+    )
+
+    await hydratedDeck()
+
+    expect(screen.getByRole('button', { name: 'Pad 1 step 1' })).toBeTruthy()
+    expect(screen.getByText('Relink Pad 1')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Pad 1: load a sound' })).toBeNull()
+  })
+
+  it('folds a soundless lane back into a card when its last step is cleared, keeping focus', async () => {
+    // Programming without a sound: the lane is shown for the steps alone.
+    await saveProjectState(cycleActivePatternStep(createInitialProjectState(), 'pad2', 2))
+    await hydratedDeck()
+
+    const step = screen.getByRole('button', { name: /^Pad 2 step 3/ })
+    expect(screen.queryByRole('group', { name: 'Pad 2: load a sound' })).toBeNull()
+
+    step.focus()
+    fireEvent.click(step) // on → accented
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // accented → off
+
+    expect(screen.queryByRole('button', { name: /^Pad 2 step 3/ })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Pad 2: load a sound' })).toBeTruthy()
+    // The control the user pressed is gone; focus lands on the card, not the page.
+    expect(document.activeElement).toBe(screen.getByLabelText('Pad 2 sound source'))
+  })
+
+  it('keeps a soloed soundless lane on the deck when its last step is cleared', async () => {
+    await saveProjectState(
+      toggleVoiceSolo(cycleActivePatternStep(createInitialProjectState(), 'pad2', 2), 'pad2'),
+    )
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // on → accented
+    fireEvent.click(screen.getByRole('button', { name: /^Pad 2 step 3/ })) // accented → off
+
+    // Still soloed, so still silencing every other voice: its S has to stay in reach.
+    expect(screen.getByRole('button', { name: /^Pad 2 step 3/ }).getAttribute('aria-pressed')).toBe(
+      'false',
+    )
+    expect(screen.queryByRole('group', { name: 'Pad 2: load a sound' })).toBeNull()
+  })
+
+  it("spotlights an empty pad's card when the lesson points at that pad's Tune", async () => {
+    await saveProjectState(enterLessonIn(createInitialProjectState(), 'sampling', 'tune-a-pad'))
+    await hydratedDeck()
+
+    // No sound yet, so no Tune knob: the card is where the lesson starts.
+    const card = screen.getByRole('group', { name: 'Pad 1: load a sound' })
+    expect(card.hasAttribute('data-spotlit')).toBe(true)
+    expect(
+      screen.getByRole('group', { name: 'Pad 2: load a sound' }).hasAttribute('data-spotlit'),
+    ).toBe(false)
+  })
+})
+
 describe('App missing audio', () => {
   /** A saved project whose pad 1 is chopped from an uploaded source. */
   function projectWithChop() {
@@ -1465,7 +2103,7 @@ describe('App missing audio', () => {
     // the pad keeps the name it had rather than taking the new file's.
     expect(restored.pad1.name).toBe('Warehouse Break')
     expect(restored.pad1.fit).toBe(2)
-    const pattern = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const pattern = lastPatternHanded()
     expect(pattern.padLanes.find((lane: { id: string }) => lane.id === 'pad1').steps[4].on).toBe(
       true,
     )
@@ -1587,7 +2225,7 @@ describe('App storage durability', () => {
     }
 
     try {
-      const strip = screen.getByRole('button', { name: 'Play Pad 3 — empty' }).parentElement!
+      const strip = screen.getByRole('group', { name: 'Pad 3: load a sound' })
       fireEvent.drop(strip, { dataTransfer: { files: [audioFile('Too Big.wav')] } })
 
       const alert = await screen.findByRole('alert')
@@ -1608,16 +2246,23 @@ describe('App storage durability', () => {
 
 describe('App curriculum tracks', () => {
   /** The track selector's own control, by the name a screen reader hears. */
-  function track(name: 'Techno' | 'Sampling'): HTMLElement {
+  function track(name: 'Techno' | 'Acid' | 'Sampling'): HTMLElement {
     return screen.getByRole('button', { name: new RegExp(`^${name} track`) })
   }
 
-  function switchTo(name: 'Techno' | 'Sampling'): void {
+  function switchTo(name: 'Techno' | 'Acid' | 'Sampling'): void {
     fireEvent.click(track(name))
+  }
+
+  /** Unfold the curriculum line's numbered path, unless it already is. */
+  function showPath(): void {
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
   }
 
   /** The lesson the panel is currently showing, by its position line. */
   function standingOn(): string {
+    showPath()
     return screen.getByRole('button', { name: /^Lesson \d+/, current: 'step' }).getAttribute(
       'aria-label',
     )!
@@ -1637,10 +2282,98 @@ describe('App curriculum tracks', () => {
     expect(standingOn()).toContain('Load a Sound')
   })
 
+  it('puts Acid between Techno and Sampling, ready to start with nothing else done', async () => {
+    await hydratedDeck()
+
+    const tracks = within(screen.getByRole('navigation', { name: 'Curriculum' }))
+      .getAllByRole('button', { name: / track/ })
+      .map((button) => button.getAttribute('aria-label')!.split(' track')[0])
+    expect(tracks).toEqual(['Techno', 'Acid', 'Sampling'])
+    expect(track('Acid').getAttribute('aria-label')).toContain('0 of 7 complete')
+
+    switchTo('Acid')
+
+    expect(track('Acid').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('7')
+    expect(standingOn()).toContain('Sixteenths')
+    expect(within(screen.getByRole('list', { name: 'Goal progress' })).getByText('Bass notes 0/8'))
+      .toBeTruthy()
+  })
+
+  it(
+    'raises the compact BL-303 finale when the acid capstone is earned, and not again on reload',
+    async () => {
+      // The Acid capstone, one slide short: eight notes on three pitches, two
+      // accents, one connecting slide, and swing at 60%.
+      let saved = createDemoProjectState()
+      for (let step = 0; step < 8; step += 1) saved = toggleActivePatternNoteStep(saved, 'bass', step)
+      saved = transposeActivePatternNote(saved, 'bass', 3, 7)
+      saved = transposeActivePatternNote(saved, 'bass', 5, 12)
+      for (const step of [0, 4]) saved = toggleActivePatternNoteAccent(saved, 'bass', step)
+      saved = toggleActivePatternNoteSlide(saved, 'bass', 2)
+      saved = setTransportSwing(saved, 0.6)
+      await saveProjectState(enterLessonIn(saved, 'acid', 'your-first-acid-line'))
+      await hydratedDeck()
+      expect(screen.queryByRole('dialog')).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: /^Bass slide, step 5,/ }))
+
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog.getAttribute('data-scale')).toBe('compact')
+      expect(within(dialog).getByText('Acid track complete · BL-303 certified')).toBeTruthy()
+      fireEvent.click(within(dialog).getByRole('button', { name: /Back to the deck/ }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+      await new Promise((resolve) => setTimeout(resolve, 450))
+      cleanup()
+      await hydratedDeck()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(track('Acid').getAttribute('aria-label')).toContain('1 of 7 complete')
+    },
+    5000,
+  )
+
+  it('folds the path into one line that names the lesson, and unfolds it on request', async () => {
+    await hydratedDeck()
+
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    const line = screen.getByRole('navigation', { name: 'Curriculum' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('button', { name: /^Lesson \d+:/ })).toBeNull()
+    // Folded, the line still says where the learner is and how far along.
+    expect(within(line).getByText('Four on the Floor')).toBeTruthy()
+    expect(screen.getByRole('progressbar', { name: 'Lessons complete' })).toBeTruthy()
+
+    fireEvent.click(toggle)
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getAllByRole('button', { name: /^Lesson \d+:/ })).toHaveLength(14)
+    // Unfolded, every lesson is one click away.
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 3:/ }))
+    expect(within(line).getByText('Clap on 2 and 4')).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(screen.queryByRole('button', { name: /^Lesson \d+:/ })).toBeNull()
+  })
+
+  it('keeps the path’s unfolding to this session, out of the saved project', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Path' }))
+    // Moving along the path is a document edit, so a save follows it.
+    fireEvent.click(screen.getByRole('button', { name: /^Lesson 2:/ }))
+    await new Promise((resolve) => setTimeout(resolve, 450))
+
+    const saved = await loadProjectState()
+    expect(saved?.prefs).toEqual({})
+  })
+
   it('keeps each track’s place, in the session and across a reload', async () => {
     await hydratedDeck()
 
     // Step off the path on each track, then leave and come back to both.
+    showPath()
     fireEvent.click(screen.getByRole('button', { name: /^Lesson 9:/ }))
     expect(standingOn()).toContain('Sweep the Filter')
     switchTo('Sampling')
@@ -1673,7 +2406,7 @@ describe('App curriculum tracks', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Play' }))
     await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
-    const patternBefore = engineSpies.setPattern.mock.calls.at(-1)![0]
+    const patternBefore = lastPatternHanded()
     const samplerBefore = engineSpies.setSamplerSettings.mock.calls.at(-1)![0]
     engineSpies.setBpm.mockClear()
     engineSpies.stop.mockClear()
@@ -1684,7 +2417,7 @@ describe('App curriculum tracks', () => {
 
     // Same objects, not merely equal ones: navigation hands the deck's own
     // state straight back rather than rebuilding it.
-    expect(engineSpies.setPattern.mock.calls.at(-1)![0]).toBe(patternBefore)
+    expect(lastPatternHanded()).toBe(patternBefore)
     expect(engineSpies.setSamplerSettings.mock.calls.at(-1)![0]).toBe(samplerBefore)
     expect(
       (screen.getByRole('slider', { name: 'Tempo in beats per minute' }) as HTMLInputElement)
@@ -1743,6 +2476,7 @@ describe('App curriculum tracks', () => {
 
     await saveProjectState(createInitialProjectState())
     await hydratedDeck()
+    openShareMenu()
     fireEvent.change(screen.getByLabelText('Open a bundle'), {
       target: { files: [new File([bundle.blob], bundle.fileName)] },
     })
@@ -1771,5 +2505,744 @@ describe('App curriculum tracks', () => {
       expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('1'),
     )
     await new Promise((resolve) => setTimeout(resolve, 450))
+  })
+})
+
+describe('App sweep goals', () => {
+  async function onEnvModSweep(): Promise<HTMLElement> {
+    await saveProjectState(enterLessonIn(createInitialProjectState(), 'acid', 'env-mod-sweep'))
+    await hydratedDeck()
+    return screen.getByRole('slider', { name: 'Env Mod' })
+  }
+
+  function announced(): string {
+    return document.querySelector('.lesson-announcer')?.textContent ?? ''
+  }
+
+  it('counts one keypress from the bottom of a knob to the top as a full sweep', async () => {
+    const envMod = await onEnvModSweep()
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+    await screen.findByRole('button', { name: 'Stop' })
+
+    fireEvent.keyDown(envMod, { key: 'End' })
+
+    await waitFor(() => expect(announced()).toBe('Lesson complete: Env Mod Sweep'))
+  })
+
+  it('still ignores the same keypress on a stopped deck', async () => {
+    const envMod = await onEnvModSweep()
+
+    fireEvent.keyDown(envMod, { key: 'End' })
+    fireEvent.keyDown(envMod, { key: 'Home' })
+
+    expect(envMod.getAttribute('aria-valuenow')).toBe('0')
+    expect(screen.getByText('Env Mod sweep 0%')).toBeTruthy()
+    expect(announced()).not.toContain('Lesson complete')
+  })
+})
+
+describe('App swing', () => {
+  function swingKnob(): HTMLElement {
+    return screen.getByRole('slider', { name: 'Swing' })
+  }
+
+  it('puts a Swing knob beside tempo that reads 50–75% and drives the sequencer', async () => {
+    await hydratedDeck()
+
+    const knob = swingKnob()
+    // Beside the tempo fader, in the transport.
+    expect(
+      knob.closest('.transport')?.contains(
+        screen.getByRole('slider', { name: 'Tempo in beats per minute' }),
+      ),
+    ).toBe(true)
+    expect(knob.getAttribute('aria-valuemin')).toBe('50')
+    expect(knob.getAttribute('aria-valuemax')).toBe('75')
+    expect(knob.getAttribute('aria-valuetext')).toBe('50 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.5)
+
+    fireEvent.keyDown(knob, { key: 'End' })
+    expect(knob.getAttribute('aria-valuetext')).toBe('75 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.75)
+
+    fireEvent.keyDown(knob, { key: 'Home' })
+    expect(knob.getAttribute('aria-valuetext')).toBe('50 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.5)
+
+    // Page jumps a tenth of the travel (2.5%), arrows nudge a fiftieth (0.5%).
+    fireEvent.keyDown(knob, { key: 'PageUp' })
+    expect(engineSpies.setSwing.mock.calls.at(-1)![0]).toBeCloseTo(0.525, 12)
+    fireEvent.keyDown(knob, { key: 'ArrowUp' })
+    expect(knob.getAttribute('aria-valuetext')).toBe('53 %')
+    expect(engineSpies.setSwing.mock.calls.at(-1)![0]).toBeCloseTo(0.53, 12)
+  })
+
+  it('opens a saved project at its own swing, and gives it to the sequencer', async () => {
+    await saveProjectState(setTransportSwing(createInitialProjectState(), 0.62))
+
+    await hydratedDeck()
+
+    expect(swingKnob().getAttribute('aria-valuetext')).toBe('62 %')
+    expect(engineSpies.setSwing).toHaveBeenLastCalledWith(0.62)
+  })
+
+  it('saves a swing move, so it survives a reload', async () => {
+    await hydratedDeck()
+
+    fireEvent.keyDown(swingKnob(), { key: 'End' })
+
+    await waitFor(async () => expect((await loadProjectState())?.transport.swing).toBe(0.75))
+  })
+})
+
+describe('App voice mixer', () => {
+  const lastMixer = () => engineSpies.setMixer.mock.calls.at(-1)![0] as ProjectState['mixer']
+
+  it('gives all eleven voices a Level knob beside their M and S, resting at 0 dB', async () => {
+    await savePadsProgrammed()
+    await hydratedDeck()
+
+    const voices = [
+      'Kick',
+      'Clap',
+      'Closed Hat',
+      'Open Hat',
+      'Perc',
+      'Pad 1',
+      'Pad 2',
+      'Pad 3',
+      'Pad 4',
+      'Bass',
+      'Stab',
+    ]
+    for (const voice of voices) {
+      const level = screen.getByRole('slider', { name: `${voice} Level` })
+      expect(level.getAttribute('aria-valuetext')).toBe('0.0 dB')
+      expect(screen.getByRole('button', { name: `Mute ${voice}` })).toBeTruthy()
+      expect(screen.getByRole('button', { name: `Solo ${voice}` })).toBeTruthy()
+    }
+  })
+
+  it('puts the bass and stab strips in their panel headers', async () => {
+    await hydratedDeck()
+
+    const bass = screen.getByRole('region', { name: 'Bass Line' })
+    const stab = screen.getByRole('region', { name: 'Chord Stab' })
+    for (const [panel, voice] of [
+      [bass, 'Bass'],
+      [stab, 'Stab'],
+    ] as const) {
+      const header = panel.querySelector('.panel-title')!
+      expect(within(header as HTMLElement).getByRole('button', { name: `Mute ${voice}` })).toBeTruthy()
+      expect(within(header as HTMLElement).getByRole('button', { name: `Solo ${voice}` })).toBeTruthy()
+      expect(within(header as HTMLElement).getByRole('slider', { name: `${voice} Level` })).toBeTruthy()
+    }
+  })
+
+  it('solos the bass and mutes the stab through the one mixer the engine reads', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Solo Bass' }))
+    expect(lastMixer().bass).toEqual({ muted: false, soloed: true, level: 1 })
+    expect(screen.getByRole('button', { name: 'Solo Bass' }).getAttribute('aria-pressed')).toBe('true')
+    // Every un-soloed voice shows as silenced, drums included.
+    expect(screen.getByRole('group', { name: 'Kick steps' }).closest('.is-silenced')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Chord Stab' }).classList).toContain('is-silenced')
+    expect(screen.getByRole('region', { name: 'Bass Line' }).classList).not.toContain('is-silenced')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Solo Bass' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mute Stab' }))
+    expect(lastMixer().stab).toEqual({ muted: true, soloed: false, level: 1 })
+    expect(screen.getByRole('region', { name: 'Chord Stab' }).classList).toContain('is-silenced')
+  })
+
+  it('turns a Level from the keyboard, reads it out in dB, and saves it', async () => {
+    await hydratedDeck()
+    const hats = screen.getByRole('slider', { name: 'Closed Hat Level' })
+
+    fireEvent.keyDown(hats, { key: 'End' })
+    expect(hats.getAttribute('aria-valuetext')).toBe('+6.0 dB')
+    fireEvent.keyDown(hats, { key: 'Home' })
+    expect(hats.getAttribute('aria-valuetext')).toBe('−∞ dB')
+    expect(lastMixer().closedHat).toEqual({ muted: false, soloed: false, level: 0 })
+    fireEvent.keyDown(hats, { key: 'PageUp' })
+    fireEvent.keyDown(hats, { key: 'PageUp' })
+    const level = lastMixer().closedHat!.level
+    expect(level).toBeGreaterThan(0)
+    expect(level).toBeLessThan(1)
+
+    const stab = screen.getByRole('slider', { name: 'Stab Level' })
+    fireEvent.keyDown(stab, { key: 'ArrowDown' })
+    expect(lastMixer().stab!.level).toBeLessThan(1)
+
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    const saved = (await loadProjectState())!
+    expect(saved.mixer.closedHat?.level).toBe(level)
+    expect(saved.mixer.stab?.level).toBe(lastMixer().stab!.level)
+  })
+})
+
+describe('App progress chips', () => {
+  /** The lesson card's chip list, by the name a screen reader hears. */
+  function chips(): HTMLElement[] {
+    return within(screen.getByRole('list', { name: 'Goal progress' })).getAllByRole('listitem')
+  }
+
+  /** The deck's one polite live region for lesson progress. */
+  function announcer(): HTMLElement {
+    const region = document.querySelector<HTMLElement>('.lesson-announcer')
+    expect(region?.getAttribute('aria-live')).toBe('polite')
+    return region!
+  }
+
+  function kick(step: number): void {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Kick step ${step}( |$)`) }))
+  }
+
+  function enterLesson(position: number): void {
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Lesson ${position}:`) }))
+  }
+
+  it('shows a chip per assertion that counts placement and extras, never positions', async () => {
+    await hydratedDeck()
+
+    expect(chips().map((chip) => chip.textContent)).toEqual(['Kick 0/4'])
+    kick(1)
+    expect(chips()[0].textContent).toBe('Kick 1/4')
+    kick(2)
+    expect(chips()[0].textContent).toBe('Kick 1/4 · 1 extra')
+  })
+
+  it('turns a met chip into a ✓ with accessible text, and lists the capstone as a checklist', async () => {
+    await hydratedDeck()
+    enterLesson(14)
+
+    expect(chips().map((chip) => chip.textContent)).toEqual([
+      'Kick 0/4',
+      'Clap 1/2',
+      'Closed Hat 3/4',
+      'Bass notes 0/4',
+      'Stab notes 0/2',
+    ])
+    for (const step of [1, 5, 9, 13]) kick(step)
+
+    const [kickChip, clapChip] = chips()
+    expect(kickChip.classList.contains('is-met')).toBe(true)
+    expect(kickChip.textContent).toBe('✓Kick 4/4, done')
+    expect(within(kickChip).getByText('✓').getAttribute('aria-hidden')).toBe('true')
+    expect(clapChip.classList.contains('is-met')).toBe(false)
+  })
+
+  it('announces a chip becoming met, and nothing for count changes', async () => {
+    await hydratedDeck()
+    enterLesson(14)
+
+    for (const step of [1, 5, 9]) kick(step)
+    expect(announcer().textContent).toBe('')
+
+    kick(13)
+    expect(announcer().textContent).toBe('Kick 4/4 done')
+    const firstSaid = announcer().firstElementChild
+
+    kick(2)
+    expect(announcer().firstElementChild).toBe(firstSaid)
+    kick(2)
+    kick(2)
+    // Undone and redone: met again, said again — as a new node, so the same
+    // words are heard a second time rather than left unchanged.
+    expect(announcer().textContent).toBe('Kick 4/4 done')
+    expect(announcer().firstElementChild).not.toBe(firstSaid)
+  })
+
+  it('announces the lesson completing once, instead of the chip that completed it', async () => {
+    await hydratedDeck()
+
+    for (const step of [1, 5, 9]) kick(step)
+    expect(announcer().textContent).toBe('')
+    kick(13)
+
+    await waitFor(() =>
+      expect(announcer().textContent).toBe('Lesson complete: Four on the Floor'),
+    )
+    expect(screen.getByText('Lesson complete')).toBeTruthy()
+    // The celebration is no second live region.
+    const celebration = screen.getByText(/^Locked in/)
+    expect(celebration.getAttribute('role')).toBeNull()
+    expect(celebration.closest('[aria-live]')).toBeNull()
+    // An earned card says it is done; the chips step aside (EB3-04b).
+    expect(screen.queryByRole('list', { name: 'Goal progress' })).toBeNull()
+  })
+
+  it('says nothing for work that was already done on arrival or on reload', async () => {
+    let saved = createInitialProjectState()
+    for (const step of [0, 4, 8, 12]) saved = cycleActivePatternStep(saved, 'kick', step)
+    await saveProjectState(saved)
+
+    await hydratedDeck()
+
+    // Lesson 1 is earned by the saved beat as the deck opens, silently.
+    await waitFor(() => expect(screen.getByText('Lesson complete')).toBeTruthy())
+    expect(announcer().textContent).toBe('')
+
+    // Walking onto a lesson whose chip is already met is not meeting it.
+    enterLesson(14)
+    expect(chips()[0].classList.contains('is-met')).toBe(true)
+    expect(announcer().textContent).toBe('')
+  })
+})
+
+describe('App lesson strip and scroll to spotlight', () => {
+  /** Where every box sits, as the browser would report it. */
+  let boxOf: (element: Element) => { top: number; bottom: number }
+  const scrolled = vi.fn()
+
+  beforeEach(() => {
+    // By default every spotlit control is far below the fold.
+    boxOf = (element) =>
+      element.matches('.is-spotlit, [data-spotlit]')
+        ? { top: 1400, bottom: 1480 }
+        : { top: 0, bottom: 0 }
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element,
+    ) {
+      const { top, bottom } = boxOf(this)
+      return {
+        top,
+        bottom,
+        left: 0,
+        right: 0,
+        x: 0,
+        y: top,
+        width: 0,
+        height: bottom - top,
+        toJSON: () => ({}),
+      } as DOMRect
+    })
+    scrolled.mockClear()
+    // jsdom has no scrolling; this is the one call the deck makes to scroll.
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrolled,
+    })
+  })
+
+  afterEach(() => {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+  })
+
+  function lessonCard(): HTMLElement {
+    return screen.getByRole('complementary', { name: 'Lesson' })
+  }
+
+  function pickLesson(position: number): void {
+    const toggle = screen.getByRole('button', { name: 'Path' })
+    if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Lesson ${position}:`) }))
+  }
+
+  function kick(step: number): void {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Kick step ${step}( |$)`) }))
+  }
+
+  /** The knob wrapper a slider sits in — the element its spotlight ring is drawn on. */
+  function knobOf(name: string): Element {
+    return screen.getByRole('slider', { name }).closest('.knob')!
+  }
+
+  /** A saved project whose lesson 1 was earned in an earlier session. */
+  async function savedWithLessonOneEarned(): Promise<void> {
+    let saved = createInitialProjectState()
+    for (const step of [0, 4, 8, 12]) saved = cycleActivePatternStep(saved, 'kick', step)
+    saved = updateLessonProgress(saved, 'four-on-the-floor', { completed: true })
+    await saveProjectState(saved)
+  }
+
+  describe('completed strip', () => {
+    it(
+      'celebrates a lesson just earned, then shrinks it to a strip with ✓, Next ▸ and Reopen',
+      async () => {
+        await hydratedDeck()
+        for (const step of [1, 5, 9, 13]) kick(step)
+
+        // The celebration first, with the way on already offered. An earned
+        // lesson says it is done, so its chips step aside.
+        await waitFor(() => expect(screen.getByText(/^Locked in/)).toBeTruthy())
+        expect(within(lessonCard()).queryByRole('list', { name: 'Goal progress' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Next: Offbeat Hats' })).toBeTruthy()
+
+        await waitFor(
+          () => expect(lessonCard().classList.contains('is-strip')).toBe(true),
+          { timeout: CELEBRATION_MS + 1500 },
+        )
+        const card = lessonCard()
+        expect(within(card).getByText('✓').getAttribute('aria-hidden')).toBe('true')
+        expect(within(card).getByText('Lesson complete')).toBeTruthy()
+        expect(within(card).getByRole('heading', { name: 'Four on the Floor' })).toBeTruthy()
+        expect(within(card).getByRole('button', { name: 'Next: Offbeat Hats' })).toBeTruthy()
+        expect(
+          within(card).getByRole('button', { name: 'Reopen lesson' }).getAttribute('aria-expanded'),
+        ).toBe('false')
+        // Earned is said by the strip; the chips step aside.
+        expect(within(card).queryByRole('list', { name: 'Goal progress' })).toBeNull()
+        expect(screen.queryByText(/^Locked in/)).toBeNull()
+      },
+      CELEBRATION_MS + 5000,
+    )
+
+    it('lands on the strip, not a replayed celebration, for a lesson earned before the reload', async () => {
+      await savedWithLessonOneEarned()
+      await hydratedDeck()
+
+      await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
+      expect(screen.queryByText(/^Locked in/)).toBeNull()
+    })
+
+    it('reopens the full lesson text from the strip, and folds it back', async () => {
+      await savedWithLessonOneEarned()
+      await hydratedDeck()
+      await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reopen lesson' }))
+
+      expect(lessonCard().classList.contains('is-strip')).toBe(false)
+      expect(within(lessonCard()).getByText(fourOnTheFloor.intro)).toBeTruthy()
+      expect(within(lessonCard()).queryByRole('list', { name: 'Goal progress' })).toBeNull()
+      const collapse = screen.getByRole('button', { name: 'Collapse lesson' })
+      expect(collapse.getAttribute('aria-expanded')).toBe('true')
+      // Still earned, still waiting on the learner to move on.
+      expect(screen.getByRole('button', { name: 'Next: Offbeat Hats' })).toBeTruthy()
+
+      fireEvent.click(collapse)
+      expect(lessonCard().classList.contains('is-strip')).toBe(true)
+    })
+
+    it(
+      'holds the celebration behind a finale until the finale is closed',
+      async () => {
+        // The Techno capstone, one kick short of done.
+        let saved = createDemoProjectState()
+        for (const step of [0, 4, 8]) saved = cycleActivePatternStep(saved, 'kick', step)
+        saved = cycleActivePatternStep(saved, 'snare', 4)
+        saved = cycleActivePatternStep(saved, 'closedHat', 14)
+        for (const step of [1, 3, 9, 11]) saved = toggleActivePatternNoteStep(saved, 'bass', step)
+        for (const step of [2, 10]) saved = toggleActivePatternNoteStep(saved, 'stab', step)
+        await saveProjectState(enterLessonIn(saved, DEFAULT_ARC_ID, 'your-first-techno-groove'))
+        await hydratedDeck()
+        await waitFor(() =>
+          expect(
+            within(lessonCard()).getByRole('heading', { name: 'Your First Techno Groove' }),
+          ).toBeTruthy(),
+        )
+
+        kick(13)
+        const close = await screen.findByRole('button', { name: /Keep it rolling/ })
+        await new Promise((resolve) => setTimeout(resolve, CELEBRATION_MS + 300))
+        fireEvent.click(close)
+
+        // The learner has not seen the celebration yet, so it has not ended.
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(lessonCard().classList.contains('is-strip')).toBe(false)
+        expect(screen.getByText(/^Locked in/)).toBeTruthy()
+      },
+      CELEBRATION_MS + 5000,
+    )
+
+    it('waits for Next ▸ before moving the path on', async () => {
+      await savedWithLessonOneEarned()
+      await hydratedDeck()
+      await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
+
+      // Working on the groove does not move the path.
+      kick(2)
+      kick(2)
+      kick(2)
+      expect(within(lessonCard()).getByRole('heading', { name: 'Four on the Floor' })).toBeTruthy()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next: Offbeat Hats' }))
+
+      expect(within(lessonCard()).getByRole('heading', { name: 'Offbeat Hats' })).toBeTruthy()
+      expect(lessonCard().classList.contains('is-complete')).toBe(false)
+    })
+  })
+
+  describe('scroll to spotlight', () => {
+    it('brings an off-screen spotlight into view when a lesson is picked on the path', async () => {
+      await hydratedDeck()
+      expect(scrolled).not.toHaveBeenCalled()
+
+      pickLesson(9)
+
+      expect(within(lessonCard()).getByRole('heading', { name: 'Sweep the Filter' })).toBeTruthy()
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      expect(scrolled.mock.contexts[0]).toBe(knobOf('Cutoff'))
+      expect(scrolled).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+    })
+
+    it('never scrolls on load, or on any edit while the lesson is open', async () => {
+      // Saved standing on the filter sweep, whose Cutoff knob is off-screen.
+      await saveProjectState(
+        enterLessonIn(createInitialProjectState(), DEFAULT_ARC_ID, 'filter-sweep'),
+      )
+      await hydratedDeck()
+      await waitFor(() =>
+        expect(within(lessonCard()).getByRole('heading', { name: 'Sweep the Filter' })).toBeTruthy(),
+      )
+
+      const cutoff = screen.getByRole('slider', { name: 'Cutoff' })
+      fireEvent.keyDown(cutoff, { key: 'ArrowDown' })
+      fireEvent.keyDown(cutoff, { key: 'PageDown' })
+      kick(1)
+      kick(5)
+      fireEvent.change(screen.getByRole('slider', { name: 'Tempo in beats per minute' }), {
+        target: { value: '128' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }))
+      await waitFor(() => expect(engineSpies.play).toHaveBeenCalled())
+
+      expect(scrolled).not.toHaveBeenCalled()
+    })
+
+    it('does not scroll into a lesson whose goal is already met on arrival', async () => {
+      // Four on the floor already programmed, but saved standing on lesson 2.
+      let saved = createInitialProjectState()
+      for (const step of [0, 4, 8, 12]) saved = cycleActivePatternStep(saved, 'kick', step)
+      await saveProjectState(enterLessonIn(saved, DEFAULT_ARC_ID, 'offbeat-hats'))
+      await hydratedDeck()
+      await waitFor(() =>
+        expect(within(lessonCard()).getByRole('heading', { name: 'Offbeat Hats' })).toBeTruthy(),
+      )
+
+      pickLesson(1)
+
+      // It is earned the moment it opens, so its spotlight is already resting.
+      await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
+      expect(scrolled).not.toHaveBeenCalled()
+    })
+
+    it('leaves a spotlight that is already fully visible where it is', async () => {
+      boxOf = (element) =>
+        element.matches('.is-spotlit, [data-spotlit]')
+          ? { top: 300, bottom: 380 }
+          : { top: 0, bottom: 0 }
+      await hydratedDeck()
+
+      pickLesson(2)
+
+      expect(within(lessonCard()).getByRole('heading', { name: 'Offbeat Hats' })).toBeTruthy()
+      expect(scrolled).not.toHaveBeenCalled()
+    })
+
+    it('treats a spotlight inside the sticky transport strip as always in view', async () => {
+      await hydratedDeck()
+
+      pickLesson(6)
+
+      expect(lessonCard().textContent).toMatch(/tempo/i)
+      expect(scrolled).not.toHaveBeenCalled()
+    })
+
+    it('scrolls when a dismissed lesson is resumed, and when Next ▸ enters the next one', async () => {
+      await savedWithLessonOneEarned()
+      await hydratedDeck()
+      await waitFor(() => expect(lessonCard().classList.contains('is-strip')).toBe(true))
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next: Offbeat Hats' }))
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole('button', { name: /^Closed Hat step 1( |$)/ }).closest('.step-row'),
+      )
+
+      fireEvent.click(within(lessonCard()).getByRole('button', { name: 'Dismiss lesson' }))
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByRole('button', { name: /^Resume lesson/ }))
+      expect(scrolled).toHaveBeenCalledTimes(2)
+    })
+
+    it('offers "Show me" on the lesson card to scroll there on demand', async () => {
+      await hydratedDeck()
+      expect(scrolled).not.toHaveBeenCalled()
+
+      fireEvent.click(within(lessonCard()).getByRole('button', { name: 'Show me' }))
+
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole('button', { name: /^Kick step 1( |$)/ }).closest('.step-row'),
+      )
+    })
+
+    it('jumps instead of gliding under reduced motion', async () => {
+      vi.stubGlobal(
+        'matchMedia',
+        (query: string) =>
+          ({
+            matches: query === '(prefers-reduced-motion: reduce)',
+            media: query,
+            addEventListener: () => undefined,
+            removeEventListener: () => undefined,
+          }) as unknown as MediaQueryList,
+      )
+      await hydratedDeck()
+
+      pickLesson(9)
+
+      expect(scrolled).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' })
+    })
+  })
+})
+
+describe('App bass Accent row and Env Mod', () => {
+  const accentRow = () => screen.getByRole('group', { name: 'Bass accent steps' })
+  const accentStep = (step: number) =>
+    within(accentRow()).getByRole('button', { name: new RegExp(`^Bass accent, step ${step},`) })
+
+  it('puts 16 named accent toggles under the bass lane, and none under the stab', async () => {
+    await hydratedDeck()
+
+    const bass = screen.getByRole('region', { name: 'Bass Line' })
+    const toggles = within(accentRow()).getAllByRole('button')
+    expect(toggles).toHaveLength(16)
+    expect(toggles.map((toggle) => toggle.getAttribute('aria-label'))).toEqual(
+      Array.from({ length: 16 }, (_, i) => `Bass accent, step ${i + 1}, off`),
+    )
+    expect(toggles.every((toggle) => toggle.getAttribute('aria-pressed') === 'false')).toBe(true)
+    // Under the lane: the note steps come first in the panel, then the row.
+    const firstNote = within(bass).getByRole('button', { name: 'Bass step 1, empty' })
+    expect(
+      firstNote.compareDocumentPosition(toggles[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    const stab = screen.getByRole('region', { name: 'Chord Stab' })
+    expect(within(stab).queryByRole('group', { name: /accent/i })).toBeNull()
+  })
+
+  it('keeps an accent set on an empty step, and says the step has no note', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(accentStep(3))
+    expect(accentStep(3).getAttribute('aria-pressed')).toBe('true')
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, on (no note)')
+
+    // Placing the note under it makes it a playing accent; clearing the note keeps it.
+    fireEvent.click(screen.getByRole('button', { name: 'Bass step 3, empty' }))
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, on')
+    fireEvent.click(screen.getByRole('button', { name: /^Bass step 3, C2/ }))
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, on (no note)')
+
+    fireEvent.click(accentStep(3))
+    expect(accentStep(3).getAttribute('aria-label')).toBe('Bass accent, step 3, off')
+  })
+
+  it('saves the accent in the selected slot, where the engine reads it', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bass step 5, empty' }))
+    fireEvent.click(accentStep(5))
+
+    const [bank, selected] = engineSpies.setBank.mock.calls.at(-1)! as [Pattern[], string]
+    const slot = bank.find((pattern) => pattern.id === selected)!
+    expect(slot.noteLanes.find((lane) => lane.id === 'bass')!.steps[4]).toMatchObject({
+      on: true,
+      accent: true,
+    })
+  })
+
+  it('turns Env Mod on the bass panel into the patch the engine plays', async () => {
+    await hydratedDeck()
+
+    const envMod = within(screen.getByRole('region', { name: 'Bass Line' })).getByRole('slider', {
+      name: 'Env Mod',
+    })
+    expect(envMod.getAttribute('aria-valuetext')).toBe('0 %')
+
+    fireEvent.keyDown(envMod, { key: 'End' })
+
+    expect(envMod.getAttribute('aria-valuetext')).toBe('100 %')
+    expect(engineSpies.setBassSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ envMod: 100 }),
+    )
+  })
+})
+
+describe('App bass Slide row and ties', () => {
+  const bass = () => screen.getByRole('region', { name: 'Bass Line' })
+  const slideRow = () => screen.getByRole('group', { name: 'Bass slide steps' })
+  const slideStep = (step: number) =>
+    within(slideRow()).getByRole('button', { name: new RegExp(`^Bass slide, step ${step},`) })
+  const noteStep = (step: number) =>
+    within(screen.getByRole('group', { name: 'Bass steps' })).getByRole('button', {
+      name: new RegExp(`^Bass step ${step},`),
+    })
+
+  it('puts 16 named slide toggles under the Accent row, and none under the stab', async () => {
+    await hydratedDeck()
+
+    const toggles = within(slideRow()).getAllByRole('button')
+    expect(toggles.map((toggle) => toggle.getAttribute('aria-label'))).toEqual(
+      Array.from({ length: 16 }, (_, i) => `Bass slide, step ${i + 1}, off`),
+    )
+    expect(toggles.every((toggle) => toggle.getAttribute('aria-pressed') === 'false')).toBe(true)
+    const lastAccent = within(bass()).getByRole('button', { name: 'Bass accent, step 16, off' })
+    expect(
+      lastAccent.compareDocumentPosition(toggles[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    const stab = screen.getByRole('region', { name: 'Chord Stab' })
+    expect(within(stab).queryByRole('group', { name: /slide/i })).toBeNull()
+  })
+
+  it('keeps a slide set on an empty step, and says the step has no note', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(slideStep(5))
+    expect(slideStep(5).getAttribute('aria-pressed')).toBe('true')
+    expect(slideStep(5).getAttribute('aria-label')).toBe('Bass slide, step 5, on (no note)')
+
+    fireEvent.click(noteStep(5))
+    expect(slideStep(5).getAttribute('aria-label')).toBe('Bass slide, step 5, on')
+    fireEvent.click(noteStep(5))
+    expect(slideStep(5).getAttribute('aria-label')).toBe('Bass slide, step 5, on (no note)')
+  })
+
+  it('operates from the keyboard like any button', async () => {
+    await hydratedDeck()
+
+    slideStep(2).focus()
+    expect(document.activeElement).toBe(slideStep(2))
+    fireEvent.click(document.activeElement!) // Enter and Space activate a native button
+    expect(slideStep(2).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('saves the slide in the selected slot, where the engine reads it', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(noteStep(5))
+    fireEvent.click(slideStep(5))
+
+    const [bank, selected] = engineSpies.setBank.mock.calls.at(-1)! as [Pattern[], string]
+    const slot = bank.find((pattern) => pattern.id === selected)!
+    expect(slot.noteLanes.find((lane) => lane.id === 'bass')!.steps[4]).toMatchObject({
+      on: true,
+      slide: true,
+    })
+  })
+
+  it('draws a tie on the bass row from a slid note into the note it glides to', async () => {
+    await hydratedDeck()
+
+    fireEvent.click(noteStep(5))
+    fireEvent.click(noteStep(6))
+    fireEvent.click(slideStep(5))
+
+    expect(noteStep(5).getAttribute('aria-label')).toBe(
+      'Bass step 5, C2, 1 step long, slides into step 6',
+    )
+    expect(noteStep(5).hasAttribute('data-tie-out')).toBe(true)
+    expect(noteStep(6).hasAttribute('data-tie-in')).toBe(true)
+
+    // With the note it reached cleared, the slide holds through the rest: nothing to tie into.
+    fireEvent.click(noteStep(6))
+    expect(noteStep(5).getAttribute('aria-label')).toBe('Bass step 5, C2, 1 step long')
+    expect(noteStep(5).hasAttribute('data-tie-out')).toBe(false)
+    expect(noteStep(6).hasAttribute('data-tie-in')).toBe(false)
   })
 })

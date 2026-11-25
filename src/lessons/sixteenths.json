@@ -1,0 +1,7 @@
+{
+  "id": "sixteenths",
+  "title": "Sixteenths",
+  "intro": "Acid lives on sixteenths. A 303 line is busy: notes on most of the steps, not four polite ones in the gaps. Click at least eight steps on the Bass Line row — run them back to back, leave a rest or two where it feels right, and press play. It will drone on one pitch for now; that is the next lesson.",
+  "spotlight": ["noteLane:bass"],
+  "goal": [{ "type": "notesPlaced", "lane": "bass", "min": 8 }]
+}

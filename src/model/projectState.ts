@@ -1,13 +1,18 @@
+import { createBank, emptiedPattern, isPatternEmpty, withProgrammingOf } from './bank'
+import { clampParam } from './knob'
 import {
+  BASS_PARAMS,
   createBassSettings,
   DEFAULT_BASS_SETTINGS,
   setBassParam,
   type BassParamId,
   type BassSettings,
 } from './bass'
+import type { DeckParamId } from './deckParams'
 import {
   createFxSettings,
   DEFAULT_FX_SETTINGS,
+  FX_PARAMS,
   setFxParam,
   type FxParamId,
   type FxSettings,
@@ -15,12 +20,31 @@ import {
 import {
   createMasterSettings,
   DEFAULT_MASTER_SETTINGS,
+  MASTER_PARAMS,
   setMasterParam,
   type MasterParamId,
   type MasterSettings,
 } from './master'
-import type { LaneMix, Mixer } from './mixer'
-import { resizeNoteStep, toggleNoteStep, transposeNoteStep, withNoteLanes } from './note'
+import {
+  LEVEL_PARAMS,
+  levelParamForVoice,
+  UNITY_MIX,
+  voiceMix,
+  voiceOfLevelParam,
+  type LevelParamId,
+  type Mixer,
+  type VoiceId,
+  type VoiceMix,
+} from './mixer'
+import {
+  resizeNoteStep,
+  toggleNoteAccent,
+  toggleNoteSlide,
+  toggleNoteStep,
+  transposeNoteStep,
+  withNoteFlags,
+  withNoteLanes,
+} from './note'
 import {
   createDemoPattern,
   createInitialPattern,
@@ -45,7 +69,15 @@ import {
   type SamplerSettings,
 } from './sampler'
 import { sliceKey } from './slice'
-import { clampBpm, DEFAULT_BPM, type TransportSettings } from './transport'
+import {
+  clampBpm,
+  clampSwing,
+  DEFAULT_BPM,
+  DEFAULT_SWING,
+  SWING_PARAM,
+  swingToPercent,
+  type TransportSettings,
+} from './transport'
 import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 
 /**
@@ -60,8 +92,12 @@ import type { LaneId, NoteLaneId, PadLaneId, Pattern } from './types'
 // the arc the user is on; v7 added the master-bus macros (filter, drive);
 // v8 added the shared FX bus and its per-instrument send levels; v9 added the
 // sampler's source metadata, pad lanes and pad settings; v10 makes the
-// curriculum multi-track — one lesson pointer per arc, plus the arc on screen.
-export const PROJECT_STATE_VERSION = 10
+// curriculum multi-track — one lesson pointer per arc, plus the arc on screen;
+// v11 adds swing to the transport; v12 keys the mixer by voice — bass and stab
+// join the drum and pad lanes — and gives every strip a Level; v13 makes
+// `patterns` the pattern bank: always four slots, A–D; v14 gives every note
+// step the 303 slide and accent flags and the bass patch Env Mod.
+export const PROJECT_STATE_VERSION = 14
 
 /**
  * The arc a document that predates the multi-track curriculum was on.
@@ -92,7 +128,15 @@ export interface InstrumentSettings {
 
 export interface ProjectState {
   version: number
+  /**
+   * The pattern bank: exactly four slots, in A–D order, each named by its
+   * letter. Only programming lives here; how the Deck sounds is shared.
+   */
   patterns: Pattern[]
+  /**
+   * The selected slot — the one the grid shows, edits go to and goals read.
+   * The engine keeps its own playing slot, which follows this at the next bar.
+   */
   activePatternId: string
   transport: TransportSettings
   instrumentSettings: InstrumentSettings
@@ -100,7 +144,7 @@ export interface ProjectState {
   sources: SampleSource[]
   lessonProgress: Record<string, LessonProgress>
   prefs: Record<string, unknown>
-  /** Per-lane mute/solo. Absent lanes are audible and un-soloed. */
+  /** Per-voice mute, solo and Level. Absent voices are audible, un-soloed, at unity. */
   mixer: Mixer
   /** Which curriculum track is on screen. */
   activeArcId: string
@@ -117,12 +161,12 @@ export interface ProjectState {
 }
 
 export function createInitialProjectState(): ProjectState {
-  const pattern = createInitialPattern()
+  const patterns = createBank(createInitialPattern())
   return {
     version: PROJECT_STATE_VERSION,
-    patterns: [pattern],
-    activePatternId: pattern.id,
-    transport: { bpm: DEFAULT_BPM },
+    patterns,
+    activePatternId: patterns[0].id,
+    transport: { bpm: DEFAULT_BPM, swing: DEFAULT_SWING },
     instrumentSettings: {
       bass: DEFAULT_BASS_SETTINGS,
       master: DEFAULT_MASTER_SETTINGS,
@@ -139,12 +183,12 @@ export function createInitialProjectState(): ProjectState {
 }
 
 /**
- * A fresh document pre-loaded with the demo groove, so the very first press
- * of play sounds like techno instead of silence.
+ * A fresh document pre-loaded with the demo groove in slot A, so the very
+ * first press of play sounds like techno instead of silence. B–D start empty.
  */
 export function createDemoProjectState(): ProjectState {
-  const pattern = createDemoPattern()
-  return { ...createInitialProjectState(), patterns: [pattern], activePatternId: pattern.id }
+  const patterns = createBank(createDemoPattern())
+  return { ...createInitialProjectState(), patterns, activePatternId: patterns[0].id }
 }
 
 /**
@@ -161,6 +205,43 @@ export function activePattern(state: ProjectState): Pattern {
   const pattern = state.patterns.find((p) => p.id === state.activePatternId)
   if (!pattern) throw new Error(`ProjectState has no pattern "${state.activePatternId}"`)
   return pattern
+}
+
+/**
+ * Select a slot: an ordinary document edit, so the grid shows it, edits go to
+ * it, goals evaluate it and autosave keeps it at once. Whether it is *heard*
+ * at once is the engine's business — while playing, it waits for the bar. The
+ * bank, the patches and the mixer all come through by reference: switching
+ * changes what is played, never how the Deck sounds.
+ */
+export function selectSlot(state: ProjectState, patternId: string): ProjectState {
+  if (!state.patterns.some((pattern) => pattern.id === patternId)) return state
+  return { ...state, activePatternId: patternId }
+}
+
+/**
+ * Copy the selected slot onto another: the target gets a deep copy of its
+ * lanes, keeps its own id and letter, and becomes the selected slot, so the
+ * variation is ready to change — and, while playing, comes in at the bar like
+ * any other press. Copying a slot onto itself does nothing. Asking before
+ * overwriting programming is the strip's job; this just does it.
+ */
+export function copySlot(state: ProjectState, targetId: string): ProjectState {
+  if (targetId === state.activePatternId) return state
+  const target = state.patterns.find((pattern) => pattern.id === targetId)
+  if (!target) return state
+  const source = activePattern(state)
+  return {
+    ...state,
+    patterns: state.patterns.map((p) => (p === target ? withProgrammingOf(target, source) : p)),
+    activePatternId: targetId,
+  }
+}
+
+/** Start the selected slot over: every lane emptied, the slot itself kept. */
+export function clearSlot(state: ProjectState): ProjectState {
+  if (isPatternEmpty(activePattern(state))) return state
+  return editActivePattern(state, emptiedPattern)
 }
 
 /** Immutably advance one step of the active pattern (off → on → accent → off). */
@@ -195,6 +276,24 @@ export function toggleActivePatternNoteStep(
   stepIndex: number,
 ): ProjectState {
   return editActivePattern(state, (p) => toggleNoteStep(p, laneId, stepIndex))
+}
+
+/** Immutably flip one note step's 303 accent in the active pattern, note or no note. */
+export function toggleActivePatternNoteAccent(
+  state: ProjectState,
+  laneId: NoteLaneId,
+  stepIndex: number,
+): ProjectState {
+  return editActivePattern(state, (p) => toggleNoteAccent(p, laneId, stepIndex))
+}
+
+/** Immutably flip one note step's 303 slide in the active pattern, note or no note. */
+export function toggleActivePatternNoteSlide(
+  state: ProjectState,
+  laneId: NoteLaneId,
+  stepIndex: number,
+): ProjectState {
+  return editActivePattern(state, (p) => toggleNoteSlide(p, laneId, stepIndex))
 }
 
 /** Immutably shift one note of the active pattern by semitones. */
@@ -403,6 +502,11 @@ export function setTransportBpm(state: ProjectState, bpm: number): ProjectState 
   return { ...state, transport: { ...state.transport, bpm: clampBpm(bpm) } }
 }
 
+/** Immutably set the transport swing, clamped to 50–75%. */
+export function setTransportSwing(state: ProjectState, swing: number): ProjectState {
+  return { ...state, transport: { ...state.transport, swing: clampSwing(swing) } }
+}
+
 const EMPTY_PROGRESS: LessonProgress = { completed: false, dismissed: false }
 
 /** Immutably merge partial progress for one lesson. */
@@ -464,29 +568,59 @@ export function enterLesson(
   )
 }
 
-const AUDIBLE: LaneMix = { muted: false, soloed: false }
-
-/** Immutably flip one field of one lane's mixer strip. */
-function updateLaneMix(
+/** Immutably change one voice's mixer strip. */
+function updateVoiceMix(
   state: ProjectState,
-  laneId: LaneId,
-  patch: Partial<LaneMix>,
+  voiceId: VoiceId,
+  patch: Partial<VoiceMix>,
 ): ProjectState {
-  const current = state.mixer[laneId] ?? AUDIBLE
   return {
     ...state,
-    mixer: { ...state.mixer, [laneId]: { ...current, ...patch } },
+    mixer: { ...state.mixer, [voiceId]: { ...voiceMix(state.mixer, voiceId), ...patch } },
   }
 }
 
-/** Immutably toggle a lane's mute. */
-export function toggleLaneMute(state: ProjectState, laneId: LaneId): ProjectState {
-  return updateLaneMix(state, laneId, { muted: !(state.mixer[laneId]?.muted ?? false) })
+/** Immutably toggle a voice's mute. */
+export function toggleVoiceMute(state: ProjectState, voiceId: VoiceId): ProjectState {
+  return updateVoiceMix(state, voiceId, { muted: !voiceMix(state.mixer, voiceId).muted })
 }
 
-/** Immutably toggle a lane's solo. */
-export function toggleLaneSolo(state: ProjectState, laneId: LaneId): ProjectState {
-  return updateLaneMix(state, laneId, { soloed: !(state.mixer[laneId]?.soloed ?? false) })
+/** Immutably toggle a voice's solo. */
+export function toggleVoiceSolo(state: ProjectState, voiceId: VoiceId): ProjectState {
+  return updateVoiceMix(state, voiceId, { soloed: !voiceMix(state.mixer, voiceId).soloed })
+}
+
+/** Immutably set a voice's Level, clamped to silence…+6 dB. */
+export function setVoiceLevel(state: ProjectState, voiceId: VoiceId, level: number): ProjectState {
+  return updateVoiceMix(state, voiceId, {
+    level: clampParam(levelParamForVoice(voiceId), level),
+  })
+}
+
+/** Immutably set the Level a uniquely named Level knob turns. */
+export function setLevelParamValue(
+  state: ProjectState,
+  id: LevelParamId,
+  level: number,
+): ProjectState {
+  return setVoiceLevel(state, voiceOfLevelParam(id), level)
+}
+
+/**
+ * Where one knob sits now, in the knob's own units: the counterpart of the
+ * per-family setters above. A sweep needs it, because the position a knob
+ * moved *from* over a running loop is part of the motion.
+ */
+export function deckParamValue(state: ProjectState, id: DeckParamId): number {
+  const { bass, master, fx, sampler } = state.instrumentSettings
+  if (BASS_PARAMS.some((param) => param.id === id)) return bass[id as BassParamId]
+  if (MASTER_PARAMS.some((param) => param.id === id)) return master[id as MasterParamId]
+  if (FX_PARAMS.some((param) => param.id === id)) return fx[id as FxParamId]
+  if (LEVEL_PARAMS.some((param) => param.id === id)) {
+    return voiceMix(state.mixer, voiceOfLevelParam(id as LevelParamId)).level
+  }
+  if (id === SWING_PARAM.id) return swingToPercent(state.transport.swing)
+  return sampler[SAMPLER_PARAMS.find((param) => param.id === id)!.padId].tune
 }
 
 /**
@@ -519,7 +653,21 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
     case 8:
       return migrateProjectState(migrateV8ToV9(doc as ProjectStateV8))
     case 9:
-      return migrateV9ToV10(doc as ProjectStateV9)
+      return migrateProjectState(migrateV9ToV10(doc as ProjectStateV9))
+    case 10:
+      return migrateProjectState(migrateV10ToV11(doc as ProjectStateV10))
+    case 11:
+      return migrateProjectState(migrateV11ToV12(doc as ProjectStateV11))
+    case 12: {
+      // Every v12 document held exactly one pattern; one with none is corrupt,
+      // and a fresh deck beats a bank invented around nothing.
+      const v12 = doc as ProjectStateV12
+      return Array.isArray(v12.patterns) && v12.patterns.length > 0
+        ? migrateProjectState(migrateV12ToV13(v12))
+        : null
+    }
+    case 13:
+      return migrateV13ToV14(doc as ProjectStateV13)
     case PROJECT_STATE_VERSION:
       return raw as ProjectState
     default:
@@ -533,10 +681,20 @@ export function migrateProjectState(raw: unknown): ProjectState | null {
  */
 type SingleArcPointer = { activeLessonId: string | null }
 
+/** Every document before v11 kept a tempo and nothing else on the transport. */
+type TransportPreV11 = { bpm: number }
+
 type ProjectStateBase = Omit<
   ProjectState,
-  'version' | 'mixer' | 'instrumentSettings' | 'activeArcId' | 'activeLessonIds' | 'sources'
+  | 'version'
+  | 'transport'
+  | 'mixer'
+  | 'instrumentSettings'
+  | 'activeArcId'
+  | 'activeLessonIds'
+  | 'sources'
 > & {
+  transport: TransportPreV11
   instrumentSettings: Record<string, unknown>
 }
 
@@ -553,8 +711,11 @@ type ProjectStateV1 = ProjectStateBase & { version: 1 }
 /** v2 grew the full kit but had no mixer. */
 type ProjectStateV2 = ProjectStateBase & { version: 2 }
 
+/** Every mixer strip before v12: mute and solo, keyed by drum or pad lane. */
+type MixerPreV12 = Partial<Record<string, Partial<Omit<VoiceMix, 'level'>>>>
+
 /** v3 had the mixer, but patterns were drums-only and no synth was patched. */
-type ProjectStateV3 = ProjectStateBase & { version: 3; mixer: Mixer }
+type ProjectStateV3 = ProjectStateBase & { version: 3; mixer: MixerPreV12 }
 
 /** Instrument patches before v7 carried only the bass; the master bus had no macros. */
 interface InstrumentSettingsPreV7 {
@@ -564,9 +725,9 @@ interface InstrumentSettingsPreV7 {
 /** Every version up to v9 carried one arc's worth of state, hence one pointer. */
 type SingleArcProjectState = Omit<
   ProjectState,
-  'version' | 'instrumentSettings' | 'sources' | 'activeArcId' | 'activeLessonIds'
+  'version' | 'transport' | 'instrumentSettings' | 'sources' | 'activeArcId' | 'activeLessonIds'
 > &
-  SingleArcPointer
+  SingleArcPointer & { transport: TransportPreV11 }
 
 /** v4 added the bass lane and synth patch, but no stab lane yet. */
 type ProjectStateV4 = Omit<SingleArcProjectState, 'activeLessonId'> & {
@@ -607,6 +768,25 @@ type ProjectStateV9 = SingleArcProjectState & {
   version: 9
   instrumentSettings: InstrumentSettings
   sources: SampleSource[]
+}
+
+/** v10 had the multi-track curriculum, but every 16th sat dead on the grid. */
+type ProjectStateV10 = Omit<ProjectState, 'version' | 'transport' | 'mixer'> & {
+  version: 10
+  transport: TransportPreV11
+  mixer: MixerPreV12
+}
+
+/** v12 had one pattern and no bank. */
+type ProjectStateV12 = Omit<ProjectState, 'version'> & { version: 12 }
+
+/** v13 had the bank, but no 303 flags on a note step and no Env Mod on the bass. */
+type ProjectStateV13 = Omit<ProjectState, 'version'> & { version: 13 }
+
+/** v11 had swing, but no Level, and bass and stab had no strip of their own. */
+type ProjectStateV11 = Omit<ProjectState, 'version' | 'mixer'> & {
+  version: 11
+  mixer: MixerPreV12
 }
 
 function migrateV0ToV1(doc: object): ProjectStateV1 {
@@ -701,7 +881,7 @@ function migrateV8ToV9(doc: ProjectStateV8): ProjectStateV9 {
   }
 }
 
-function migrateV9ToV10(doc: ProjectStateV9): ProjectState {
+function migrateV9ToV10(doc: ProjectStateV9): ProjectStateV10 {
   const { activeLessonId, ...rest } = doc
   return {
     ...rest,
@@ -716,5 +896,48 @@ function migrateV9ToV10(doc: ProjectStateV9): ProjectState {
     // The curated source became a break in this slice. Only shipped sources are
     // ever retired — the user's own bank is theirs.
     sources: withShippedSources(doc.sources ?? []),
+  }
+}
+
+function migrateV10ToV11(doc: ProjectStateV10): ProjectStateV11 {
+  return {
+    ...doc,
+    version: 11,
+    // Straight, because that is what every v10 beat played: an upgraded
+    // document has to sound exactly the way its owner left it.
+    transport: { bpm: doc.transport.bpm, swing: DEFAULT_SWING },
+  }
+}
+
+function migrateV11ToV12(doc: ProjectStateV11): ProjectStateV12 {
+  // Unity on every strip, because that is what every v11 voice played at; a
+  // strip missing a flag gets its resting value, so the share validator can
+  // insist on complete strips from here on.
+  const mixer: Mixer = Object.fromEntries(
+    Object.entries(doc.mixer ?? {}).map(([voiceId, mix]) => [voiceId, { ...UNITY_MIX, ...mix }]),
+  )
+  return { ...doc, version: 12, mixer }
+}
+
+function migrateV12ToV13(doc: ProjectStateV12): ProjectStateV13 {
+  // The pattern the user had becomes slot A under the same id, so the saved
+  // selection still names it and it plays exactly as before; B–D arrive empty.
+  const saved = doc.patterns.find((pattern) => pattern.id === doc.activePatternId) ?? doc.patterns[0]
+  const patterns = createBank(saved)
+  return { ...doc, version: 13, patterns, activePatternId: patterns[0].id }
+}
+
+function migrateV13ToV14(doc: ProjectStateV13): ProjectState {
+  return {
+    ...doc,
+    version: 14,
+    // Slide and accent off on every note step of every slot, and Env Mod at 0:
+    // no v13 note glided, hit harder or opened the filter, so an upgraded bass
+    // has to sound exactly the way its owner left it.
+    patterns: doc.patterns.map(withNoteFlags),
+    instrumentSettings: {
+      ...doc.instrumentSettings,
+      bass: createBassSettings(doc.instrumentSettings?.bass),
+    },
   }
 }

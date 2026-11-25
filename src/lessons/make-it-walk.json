@@ -1,0 +1,7 @@
+{
+  "id": "make-it-walk",
+  "title": "Make It Walk",
+  "intro": "One pitch is a drone. Give the line somewhere to go: Tab to a lit bass note (or click it off and back on, which places and focuses it) and press ↑ or ↓ to move it in semitones (shift moves a whole octave). Keep the root on most of the steps and lift a few — an octave jump and one note in between are plenty. Three different pitches across the line and it starts to walk.",
+  "spotlight": ["noteLane:bass"],
+  "goal": [{ "type": "pitchesVaried", "lane": "bass", "min": 3 }]
+}

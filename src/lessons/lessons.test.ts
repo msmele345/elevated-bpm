@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { detectLessonCompletion, goalContextFor, lessonsAlreadyMet } from '../model/arc'
+import {
+  detectLessonCompletion,
+  goalContextFor,
+  lessonsAlreadyMet,
+  slotsAlreadyMeeting,
+} from '../model/arc'
 import { DECK_PARAM_IDS } from '../model/deckParams'
 import {
   isGoalMet,
@@ -10,9 +15,10 @@ import {
   type Lesson,
   type SamplerGoalContext,
 } from '../model/lesson'
-import { NOTE_LANES } from '../model/note'
-import { createDemoPattern, createInitialPattern } from '../model/pattern'
-import { createDemoProjectState } from '../model/projectState'
+import { NOTE_FLAG_LANES, NOTE_LANES } from '../model/note'
+import { progressChip, progressChips } from '../model/progressChip'
+import { KIT_LANES, createDemoPattern, createInitialPattern } from '../model/pattern'
+import { createDemoProjectState, selectSlot } from '../model/projectState'
 import { MAX_SLICE_SECONDS } from '../model/region'
 import {
   CURATED_SAMPLE_SOURCE,
@@ -20,11 +26,18 @@ import {
   createSamplerSettings,
   type SampleSource,
 } from '../model/sampler'
-import { DEFAULT_BPM } from '../model/transport'
+import {
+  DEFAULT_BPM,
+  DEFAULT_SWING,
+  MAX_SWING,
+  swingFromPercent,
+  swingToPercent,
+} from '../model/transport'
 import type { DrumLaneId, NoteLaneId, PadLaneId, Pattern } from '../model/types'
 import { ALL_LESSONS, ARCS, arcById } from './index'
 
 const TECHNO = arcById('techno')
+const ACID = arcById('acid')
 const SAMPLING = arcById('sampling')
 
 /**
@@ -87,6 +100,32 @@ function setNoteSteps(pattern: Pattern, laneId: NoteLaneId, on: Set<number>): Pa
         : lane,
     ),
   }
+}
+
+/** Set one 303 flag on exactly the listed steps of a note lane, and off everywhere else. */
+function setNoteFlag(
+  pattern: Pattern,
+  laneId: NoteLaneId,
+  flag: 'accent' | 'slide',
+  steps: Set<number>,
+): Pattern {
+  return {
+    ...pattern,
+    noteLanes: pattern.noteLanes.map((lane) =>
+      lane.id === laneId
+        ? {
+            ...lane,
+            steps: lane.steps.map((step, index) => ({ ...step, [flag]: steps.has(index) })),
+          }
+        : lane,
+    ),
+  }
+}
+
+/** Steps of a note lane whose flag is set under a note that is on. */
+function flaggedNoteSteps(pattern: Pattern, laneId: NoteLaneId, flag: 'accent' | 'slide'): number[] {
+  const lane = pattern.noteLanes.find((candidate) => candidate.id === laneId)!
+  return lane.steps.flatMap((step, index) => (step.on && step[flag] ? [index] : []))
 }
 
 function activeDrumStepIndexes(pattern: Pattern, laneId: DrumLaneId): Set<number> {
@@ -174,6 +213,7 @@ function satisfyingContext(lesson: Lesson): GoalContext {
   let context: GoalContext = {
     pattern: createInitialPattern(),
     bpm: DEFAULT_BPM,
+    swing: DEFAULT_SWING,
     sampler: EMPTY_SAMPLER,
   }
 
@@ -232,8 +272,44 @@ function satisfyingContext(lesson: Lesson): GoalContext {
         }
         break
       }
+      case 'notesAccented': {
+        const on = activeNoteStepIndexes(context.pattern, goal.lane)
+        for (let step = 0; on.size < goal.min; step += 1) on.add(step)
+        const accented = [...on].sort((a, b) => a - b).slice(0, goal.min)
+        context = {
+          ...context,
+          pattern: setNoteFlag(
+            setNoteSteps(context.pattern, goal.lane, on),
+            goal.lane,
+            'accent',
+            new Set(accented),
+          ),
+        }
+        break
+      }
+      case 'notesSlid': {
+        // Built from the public step shape, not slideReach: each slid note is a
+        // one-step note with another note on the very next step, which is the
+        // plainest glide there is.
+        const on = activeNoteStepIndexes(context.pattern, goal.lane)
+        for (let step = 0; on.size < goal.min + 1; step += 1) on.add(step)
+        const placed = setNoteSteps(context.pattern, goal.lane, on)
+        const lane = placed.noteLanes.find((candidate) => candidate.id === goal.lane)!
+        const gliding = [...on]
+          .sort((a, b) => a - b)
+          .filter((step) => lane.steps[step].length === 1 && on.has(step + 1))
+          .slice(0, goal.min)
+        context = {
+          ...context,
+          pattern: setNoteFlag(placed, goal.lane, 'slide', new Set(gliding)),
+        }
+        break
+      }
       case 'bpmInRange':
         context = { ...context, bpm: goal.min }
+        break
+      case 'swingInRange':
+        context = { ...context, swing: swingFromPercent(goal.min) }
         break
       case 'paramSwept':
         context = {
@@ -369,8 +445,24 @@ function nearMiss(context: GoalContext, goal: GoalAssertion): GoalContext {
         },
       }
     }
+    case 'notesAccented':
+    case 'notesSlid': {
+      // One flag short: the line, its pitches and the other flag stay as they were.
+      const flag = goal.type === 'notesAccented' ? 'accent' : 'slide'
+      const kept = flaggedNoteSteps(context.pattern, goal.lane, flag).slice(0, goal.min - 1)
+      return { ...context, pattern: setNoteFlag(context.pattern, goal.lane, flag, new Set(kept)) }
+    }
     case 'bpmInRange':
       return { ...context, bpm: goal.min - 1 }
+    case 'swingInRange':
+      // One percent outside whichever end the knob can still reach past.
+      return {
+        ...context,
+        swing:
+          goal.max < swingToPercent(MAX_SWING)
+            ? swingFromPercent(goal.max + 1)
+            : swingFromPercent(goal.min - 1),
+      }
     case 'paramSwept':
       return {
         ...context,
@@ -481,6 +573,55 @@ describe('the curriculum', () => {
     }
   })
 
+  it('opens with no slot of the bank satisfying any lesson, on any track', () => {
+    // Slot A holds the demo and B–D are empty — but a learner can select any of
+    // them, so the demo rule has to hold of every slot, not just the first.
+    const opening = createDemoProjectState()
+    expect(opening.patterns.map((pattern) => pattern.name)).toEqual(['A', 'B', 'C', 'D'])
+    for (const slot of opening.patterns) {
+      const context = goalContextFor(selectSlot(opening, slot.id))
+      for (const lesson of ALL_LESSONS) {
+        expect([slot.name, lesson.id, isGoalMet(lesson, context)]).toEqual([
+          slot.name,
+          lesson.id,
+          false,
+        ])
+      }
+    }
+    expect(slotsAlreadyMeeting(ALL_LESSONS, opening)).toEqual(new Map())
+  })
+
+  it('spotlights a flag row only on a lane that shows one', () => {
+    for (const lesson of ALL_LESSONS) {
+      for (const target of lesson.spotlight) {
+        const flagRow = /^(?:accentRow|slideRow):(.*)$/.exec(target)
+        if (flagRow) expect(NOTE_FLAG_LANES).toContain(flagRow[1])
+      }
+    }
+  })
+
+  it('spotlights only controls the deck actually has, of every kind', () => {
+    // A mistyped target lights nothing and fails nowhere, so the whole
+    // vocabulary is checked here: every kind, and the ids each kind may name.
+    const known: Record<string, readonly string[]> = {
+      lane: KIT_LANES.map((lane) => lane.id),
+      noteLane: NOTE_LANES.map((lane) => lane.id),
+      knob: [...DECK_PARAM_IDS],
+      pad: PAD_LANES.map((pad) => pad.id),
+      accentRow: NOTE_FLAG_LANES,
+      slideRow: NOTE_FLAG_LANES,
+      transport: ['tempo'],
+      keyboard: ['stab'],
+      sampler: ['sources'],
+    }
+    for (const lesson of ALL_LESSONS) {
+      for (const target of lesson.spotlight) {
+        const [kind, id] = target.split(':')
+        expect([lesson.id, target, known[kind]?.includes(id)]).toEqual([lesson.id, target, true])
+      }
+    }
+  })
+
   it('names only knobs the deck actually has, on every track', () => {
     for (const lesson of ALL_LESSONS) {
       for (const paramId of spotlitParamIds(lesson)) expect(DECK_PARAM_IDS).toContain(paramId)
@@ -526,6 +667,38 @@ describe('the curriculum', () => {
             { justCompleted: false, showFinale: false },
           ])
         }
+      }
+    }
+  })
+
+  it('gives every assertion of every shipped lesson a chip, with no JSON edits', () => {
+    const lessons = ARCS.flatMap((arc) => arc.lessons)
+    expect(lessons).toHaveLength(27)
+    for (const lesson of lessons) {
+      for (const context of [openingContext(), satisfyingContext(lesson)]) {
+        const chips = progressChips(lesson, context)
+        expect(chips).toHaveLength(lesson.goal.length)
+        for (const chip of chips) {
+          expect([lesson.id, chip.text]).not.toEqual([lesson.id, expect.stringMatching(/undefined|NaN|^\s|\s$/)])
+          expect(chip.text.length).toBeGreaterThan(3)
+        }
+      }
+    }
+  })
+
+  it('shows every chip met when the lesson is, and the broken one unmet on a near miss', () => {
+    for (const lesson of ARCS.flatMap((arc) => arc.lessons)) {
+      const complete = satisfyingContext(lesson)
+      expect([lesson.id, progressChips(lesson, complete).every((chip) => chip.met)]).toEqual([
+        lesson.id,
+        true,
+      ])
+      for (const goal of lesson.goal) {
+        expect([lesson.id, goal.type, progressChip(goal, nearMiss(complete, goal)).met]).toEqual([
+          lesson.id,
+          goal.type,
+          false,
+        ])
       }
     }
   })
@@ -596,6 +769,105 @@ describe('the techno arc', () => {
         lesson.goal.filter((goal) => 'lane' in goal && goal.lane === 'perc'),
       ),
     ).toEqual([])
+  })
+})
+
+describe('the acid arc', () => {
+  it('sits between techno and sampling on the selector', () => {
+    expect(ARCS.map((arc) => arc.id)).toEqual(['techno', 'acid', 'sampling'])
+    expect(ACID.title).toBe('Acid')
+    expect(ACID.blurb).toBe('One bassline, endlessly bent.')
+  })
+
+  it('is seven lessons, a busy line of sixteenths to a shuffled, accented, sliding one', () => {
+    expect(ACID.lessons.map((lesson) => lesson.id)).toEqual([
+      'sixteenths',
+      'make-it-walk',
+      'accent-it',
+      'slide-into-it',
+      'env-mod-sweep',
+      'shuffle',
+      'your-first-acid-line',
+    ])
+    expect(ACID.lessons.map((lesson) => lesson.goal)).toEqual([
+      [{ type: 'notesPlaced', lane: 'bass', min: 8 }],
+      [{ type: 'pitchesVaried', lane: 'bass', min: 3 }],
+      [{ type: 'notesAccented', lane: 'bass', min: 3 }],
+      [{ type: 'notesSlid', lane: 'bass', min: 2 }],
+      [{ type: 'paramSwept', param: 'envMod', minTravel: 0.5 }],
+      [{ type: 'swingInRange', min: 56, max: 66 }],
+      [
+        { type: 'notesPlaced', lane: 'bass', min: 8 },
+        { type: 'pitchesVaried', lane: 'bass', min: 3 },
+        { type: 'notesAccented', lane: 'bass', min: 2 },
+        { type: 'notesSlid', lane: 'bass', min: 2 },
+        { type: 'swingInRange', min: 54, max: 70 },
+      ],
+    ])
+  })
+
+  it('spotlights the control each lesson is about', () => {
+    expect(ACID.lessons.slice(2, 6).map((lesson) => lesson.spotlight)).toEqual([
+      ['accentRow:bass'],
+      ['slideRow:bass'],
+      ['knob:envMod'],
+      ['knob:swing'],
+    ])
+  })
+
+  it('stays on the bass: every lane it asserts is the one the 303 flags live on', () => {
+    expect(goalLanes(ACID.lessons, 'drum')).toEqual(new Set())
+    expect(goalLanes(ACID.lessons, 'note')).toEqual(new Set(NOTE_FLAG_LANES))
+  })
+
+  it('ends in the compact graduation, certified as the bass synth itself', () => {
+    expect(ACID.finale.scale).toBe('compact')
+    expect(ACID.finale.kicker).toContain('BL-303')
+    // Techno stays the one grand ending on the deck.
+    expect(ARCS.filter((arc) => arc.finale.scale === 'grand').map((arc) => arc.id)).toEqual([
+      'techno',
+    ])
+  })
+
+  it('opens unearned: the demo bass is empty and the swing is straight', () => {
+    const opening = createDemoProjectState()
+    expect(opening.transport.swing).toBe(DEFAULT_SWING)
+    expect(activeNoteStepIndexes(createDemoPattern(), 'bass')).toEqual(new Set())
+    for (const lesson of ACID.lessons) {
+      expect(progressChips(lesson, goalContextFor(opening)).some((chip) => chip.met)).toBe(false)
+    }
+  })
+
+  it('chips every goal of the capstone, starting from the opening deck', () => {
+    const capstone = ACID.lessons[ACID.lessons.length - 1]
+    expect(progressChips(capstone, openingContext()).map((chip) => chip.text)).toEqual([
+      'Bass notes 0/8',
+      'Bass pitches 0/3',
+      'Bass accents 0/2',
+      'Bass slides 0/2',
+      'Swing 50% → 54–70%',
+    ])
+  })
+
+  it('does not count a slide into an empty step towards the capstone', () => {
+    const capstone = ACID.lessons[ACID.lessons.length - 1]
+    const complete = satisfyingContext(capstone)
+    const last = flaggedNoteSteps(complete.pattern, 'bass', 'slide').at(-1)!
+    // Move the note the last slide glides into to the end of the bar: the slid
+    // note now reaches a rest, so it ties instead of connecting, while the line
+    // keeps its length, its pitches and its accents.
+    const on = activeNoteStepIndexes(complete.pattern, 'bass')
+    on.delete(last + 1)
+    on.add(15)
+    const tied = { ...complete, pattern: setNoteSteps(complete.pattern, 'bass', on) }
+    expect(isGoalMet(capstone, tied)).toBe(false)
+    expect(progressChips(capstone, tied).map((chip) => chip.met)).toEqual([
+      true,
+      true,
+      true,
+      false,
+      true,
+    ])
   })
 })
 

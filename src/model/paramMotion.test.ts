@@ -44,4 +44,22 @@ describe('observeParamMotion', () => {
     expect(paramTravel(swept, 'cutoff')).toBeGreaterThan(0.5)
     expect(paramTravel(jiggled, 'cutoff')).toBeLessThan(0.1)
   })
+
+  it('counts where the knob sat before a move made over the running loop', () => {
+    // One End press from rest is a full sweep: the knob sat at the bottom while
+    // the loop played, then it was at the top.
+    const motion = observeParamMotion(NO_PARAM_MOTION, cutoff, cutoff.max, true, cutoff.min)
+    expect(paramTravel(motion, 'cutoff')).toBeCloseTo(1)
+  })
+
+  it('folds the starting point into a span that already exists', () => {
+    let motion = observeParamMotion(NO_PARAM_MOTION, cutoff, 3000, true, 3000)
+    motion = observeParamMotion(motion, cutoff, cutoff.max, true, cutoff.min)
+    expect(motion.cutoff).toEqual({ min: 0, max: 1 })
+  })
+
+  it('ignores the starting point too while the transport is stopped', () => {
+    const motion = observeParamMotion(NO_PARAM_MOTION, cutoff, cutoff.max, false, cutoff.min)
+    expect(motion).toBe(NO_PARAM_MOTION)
+  })
 })

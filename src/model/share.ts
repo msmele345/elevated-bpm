@@ -1,3 +1,4 @@
+import { bankWithSlots, slotLetterOf, type SlotLetter } from './bank'
 import { activePattern, PROJECT_STATE_VERSION, type ProjectState } from './projectState'
 import { PAD_LANES, padAudioState, type AvailableAudio } from './sampler'
 import {
@@ -6,7 +7,7 @@ import {
   compressPayload,
   decompressPayload,
   MALFORMED_SHARE_MESSAGE,
-  projectForSharing,
+  projectForLink,
   readSharedDocument,
   UNSUPPORTED_VERSION_MESSAGE,
 } from './sharePayload'
@@ -40,9 +41,18 @@ function malformedShare(): SharedProjectResult {
   return { status: 'error', code: 'malformed', message: MALFORMED_SHARE_MESSAGE }
 }
 
-/** Build a share URL without disturbing unrelated query parameters. */
-export async function createShareUrl(project: ProjectState, baseUrl: string): Promise<string> {
-  const compressed = await compressPayload(projectForSharing(project))
+/**
+ * A link, and what it had to leave behind: `onlySlot` names the one slot it
+ * holds when the whole bank would not fit, and is null when it carries them all.
+ */
+export interface ShareLink {
+  url: string
+  onlySlot: SlotLetter | null
+}
+
+/** Encode a payload into `baseUrl` without disturbing unrelated query parameters. */
+async function linkFor(payload: ProjectState, baseUrl: string): Promise<string> {
+  const compressed = await compressPayload(payload)
   const url = new URL(baseUrl)
   url.searchParams.set(
     SHARE_QUERY_PARAM,
@@ -52,21 +62,44 @@ export async function createShareUrl(project: ProjectState, baseUrl: string): Pr
 }
 
 /**
+ * Build a share link carrying the whole bank. A bank too big for the URL
+ * ceiling falls back to the one slot the sender is hearing — `playingSlotId`,
+ * the selected slot when stopped — and says so, so the sender can reach for a
+ * bundle instead of finding out from a friend that B–D never arrived.
+ */
+export async function createShareLink(
+  project: ProjectState,
+  baseUrl: string,
+  playingSlotId: string = project.activePatternId,
+): Promise<ShareLink> {
+  const url = await linkFor(projectForLink(project), baseUrl)
+  if (url.length <= PRACTICAL_SHARE_URL_LIMIT) return { url, onlySlot: null }
+  const fallback = projectForLink(project, playingSlotId)
+  return {
+    url: await linkFor(fallback, baseUrl),
+    onlySlot: slotLetterOf(activePattern(fallback)),
+  }
+}
+
+/** The URL alone, for a caller with no use for what it left behind. */
+export async function createShareUrl(project: ProjectState, baseUrl: string): Promise<string> {
+  return (await createShareLink(project, baseUrl)).url
+}
+
+/**
  * Put a shared beat on the deck while retaining recipient-only curriculum and
- * preference data. The caller decides whether this preview is ever persisted.
+ * preference data. The shared bank takes the recipient's place slot for slot —
+ * the sender's B is the recipient's B — and the recipient's own bank is theirs
+ * to come back to: the caller decides whether this preview is ever persisted.
  */
 export function projectWithSharedBeat(
   base: ProjectState,
   sharedProject: ProjectState,
 ): ProjectState {
-  const pattern = activePattern(sharedProject)
-  const inactivePatterns = base.patterns.filter(
-    (candidate) => candidate.id !== base.activePatternId && candidate.id !== pattern.id,
-  )
   return {
     ...base,
-    patterns: [...inactivePatterns, pattern],
-    activePatternId: pattern.id,
+    patterns: bankWithSlots(sharedProject.patterns),
+    activePatternId: sharedProject.activePatternId,
     transport: sharedProject.transport,
     instrumentSettings: sharedProject.instrumentSettings,
     sources: sharedProject.sources,

@@ -1,9 +1,10 @@
 import { STEP_COUNT, type NoteLane, type NoteLaneId, type NoteStep, type Pattern } from './types'
 
 /**
- * Note lanes: the melodic half of a pattern. A step carries a pitch and a
- * length instead of an accent, and the lane is played monophonically — one
- * note at a time, a later note cutting the one still ringing.
+ * Note lanes: the melodic half of a pattern. A step carries a pitch, a length
+ * and the 303 slide and accent flags instead of a drum accent, and the lane is
+ * played monophonically — one note at a time, a later note cutting the one
+ * still ringing.
  */
 
 /** MIDI note the bass lane parks on: C2, the root a 303 line usually sits on. */
@@ -49,11 +50,20 @@ export const NOTE_LANES: ReadonlyArray<NoteLaneSpec> = [
   },
 ]
 
+/**
+ * The note lanes that show and play the 303 flags. Every note step carries
+ * them, but only these lanes have Accent and Slide rows and a voice that reads
+ * them — the stab keeps a flag it is given and ignores it.
+ */
+export const NOTE_FLAG_LANES: ReadonlyArray<NoteLaneId> = ['bass']
+
 function emptyNoteSteps(defaultPitch: number): NoteStep[] {
   return Array.from({ length: STEP_COUNT }, () => ({
     on: false,
     pitch: defaultPitch,
     length: MIN_NOTE_LENGTH,
+    slide: false,
+    accent: false,
   }))
 }
 
@@ -86,6 +96,25 @@ export function withNoteLanes(pattern: Pattern): Pattern {
   }
 }
 
+/**
+ * Return the pattern with the 303 flags on every note step, off where a step
+ * has none. Flags a step already carries are kept, so this is safe to run on a
+ * pattern of any age — it is what lifts a pattern saved before v14.
+ */
+export function withNoteFlags(pattern: Pattern): Pattern {
+  return {
+    ...pattern,
+    noteLanes: pattern.noteLanes.map((lane) => ({
+      ...lane,
+      steps: lane.steps.map((step) => ({
+        ...step,
+        slide: step.slide ?? false,
+        accent: step.accent ?? false,
+      })),
+    })),
+  }
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
@@ -113,6 +142,23 @@ function mapNoteStep(
  */
 export function toggleNoteStep(pattern: Pattern, laneId: NoteLaneId, stepIndex: number): Pattern {
   return mapNoteStep(pattern, laneId, stepIndex, (step) => ({ ...step, on: !step.on }))
+}
+
+/**
+ * Immutably flip one note step's accent. It flips whether or not the note is
+ * on, and stays put when the note is switched off and on, so an accent can be
+ * placed before the note it belongs to.
+ */
+export function toggleNoteAccent(pattern: Pattern, laneId: NoteLaneId, stepIndex: number): Pattern {
+  return mapNoteStep(pattern, laneId, stepIndex, (step) => ({ ...step, accent: !step.accent }))
+}
+
+/**
+ * Immutably flip one note step's slide. Like accent, it flips whether or not
+ * the note is on and is kept through switching the note off and on.
+ */
+export function toggleNoteSlide(pattern: Pattern, laneId: NoteLaneId, stepIndex: number): Pattern {
+  return mapNoteStep(pattern, laneId, stepIndex, (step) => ({ ...step, slide: !step.slide }))
 }
 
 /** Immutably shift one note by `semitones`, clamped to the lane's range. */
@@ -149,6 +195,8 @@ export interface NoteEvent {
   frequency: number
   /** How many 16ths the note actually rings for, once the next note cuts it. */
   lengthSteps: number
+  /** The step's 303 accent. Only the bass voice reads it. */
+  accent: boolean
 }
 
 export interface LaneNoteEvent extends NoteEvent {
@@ -184,15 +232,30 @@ export function noteEventAtStep(
     midi: step.pitch,
     frequency: midiToFrequency(step.pitch),
     lengthSteps: stepsUntilNextNote(lane.steps, stepIndex, step.length),
+    accent: step.accent,
   }
 }
 
-/** Every melodic event starting on one shared 16th-note transport boundary. */
-export function noteEventsAtStep(pattern: Pattern, stepIndex: number): LaneNoteEvent[] {
-  return NOTE_LANES.flatMap(({ id }) => {
-    const event = noteEventAtStep(pattern, id, stepIndex)
-    return event ? [{ laneId: id, ...event }] : []
-  })
+/** The step a slid note's gate reaches, and whether a note or a rest is there. */
+export interface SlideReach {
+  step: number
+  into: 'note' | 'rest'
+}
+
+/**
+ * Where a slid note's gate goes: the step right after the note ends, measured
+ * from its clipped length so it agrees with what sounds. `note` when that step
+ * holds a note — the line glides into it without restarting — and `rest` when
+ * it is empty, so the slid note ties through it and then releases. Null when
+ * the step has no note or no slide: a slide parked on an empty step does
+ * nothing until a note comes in under it.
+ */
+export function slideReach(lane: NoteLane, stepIndex: number): SlideReach | null {
+  const step = lane.steps[stepIndex]
+  if (!step?.on || !step.slide) return null
+  const ahead = stepsUntilNextNote(lane.steps, stepIndex, step.length)
+  const reached = (stepIndex + ahead) % lane.steps.length
+  return { step: reached, into: lane.steps[reached].on ? 'note' : 'rest' }
 }
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']

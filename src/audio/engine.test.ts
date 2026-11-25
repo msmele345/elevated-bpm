@@ -7,6 +7,29 @@ import {
   createSamplerSettings,
 } from '../model/sampler'
 import { createInitialPattern, cycleStep } from '../model/pattern'
+import {
+  midiToFrequency,
+  resizeNoteStep,
+  toggleNoteAccent,
+  toggleNoteSlide,
+  toggleNoteStep,
+  transposeNoteStep,
+} from '../model/note'
+import { DEFAULT_BASS_SETTINGS } from '../model/bass'
+import { createBank } from '../model/bank'
+import type { Pattern } from '../model/types'
+import {
+  ACCENT_ENV_OCTAVES,
+  ACCENT_GAIN,
+  LEGATO_ACCENT_SECONDS,
+  SLIDE_SECONDS,
+  UNACCENTED_GAIN,
+} from './stepResolution'
+
+/** Hand the engine a bank of one slot, selected — the deck before the bank. */
+function playSoleSlot(engine: typeof import('./engine'), pattern: Pattern): void {
+  engine.setBank([pattern], pattern.id)
+}
 
 const tone = vi.hoisted(() => {
   let resolveLoaded!: () => void
@@ -26,6 +49,22 @@ const tone = vi.hoisted(() => {
     loadedPromise,
     resolveLoaded: () => resolveLoaded(),
     repeatCallbacks: [] as Array<(time: number) => void>,
+    synths: [] as Array<{
+      triggerAttackRelease: ReturnType<typeof vi.fn>
+      triggerAttack: ReturnType<typeof vi.fn>
+      triggerRelease: ReturnType<typeof vi.fn>
+      frequency: { exponentialRampTo: ReturnType<typeof vi.fn> }
+    }>,
+    envelopes: [] as Array<{
+      decay: number
+      /** The decay each attack was scheduled with — read at call time, as Tone does. */
+      decaysAtAttack: number[]
+      triggerAttack: ReturnType<typeof vi.fn>
+    }>,
+    polySynths: [] as Array<{
+      triggerAttack: ReturnType<typeof vi.fn>
+      triggerAttackRelease: ReturnType<typeof vi.fn>
+    }>,
   }
 })
 
@@ -36,11 +75,15 @@ vi.mock('tone', () => {
       this.value = value
     })
     setValueAtTime = vi.fn()
+    exponentialRampTo = vi.fn()
     cancelScheduledValues = vi.fn()
   }
 
   class Node {
-    connect() {
+    /** Where this node was last connected, so a test can find a player's gain. */
+    destination: unknown = null
+    connect(destination?: unknown) {
+      this.destination = destination
       return this
     }
     toDestination() {
@@ -50,9 +93,15 @@ vi.mock('tone', () => {
 
   class Gain extends Node {
     gain = new AudioParam()
+    /**
+     * The value the node was built at. Real Tone ramps start a look-ahead from
+     * now, so this — not the last ramp target — is what the first note hears.
+     */
+    built: number
     constructor(value = 0) {
       super()
       this.gain.value = value
+      this.built = value
     }
   }
 
@@ -74,6 +123,20 @@ vi.mock('tone', () => {
   class Filter extends Node {
     frequency = new AudioParam()
     Q = new AudioParam()
+    detune = new AudioParam()
+  }
+
+  class Envelope extends Node {
+    decay = 0
+    decaysAtAttack: number[] = []
+    triggerAttack = vi.fn(() => {
+      this.decaysAtAttack.push(this.decay)
+    })
+    constructor(options?: { decay?: number }) {
+      super()
+      this.decay = options?.decay ?? 0
+      tone.envelopes.push(this)
+    }
   }
 
   class Distortion extends Node {
@@ -92,7 +155,14 @@ vi.mock('tone', () => {
 
   class Synth extends Node {
     envelope = { decay: 0 }
+    frequency = new AudioParam()
     triggerAttackRelease = vi.fn()
+    triggerAttack = vi.fn()
+    triggerRelease = vi.fn()
+    constructor() {
+      super()
+      tone.synths.push(this)
+    }
   }
 
   class PolySynth extends Node {
@@ -100,6 +170,10 @@ vi.mock('tone', () => {
     triggerRelease = vi.fn()
     triggerAttackRelease = vi.fn()
     dispose = vi.fn()
+    constructor() {
+      super()
+      tone.polySynths.push(this)
+    }
   }
 
   class Analyser extends Node {
@@ -134,6 +208,8 @@ vi.mock('tone', () => {
   const transport = {
     PPQ: 192,
     bpm: new AudioParam(),
+    /** Tone's own transport swing, which the Deck must leave at 0. */
+    swing: 0,
     state: 'stopped',
     ticks: 0,
     scheduleRepeat: vi.fn((callback: (time: number) => void) => {
@@ -149,6 +225,7 @@ vi.mock('tone', () => {
     Gain,
     Player,
     Filter,
+    Envelope,
     Distortion,
     FeedbackDelay,
     Reverb,
@@ -244,7 +321,7 @@ describe('live sampler audio', () => {
     expect(pad1.start).toHaveBeenCalledTimes(1)
 
     engine.releasePad('computer:Digit1')
-    engine.setMixer({ kick: { muted: false, soloed: true } })
+    engine.setMixer({ kick: { muted: false, soloed: true, level: 1 } })
     engine.attackPad('pointer:7', 'pad1')
     await flushPromises()
 
@@ -253,7 +330,7 @@ describe('live sampler audio', () => {
 
     let pattern = cycleStep(createInitialPattern(), 'kick', 0)
     pattern = cycleStep(pattern, 'pad1', 0)
-    engine.setPattern(pattern)
+    playSoleSlot(engine, pattern)
     engine.setMixer({})
     await engine.play()
     tone.repeatCallbacks[0](42)
@@ -279,7 +356,7 @@ describe('live sampler audio', () => {
     commitSlice(engine, 'pad2', CURATED_SAMPLE_SOURCE.duration)
     engine.setMixer({})
 
-    engine.setPattern(cycleStep(createInitialPattern(), 'pad2', 0))
+    playSoleSlot(engine, cycleStep(createInitialPattern(), 'pad2', 0))
     await engine.play()
 
     // A lookahead-scheduled hit whose window is still open at the audio clock's
@@ -487,5 +564,706 @@ describe('auditioning a region', () => {
     engine.auditionRegion({ sourceId: 'some-other-source', start: 0, duration: 1 })
 
     expect(player.start.mock.calls.length).toBe(startsBefore)
+  })
+})
+
+describe('the sequencer step callback', () => {
+  it('applies one resolved 16th as given: chokes, drum starts at their gains, bass and stab notes', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    // Step 3 (index 2): an accented kick, a closed hat choking a same-step open
+    // hat, a two-step bass note and a stab — every kind of sound in one 16th.
+    let pattern = cycleStep(cycleStep(createInitialPattern(), 'kick', 2), 'kick', 2)
+    pattern = cycleStep(pattern, 'closedHat', 2)
+    pattern = cycleStep(pattern, 'openHat', 2)
+    pattern = resizeNoteStep(toggleNoteStep(pattern, 'bass', 2), 'bass', 2, 1)
+    pattern = toggleNoteStep(pattern, 'stab', 2)
+    playSoleSlot(engine, pattern)
+    engine.setMixer({})
+    await engine.play()
+
+    const [kick, , closedHat, openHat] = tone.players
+    const gainOf = (player: (typeof tone.players)[number]) =>
+      (player as unknown as { destination: { gain: { setValueAtTime: ReturnType<typeof vi.fn> } } })
+        .destination.gain
+    const bass = tone.synths[0]
+    const stab = tone.polySynths.at(-1)!
+    for (const mock of [kick.start, closedHat.start, openHat.start, openHat.stop]) mock.mockClear()
+    gainOf(kick).setValueAtTime.mockClear()
+    bass.triggerAttack.mockClear()
+    bass.triggerRelease.mockClear()
+    stab.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(2 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](50)
+
+    const step = 15 / 130
+    expect(openHat.stop.mock.calls).toEqual([[50]])
+    expect(openHat.start).not.toHaveBeenCalled()
+    expect(kick.start.mock.calls).toEqual([[50]])
+    expect(gainOf(kick).setValueAtTime.mock.calls).toEqual([[ACCENT_GAIN, 50]])
+    expect(closedHat.start.mock.calls).toEqual([[50]])
+    expect(gainOf(closedHat).setValueAtTime).toHaveBeenLastCalledWith(UNACCENTED_GAIN, 50)
+    expect(bass.triggerAttack.mock.calls).toEqual([[midiToFrequency(36), 50]])
+    expect(bass.triggerRelease.mock.calls).toEqual([[50 + 2 * step]])
+    expect(stab.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(60), step, 50, 0.72]])
+    engine.stop()
+  })
+})
+
+describe('the bass voice: accent and Env Mod', () => {
+  type Param = {
+    setValueAtTime: ReturnType<typeof vi.fn>
+    rampTo: ReturnType<typeof vi.fn>
+    cancelScheduledValues: ReturnType<typeof vi.fn>
+  }
+  type Chained = { destination: unknown }
+  const next = (node: unknown) => (node as Chained).destination as Chained & { gain: Param }
+
+  /** Fire one bass note on step 3 at t = 50 and return the bass voice's parts. */
+  async function fireBassNote(accented: boolean, settings = DEFAULT_BASS_SETTINGS) {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    let pattern = toggleNoteStep(createInitialPattern(), 'bass', 2)
+    if (accented) pattern = toggleNoteAccent(pattern, 'bass', 2)
+    playSoleSlot(engine, pattern)
+    engine.setMixer({})
+    engine.setBassSettings(settings)
+    await engine.play()
+
+    const synth = tone.synths[0]
+    const filter = next(synth) as unknown as Chained & { detune: Param; frequency: Param }
+    const accentGain = next(filter)
+    const envelope = tone.envelopes[0]
+    const depth = next(envelope)
+    for (const param of [accentGain.gain, depth.gain]) param.setValueAtTime.mockClear()
+    envelope.triggerAttack.mockClear()
+    envelope.decaysAtAttack.length = 0
+    synth.triggerAttack.mockClear()
+    synth.triggerRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(2 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](50)
+    engine.stop()
+    return { engine, synth, filter, accentGain, envelope, depth }
+  }
+
+  it('drives the filter envelope into the filter’s detune, never its cutoff', async () => {
+    const { filter, envelope, depth } = await fireBassNote(false)
+
+    expect(next(envelope)).toBe(depth)
+    expect(depth.destination).toBe(filter.detune)
+  })
+
+  it('plays an unaccented note at Env Mod 0 exactly as before: unity gain, no filter envelope', async () => {
+    const { synth, accentGain, depth } = await fireBassNote(false)
+
+    expect(accentGain.gain.setValueAtTime.mock.calls).toEqual([[1, 50]])
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[0, 50]])
+    expect(synth.triggerAttack.mock.calls).toEqual([[midiToFrequency(36), 50]])
+    expect(synth.triggerRelease.mock.calls).toEqual([[50 + 15 / 130]])
+  })
+
+  it('opens the filter by Env Mod’s octaves on every note, decaying with Decay', async () => {
+    const { envelope, depth } = await fireBassNote(false, {
+      ...DEFAULT_BASS_SETTINGS,
+      envMod: 50,
+      decay: 0.4,
+    })
+
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[2 * 1200, 50]])
+    expect(envelope.triggerAttack.mock.calls).toEqual([[50]])
+    expect(envelope.decaysAtAttack).toEqual([0.4])
+  })
+
+  it('applies an accent as given: louder through the gain stage, a deeper and faster wow at Env Mod 0', async () => {
+    const { accentGain, envelope, depth, synth } = await fireBassNote(true, {
+      ...DEFAULT_BASS_SETTINGS,
+      envMod: 0,
+      decay: 0.4,
+    })
+
+    expect(accentGain.gain.setValueAtTime.mock.calls).toEqual([[ACCENT_GAIN / UNACCENTED_GAIN, 50]])
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[ACCENT_ENV_OCTAVES * 1200, 50]])
+    expect(envelope.decaysAtAttack[0]).toBeLessThan(0.4)
+    expect(synth.triggerAttack).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps Cutoff live with Env Mod up: the knob moves the base, the envelope rides on top', async () => {
+    const { engine, filter } = await fireBassNote(false, { ...DEFAULT_BASS_SETTINGS, envMod: 80 })
+    filter.frequency.rampTo.mockClear()
+
+    engine.setBassSettings({ ...DEFAULT_BASS_SETTINGS, envMod: 80, cutoff: 2400 })
+
+    expect(filter.frequency.rampTo.mock.calls).toEqual([[2400, 0.02]])
+    expect(filter.detune.rampTo).not.toHaveBeenCalled()
+    expect(filter.detune.setValueAtTime).not.toHaveBeenCalled()
+    engine.setBassSettings(DEFAULT_BASS_SETTINGS)
+  })
+})
+
+describe('the bass voice: slide', () => {
+  const STEP = 15 / 130
+  /** Times built from a step, compared to the float the engine computes another way. */
+  const closeTo = (seconds: number) => expect.closeTo(seconds, 9)
+
+  /** Bass notes on `steps` (each a fourth above the last), slid on `slid`. */
+  function slidLine(steps: number[], slid: number[], pattern = createInitialPattern()): Pattern {
+    let line = steps.reduce(
+      (p, step, i) => transposeNoteStep(toggleNoteStep(p, 'bass', step), 'bass', step, 5 * i),
+      pattern,
+    )
+    line = slid.reduce((p, step) => toggleNoteSlide(p, 'bass', step), line)
+    return line
+  }
+
+  /** Start the loop on `bank` and return a way to fire 16ths at chosen times. */
+  async function started(bank: Pattern[], selectedId = bank[0].id) {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    engine.setMixer({})
+    engine.setBassSettings(DEFAULT_BASS_SETTINGS)
+    engine.setBank(bank, selectedId)
+    await engine.play()
+    const transport = Tone.getTransport() as unknown as { state: string }
+    transport.state = 'started'
+    const synth = tone.synths[0]
+    const envelope = tone.envelopes[0]
+    for (const mock of [
+      synth.triggerAttack,
+      synth.triggerRelease,
+      synth.triggerAttackRelease,
+      synth.frequency.exponentialRampTo,
+      envelope.triggerAttack,
+    ]) {
+      mock.mockClear()
+    }
+    const fire = (stepIndex: number, time: number) => {
+      vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(
+        stepIndex * engine.TICKS_PER_16TH,
+      )
+      tone.repeatCallbacks[0](time)
+    }
+    const stop = () => {
+      engine.stop()
+      transport.state = 'stopped'
+    }
+    return { engine, synth, envelope, fire, stop }
+  }
+
+  it('gives an unslid note its own gate: an attack, and a release a length later', async () => {
+    const { synth, fire, stop } = await started([slidLine([2], [])])
+
+    fire(2, 50)
+
+    expect(synth.triggerAttack.mock.calls).toEqual([[midiToFrequency(36), 50]])
+    expect(synth.triggerRelease.mock.calls).toEqual([[50 + STEP]])
+    expect(synth.triggerAttackRelease).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('plays a slid chain as one gate: one attack, one release, the pitch gliding between', async () => {
+    const { synth, envelope, fire, stop } = await started([slidLine([2, 3, 4], [2, 3])])
+
+    fire(2, 50)
+    fire(3, 50 + STEP)
+    fire(4, 50 + 2 * STEP)
+
+    expect(synth.triggerAttack.mock.calls).toEqual([[midiToFrequency(36), 50]])
+    expect(envelope.triggerAttack).toHaveBeenCalledTimes(1)
+    expect(synth.frequency.exponentialRampTo.mock.calls).toEqual([
+      [midiToFrequency(41), SLIDE_SECONDS, 50 + STEP],
+      [midiToFrequency(46), SLIDE_SECONDS, 50 + 2 * STEP],
+    ])
+    expect(synth.triggerRelease.mock.calls).toEqual([[closeTo(50 + 3 * STEP)]])
+    stop()
+  })
+
+  it('lets an accent through on a note slid into: its gain glides in, neither envelope restarts', async () => {
+    // 2 slides into an accented 3, which slides into an unaccented 4.
+    const line = toggleNoteAccent(slidLine([2, 3, 4], [2, 3]), 'bass', 3)
+    const { synth, envelope, fire, stop } = await started([line])
+    type Gain = { gain: { rampTo: ReturnType<typeof vi.fn>; setValueAtTime: ReturnType<typeof vi.fn> } }
+    const filter = (synth as unknown as { destination: { destination: Gain } }).destination
+    const accentGain = filter.destination
+    const depth = (envelope as unknown as { destination: Gain }).destination
+    for (const param of [accentGain.gain, depth.gain]) {
+      param.rampTo.mockClear()
+      param.setValueAtTime.mockClear()
+    }
+
+    fire(2, 50)
+    fire(3, 50 + STEP)
+    fire(4, 50 + 2 * STEP)
+
+    expect(accentGain.gain.setValueAtTime.mock.calls).toEqual([[1, 50]])
+    expect(accentGain.gain.rampTo.mock.calls).toEqual([
+      [ACCENT_GAIN / UNACCENTED_GAIN, LEGATO_ACCENT_SECONDS, 50 + STEP],
+      [1, LEGATO_ACCENT_SECONDS, 50 + 2 * STEP],
+    ])
+    // The filter envelope is neither retriggered nor re-scaled mid-chain.
+    expect(envelope.triggerAttack).toHaveBeenCalledTimes(1)
+    expect(depth.gain.setValueAtTime.mock.calls).toEqual([[0, 50]])
+    expect(synth.triggerAttack).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('ties a slid note through an empty step after it, then releases', async () => {
+    const { synth, fire, stop } = await started([slidLine([2], [2])])
+
+    fire(2, 50)
+    fire(3, 50 + STEP)
+
+    expect(synth.triggerAttack).toHaveBeenCalledTimes(1)
+    expect(synth.triggerRelease.mock.calls).toEqual([[closeTo(50 + 2 * STEP)]])
+    stop()
+  })
+
+  it('releases a gate tied across the bar when the slot changes there, before the new slot attacks', async () => {
+    const bank = createBank(slidLine([0, 15], [15]))
+    bank[1] = slidLine([0], [], bank[1])
+    const { engine, synth, fire, stop } = await started(bank)
+
+    fire(15, 50)
+    // B is pressed after step 16 was scheduled tied into step 1.
+    engine.setBank(bank, bank[1].id)
+    fire(0, 50 + STEP)
+
+    expect(synth.triggerRelease.mock.calls).toEqual([[50 + STEP], [closeTo(50 + 2 * STEP)]])
+    expect(synth.frequency.exponentialRampTo).not.toHaveBeenCalled()
+    expect(synth.triggerAttack.mock.calls).toEqual([
+      [midiToFrequency(41), 50],
+      [midiToFrequency(36), 50 + STEP],
+    ])
+    expect(synth.triggerRelease.mock.invocationCallOrder[0]).toBeLessThan(
+      synth.triggerAttack.mock.invocationCallOrder[1],
+    )
+    stop()
+  })
+
+  it('releases a gate still held open when the loop stops', async () => {
+    const { synth, fire, stop } = await started([slidLine([2, 3], [2])])
+
+    fire(2, 50)
+    synth.triggerRelease.mockClear()
+    stop()
+
+    expect(synth.triggerRelease).toHaveBeenCalledTimes(1)
+    // Never before the attack the look-ahead already scheduled.
+    expect(synth.triggerRelease.mock.calls[0][0]).toBeGreaterThanOrEqual(50)
+  })
+
+  it('leaves the bass to finish its own release when the loop stops with no gate held', async () => {
+    const { synth, fire, stop } = await started([slidLine([2], [])])
+
+    fire(2, 50)
+    synth.triggerRelease.mockClear()
+    stop()
+
+    expect(synth.triggerRelease).not.toHaveBeenCalled()
+  })
+})
+
+describe('swing', () => {
+  /** The gain node a kit player fires through, where accent velocity is set. */
+  const gainOf = (player: (typeof tone.players)[number]) =>
+    (player as unknown as { destination: { gain: { setValueAtTime: ReturnType<typeof vi.fn> } } })
+      .destination.gain
+
+  it('lands every sequenced voice on an odd 16th late by the swing offset, with Tone’s swing left at 0', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    // Step 2 (index 1), an odd 16th: an accented kick, a closed hat choking
+    // the open hat, a pad, a bass note and a stab — every sequenced voice.
+    let pattern = cycleStep(cycleStep(createInitialPattern(), 'kick', 1), 'kick', 1)
+    pattern = cycleStep(pattern, 'closedHat', 1)
+    pattern = cycleStep(pattern, 'openHat', 1)
+    pattern = cycleStep(pattern, 'pad1', 1)
+    pattern = toggleNoteStep(toggleNoteStep(pattern, 'bass', 1), 'stab', 1)
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+    )
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
+    playSoleSlot(engine, pattern)
+    engine.setMixer({})
+    engine.setSwing(0.75)
+    await engine.play()
+
+    const [kick, , closedHat, openHat, , pad1] = tone.players
+    const bass = tone.synths[0]
+    const stab = tone.polySynths.at(-1)!
+    for (const mock of [kick.start, closedHat.start, openHat.stop, pad1.start]) mock.mockClear()
+    gainOf(kick).setValueAtTime.mockClear()
+    bass.triggerAttack.mockClear()
+    bass.triggerRelease.mockClear()
+    stab.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(1 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](50)
+
+    const step = 15 / 130
+    // 75% is dotted: the off-beat lands half a 16th late.
+    const late = 50 + 0.5 * step
+    expect(openHat.stop.mock.calls).toEqual([[late]])
+    expect(kick.start.mock.calls).toEqual([[late]])
+    expect(gainOf(kick).setValueAtTime.mock.calls).toEqual([[ACCENT_GAIN, late]])
+    expect(closedHat.start.mock.calls).toEqual([[late]])
+    expect(pad1.start.mock.calls).toEqual([[late]])
+    // Note lengths stay whole steps, measured from the delayed start.
+    expect(bass.triggerAttack.mock.calls).toEqual([[midiToFrequency(36), late]])
+    expect(bass.triggerRelease.mock.calls).toEqual([[late + step]])
+    expect(stab.triggerAttackRelease.mock.calls).toEqual([[midiToFrequency(60), step, late, 0.72]])
+    // The Deck swings; Tone's transport never does.
+    expect(Tone.getTransport().swing).toBe(0)
+    engine.stop()
+    engine.setSwing(0.5)
+  })
+
+  it('leaves an even 16th on the grid at any swing', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    let pattern = cycleStep(createInitialPattern(), 'kick', 4)
+    pattern = toggleNoteStep(pattern, 'bass', 4)
+    playSoleSlot(engine, pattern)
+    engine.setMixer({})
+    engine.setSwing(0.75)
+    await engine.play()
+
+    const kick = tone.players[0]
+    const bass = tone.synths[0]
+    kick.start.mockClear()
+    bass.triggerAttack.mockClear()
+    bass.triggerRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(4 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](60)
+
+    expect(kick.start.mock.calls).toEqual([[60]])
+    expect(bass.triggerAttack.mock.calls).toEqual([[midiToFrequency(36), 60]])
+    expect(bass.triggerRelease.mock.calls).toEqual([[60 + 15 / 130]])
+    engine.stop()
+    engine.setSwing(0.5)
+  })
+
+  it('reads swing live, so a knob moved mid-loop is heard on the next odd 16th', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    playSoleSlot(engine, cycleStep(createInitialPattern(), 'kick', 3))
+    engine.setMixer({})
+    engine.setSwing(0.5)
+    await engine.play()
+
+    const kick = tone.players[0]
+    kick.start.mockClear()
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(3 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](70)
+    engine.setSwing(0.66)
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(19 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](80)
+
+    expect(kick.start.mock.calls[0]).toEqual([70])
+    expect(kick.start.mock.calls[1][0]).toBeCloseTo(80 + 0.32 * (15 / 130), 12)
+    engine.stop()
+    engine.setSwing(0.5)
+  })
+
+  it('never offsets live stab keys or pad hits', async () => {
+    const engine = await import('./engine')
+    engine.setSamplerSettings(
+      assignSourceToPad(createSamplerSettings(), 'pad1', CURATED_SAMPLE_SOURCE),
+    )
+    commitSlice(engine, 'pad1', CURATED_SAMPLE_SOURCE.duration)
+    engine.setMixer({})
+    engine.setSwing(0.75)
+
+    const pad1 = tone.players[5]
+    const liveStab = tone.polySynths[0]
+    pad1.start.mockClear()
+    liveStab.triggerAttack.mockClear()
+
+    engine.attackPad('pointer:swing', 'pad1')
+    engine.attackStabNote('computer:KeyA', 60)
+    await flushPromises()
+
+    // Tone.immediate() in the mock is 10: live input sounds exactly then. (A
+    // live pad hit also replays the pad's still-pending sequenced hits after
+    // it, which is the pad voice's own rebuild — not part of this claim.)
+    expect(pad1.start.mock.calls[0]).toEqual([10])
+    expect(liveStab.triggerAttack.mock.calls).toEqual([[midiToFrequency(60), 10, 0.82]])
+    engine.releasePad('pointer:swing')
+    engine.releaseStabNote('computer:KeyA')
+    engine.setSwing(0.5)
+  })
+})
+
+describe('voice Level and the mixer', () => {
+  type Ramp = ReturnType<typeof vi.fn>
+  interface Chained {
+    destination: { gain?: { rampTo: Ramp; value: number }; destination?: unknown } | null
+  }
+  /** The node a voice's output feeds — for a kit player, its accent gain. */
+  const next = (node: unknown) => (node as Chained).destination as Chained & {
+    gain: { rampTo: Ramp; value: number; setValueAtTime: Ramp }
+  }
+  const strip = (fields: Partial<{ muted: boolean; soloed: boolean; level: number }>) => ({
+    muted: false,
+    soloed: false,
+    level: 1,
+    ...fields,
+  })
+
+  it('gives every voice a channel gain after its accent gain, ramped to its Level', async () => {
+    const engine = await import('./engine')
+    await engine.unlockAudio()
+    const [kick, , closedHat, , , pad1] = tone.players
+    const bass = tone.synths[0]
+    const stabLive = tone.polySynths[0]
+
+    // Kit and pads: player → accent gain → channel gain.
+    const kickChannel = next(next(kick))
+    const hatChannel = next(next(closedHat))
+    const padChannel = next(next(pad1))
+    // Bass: synth → filter → accent gain → channel gain. Stab: both pools → one channel gain.
+    const bassChannel = next(next(next(bass)))
+    const stabChannel = next(stabLive)
+    for (const channel of [kickChannel, hatChannel, padChannel, bassChannel, stabChannel]) {
+      channel.gain.rampTo.mockClear()
+    }
+
+    engine.setMixer({
+      closedHat: strip({ level: 0.25 }),
+      pad1: strip({ level: 1.5 }),
+      bass: strip({ level: 0.5, soloed: true }),
+      stab: strip({ level: 0, muted: true }),
+    })
+
+    expect(hatChannel.gain.rampTo.mock.calls).toEqual([[0.25, 0.02]])
+    expect(padChannel.gain.rampTo.mock.calls).toEqual([[1.5, 0.02]])
+    expect(bassChannel.gain.rampTo.mock.calls).toEqual([[0.5, 0.02]])
+    expect(stabChannel.gain.rampTo.mock.calls).toEqual([[0, 0.02]])
+    // A voice with no strip rides at unity.
+    expect(kickChannel.gain.rampTo.mock.calls).toEqual([[1, 0.02]])
+    // Every channel is its own node: Level never shares a gain with accent.
+    expect(new Set([kickChannel, hatChannel, padChannel, bassChannel, stabChannel]).size).toBe(5)
+    expect(next(kick)).not.toBe(kickChannel)
+    engine.setMixer({})
+  })
+
+  it('routes the recreated sequenced stab pool through the same channel after a stop', async () => {
+    const engine = await import('./engine')
+    await engine.play()
+    engine.stop()
+    const liveChannel = next(tone.polySynths[0])
+    expect(next(tone.polySynths.at(-1)!)).toBe(liveChannel)
+  })
+
+  it('keeps live stab keys silent and unlit while the stab is muted or another voice solos', async () => {
+    const engine = await import('./engine')
+    await engine.unlockAudio()
+    const liveStab = tone.polySynths[0]
+
+    for (const mixer of [{ stab: strip({ muted: true }) }, { bass: strip({ soloed: true }) }]) {
+      liveStab.triggerAttack.mockClear()
+      engine.setMixer(mixer)
+      engine.attackStabNote('computer:KeyA', 60)
+      await flushPromises()
+
+      expect(liveStab.triggerAttack).not.toHaveBeenCalled()
+      expect(engine.getSoundingStabNotes()).toEqual([])
+      engine.releaseStabNote('computer:KeyA')
+    }
+
+    // Solo overrides mute here too, and an unmuted stab plays at once.
+    liveStab.triggerAttack.mockClear()
+    engine.setMixer({ stab: strip({ muted: true, soloed: true }) })
+    engine.attackStabNote('computer:KeyA', 60)
+    await flushPromises()
+    expect(liveStab.triggerAttack.mock.calls).toEqual([[midiToFrequency(60), 10, 0.82]])
+    engine.releaseStabNote('computer:KeyA')
+    engine.setMixer({})
+  })
+
+  it('skips sequenced bass and stab notes the mixer silences', async () => {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    playSoleSlot(engine, toggleNoteStep(toggleNoteStep(createInitialPattern(), 'bass', 6), 'stab', 6))
+    engine.setMixer({ bass: strip({ muted: true }) })
+    await engine.play()
+    const bass = tone.synths[0]
+    const stab = tone.polySynths.at(-1)!
+    bass.triggerAttack.mockClear()
+    bass.triggerRelease.mockClear()
+    stab.triggerAttackRelease.mockClear()
+
+    vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(6 * engine.TICKS_PER_16TH)
+    tone.repeatCallbacks[0](90)
+
+    expect(bass.triggerAttack).not.toHaveBeenCalled()
+    expect(stab.triggerAttackRelease).toHaveBeenCalledTimes(1)
+    engine.stop()
+    engine.setMixer({})
+  })
+})
+
+describe('the queued bank switch', () => {
+  /** Slot A kicks on every 16th, slot B claps on every 16th. */
+  function kickAndClapBank() {
+    const a = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'kick', i),
+      createInitialPattern(),
+    )
+    const bank = createBank(a)
+    bank[1] = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'snare', i),
+      bank[1],
+    )
+    return bank
+  }
+
+  async function startedWith(bank: Pattern[], selectedId: string) {
+    const engine = await import('./engine')
+    const Tone = await import('tone')
+    const transport = Tone.getTransport() as unknown as { state: string }
+    engine.setMixer({})
+    engine.setBank(bank, selectedId)
+    await engine.play()
+    transport.state = 'started'
+    const [kick, snare] = tone.players
+    kick.start.mockClear()
+    snare.start.mockClear()
+    const fire = (stepIndex: number, time: number) => {
+      vi.mocked(Tone.getTransport().getTicksAtTime).mockReturnValueOnce(
+        stepIndex * engine.TICKS_PER_16TH,
+      )
+      tone.repeatCallbacks[0](time)
+    }
+    const stopAll = () => {
+      engine.stop()
+      transport.state = 'stopped'
+    }
+    return { engine, kick, snare, fire, stopAll }
+  }
+
+  it('keeps sounding the playing slot after another is pressed, until step 0', async () => {
+    const bank = kickAndClapBank()
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    fire(5, 20)
+    expect(kick.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+
+    fire(0, 40)
+    expect(snare.start.mock.calls).toEqual([[40]])
+    expect(kick.start.mock.calls).toEqual([[20]])
+    stopAll()
+  })
+
+  it('lights the playing slot by what is heard: the switch shows when its bar sounds', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: null })
+    engine.setBank(bank, bank[1].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[1].id })
+
+    // Step 0 is scheduled ahead, for t=50; the audio clock (the mock's
+    // Tone.immediate) is still at 10, so A is what is heard and lit.
+    fire(0, 50)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[1].id })
+    stopAll()
+  })
+
+  it('lights the new slot once the audio clock reaches its bar', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    // Step 0 for t=5, which the audio clock (10) has already passed.
+    fire(0, 5)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[1].id, queued: null })
+    stopAll()
+  })
+
+  it('cancels the queue when the playing slot is pressed again', async () => {
+    const bank = kickAndClapBank()
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    engine.setBank(bank, bank[0].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: null })
+    fire(0, 20)
+    expect(kick.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+    stopAll()
+  })
+
+  it('replaces a queued slot with the next one pressed', async () => {
+    const bank = kickAndClapBank()
+    bank[2] = Array.from({ length: 16 }, (_, i) => i).reduce(
+      (p, i) => cycleStep(p, 'closedHat', i),
+      bank[2],
+    )
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+    const closedHat = tone.players[2]
+    closedHat.start.mockClear()
+
+    engine.setBank(bank, bank[1].id)
+    engine.setBank(bank, bank[2].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[2].id })
+
+    fire(0, 20)
+    expect(closedHat.start.mock.calls).toEqual([[20]])
+    expect(snare.start).not.toHaveBeenCalled()
+    expect(kick.start).not.toHaveBeenCalled()
+    stopAll()
+  })
+
+  it('owns up to a switch already scheduled: pressed in the look-ahead, the old slot is queued again', async () => {
+    const bank = kickAndClapBank()
+    const { engine, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    // B's bar is scheduled for t=50 but not heard yet (the audio clock is at 10).
+    fire(0, 50)
+    // Too late to cancel: B comes in at the bar, so A is shown queued behind it.
+    engine.setBank(bank, bank[0].id)
+    expect(engine.getSlotLights()).toEqual({ playing: bank[0].id, queued: bank[0].id })
+    stopAll()
+  })
+
+  it('switches at once while stopped, and stop clears a pending switch', async () => {
+    const bank = kickAndClapBank()
+    const { engine, kick, snare, fire, stopAll } = await startedWith(bank, bank[0].id)
+
+    engine.setBank(bank, bank[1].id)
+    stopAll()
+    expect(engine.getSlotLights()).toEqual({ playing: null, queued: null })
+
+    // Restarting mid-bar (the mock's tick says step 5) plays the selected slot.
+    await engine.play()
+    ;((await import('tone')).getTransport() as unknown as { state: string }).state = 'started'
+    fire(5, 30)
+    expect(snare.start.mock.calls).toEqual([[30]])
+    expect(kick.start).not.toHaveBeenCalled()
+    stopAll()
+  })
+})
+
+describe('a Level set before the first gesture', () => {
+  it('is in force the moment the voices exist, not one look-ahead later', async () => {
+    // A saved project hands the engine its mixer before any gesture builds the
+    // audio graph. A channel built at unity and ramped down afterwards would
+    // play a first live note at full level for Tone's whole look-ahead.
+    vi.resetModules()
+    const engine = await import('./engine')
+    engine.setMixer({ stab: { muted: false, soloed: false, level: 0.25 } })
+    tone.resolveLoaded()
+    await engine.unlockAudio()
+
+    const stabChannel = (tone.polySynths.at(-1) as unknown as {
+      destination: { built: number }
+    }).destination
+    expect(stabChannel.built).toBe(0.25)
   })
 })

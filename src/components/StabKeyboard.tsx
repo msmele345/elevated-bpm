@@ -7,11 +7,13 @@ import {
   type PointerEvent,
 } from 'react'
 import { DECK_SECTION_IDS, sectionTitleId } from '../model/deckSections'
+import type { LevelParamId, VoiceId } from '../model/mixer'
 import { midiToNoteName } from '../model/note'
 import { STAB_KEYS, stabKeyForKeyboardInput, type StabKey } from '../model/stab'
 import type { NoteLane, NoteLaneId } from '../model/types'
 import { NoteRow } from './NoteRow'
 import { PanelTitle } from './PanelTitle'
+import { VoiceMixStrip } from './VoiceMixStrip'
 
 interface StabKeyboardProps {
   lane: NoteLane
@@ -25,6 +27,17 @@ interface StabKeyboardProps {
   onToggleStep: (laneId: NoteLaneId, stepIndex: number) => void
   onTranspose: (laneId: NoteLaneId, stepIndex: number, semitones: number) => void
   onResize: (laneId: NoteLaneId, stepIndex: number, steps: number) => void
+  /** The stab voice's mixer strip, in the panel header. */
+  muted: boolean
+  soloed: boolean
+  /** Not sounding right now (muted, or un-soloed while another voice solos). */
+  silenced: boolean
+  level: number
+  /** The active lesson is pointing at the stab's Level knob. */
+  levelSpotlit?: boolean
+  onToggleMute: (voiceId: VoiceId) => void
+  onToggleSolo: (voiceId: VoiceId) => void
+  onLevelChange: (id: LevelParamId, value: number) => void
 }
 
 const WHITE_KEY_COUNT = STAB_KEYS.filter((key) => key.kind === 'white').length
@@ -59,6 +72,14 @@ function StabInstrument({
   onToggleStep,
   onTranspose,
   onResize,
+  muted,
+  soloed,
+  silenced,
+  level,
+  levelSpotlit = false,
+  onToggleMute,
+  onToggleSolo,
+  onLevelChange,
 }: StabKeyboardProps) {
   const heldSources = useRef(new Set<string>())
   const keyboardRef = useRef<HTMLDivElement>(null)
@@ -176,12 +197,24 @@ function StabInstrument({
 
   return (
     <section
-      className="panel stab-panel"
+      className={silenced ? 'panel stab-panel is-silenced' : 'panel stab-panel'}
       id={DECK_SECTION_IDS.stabs}
       tabIndex={-1}
       aria-labelledby={sectionTitleId(DECK_SECTION_IDS.stabs)}
     >
-      <PanelTitle sectionId={DECK_SECTION_IDS.stabs} name="Chord Stab" model="POLY SYNTH · CS-08" />
+      <PanelTitle sectionId={DECK_SECTION_IDS.stabs} name="Chord Stab" model="POLY SYNTH · CS-08">
+        <VoiceMixStrip
+          voiceId="stab"
+          label={lane.label}
+          muted={muted}
+          soloed={soloed}
+          level={level}
+          levelSpotlit={levelSpotlit}
+          onToggleMute={onToggleMute}
+          onToggleSolo={onToggleSolo}
+          onLevelChange={onLevelChange}
+        />
+      </PanelTitle>
       <NoteRow
         lane={lane}
         spotlit={spotlitLane}

@@ -3,28 +3,33 @@ import { BassPanel } from './components/BassPanel'
 import { Knob } from './components/Knob'
 import { FinaleMoment } from './components/FinaleMoment'
 import { LessonArc } from './components/LessonArc'
-import { LessonPanel } from './components/LessonPanel'
+import { CELEBRATION_MS, LessonPanel } from './components/LessonPanel'
 import { PanelTitle } from './components/PanelTitle'
-import { ShareControls } from './components/ShareControls'
+import { ShareMenu } from './components/ShareMenu'
+import { ShareStrips } from './components/ShareStrips'
 import { SamplerPanel } from './components/SamplerPanel'
 import { SkipLinks } from './components/SkipLinks'
 import { SpectrumScope } from './components/SpectrumScope'
 import { StabKeyboard } from './components/StabKeyboard'
 import { StepRow } from './components/StepRow'
-import { TransportBar } from './components/TransportBar'
+import { TransportStrip } from './components/TransportStrip'
+import { bankSlots, sameBankSlots, type BankSlot } from './model/bank'
 import { usePlayhead } from './hooks/usePlayhead'
+import { useSlotLights } from './hooks/useSlotLights'
 import { useRoomLight } from './hooks/useRoomLight'
+import { useSpotlightScroll } from './hooks/useSpotlightScroll'
 import {
   activeArcLesson,
   arcCompletion,
   arcEntries,
   detectLessonCompletion,
   goalContextFor,
-  lessonsAlreadyMet,
+  slotsAlreadyMeeting,
+  heldAfterCopy,
   nextUnfinishedLessonId,
 } from './model/arc'
 import type { BassParamId } from './model/bass'
-import { deckParamSpec } from './model/deckParams'
+import { deckParamSpec, type DeckParamId } from './model/deckParams'
 import { DECK_SECTION_IDS, sectionTitleId } from './model/deckSections'
 import { FX_PARAMS, type FxParamId } from './model/fx'
 import { MASTER_PARAMS, type MasterParamId } from './model/master'
@@ -36,15 +41,28 @@ import {
   spotlitPadIds,
   spotlitParamIds,
 } from './model/lesson'
+import {
+  anySoloed,
+  levelParamForVoice,
+  voiceIsAudible,
+  voiceMix,
+  type LevelParamId,
+  type Mixer,
+  type VoiceId,
+} from './model/mixer'
 import { NO_PARAM_MOTION, observeParamMotion } from './model/paramMotion'
 import {
   activeLessonIdFor,
   activePattern,
+  selectSlot,
+  copySlot,
+  clearSlot,
   addSource,
   assignSourceToSamplerPad,
   commitRegionToSamplerPad,
   createInitialProjectState,
   cycleActivePatternStep,
+  deckParamValue,
   enterLesson,
   openingProjectState,
   referencedAudio,
@@ -58,19 +76,24 @@ import {
   setSamplerPadFit,
   setSamplerParamValue,
   setTransportBpm,
+  setTransportSwing,
+  setLevelParamValue,
+  toggleActivePatternNoteAccent,
+  toggleActivePatternNoteSlide,
   toggleActivePatternNoteStep,
-  toggleLaneMute,
-  toggleLaneSolo,
+  toggleVoiceMute,
+  toggleVoiceSolo,
   transposeActivePatternNote,
   updateLessonProgress,
   type ProjectState,
 } from './model/projectState'
 import {
-  createShareUrl,
+  createShareLink,
   projectWithSharedBeat,
   readSharedBeat,
   sharedAudioNotice,
   SHARE_QUERY_PARAM,
+  type ShareLink,
 } from './model/share'
 import { createBundle, padsNeedingAudio, readBundle } from './model/bundle'
 import {
@@ -86,8 +109,17 @@ import {
 import { sliceKey, type Slice } from './model/slice'
 import type { AnalysisAudio } from './audio/engine'
 import { clampRegionToSource } from './model/region'
+import { SWING_PARAM, swingFromPercent, type TransportParamId } from './model/transport'
 import { RegionEditor } from './components/RegionEditor'
 import type { Lesson } from './model/lesson'
+import {
+  chipMetAnnouncement,
+  chipsNewlyMet,
+  lessonCompleteAnnouncement,
+  progressChips,
+  sameChips,
+  type ProgressChip,
+} from './model/progressChip'
 import type { LaneId, NoteLaneId, PadLaneId } from './model/types'
 import * as engine from './audio/engine'
 import { decodeSample, newSourceId, probeDuration } from './audio/sampleDecoder'
@@ -168,6 +200,10 @@ export default function App() {
   // is running can stay identity-stable across a play/stop.
   const isPlayingRef = useRef(false)
   isPlayingRef.current = isPlaying
+  // The document as last rendered, for the same reason: a knob handler reads
+  // where its knob sat before the move without changing identity per edit.
+  const projectRef = useRef(project)
+  projectRef.current = project
   // An incoming beat runs as a disposable in-memory preview. Holding the
   // recipient's opening document here lets "Back to my project" restore it
   // exactly; autosave stays suspended until the preview is explicitly kept.
@@ -210,7 +246,7 @@ export default function App() {
   // Assembling a bundle reads every pad's audio back out of storage, so unlike
   // a link it is not instant and the action says so while it runs.
   const [isBundling, setIsBundling] = useState(false)
-  const [sharedUrl, setSharedUrl] = useState<string | null>(null)
+  const [shareLink, setShareLink] = useState<ShareLink | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   // A session-only graduation overlay, holding *which* track is being
   // celebrated so its own copy can be shown. It appears on the transition into
@@ -241,10 +277,10 @@ export default function App() {
   const chordRef = useRef(NO_CHORD_PLAY)
   const [chordPlay, setChordPlay] = useState(NO_CHORD_PLAY)
   // Goals describe what the user did, so work that arrives already done in an
-  // incoming shared beat is inherited, not earned: these lessons are held back
-  // from completion until their goal stops being met and is built again. A
-  // session observation like the others — never persisted.
-  const inheritedLessonsRef = useRef<Set<string>>(new Set())
+  // incoming shared beat is inherited, not earned: each lesson is held back in
+  // the slots it arrived met in, until that slot's goal stops being met and is
+  // built again. A session observation like the others — never persisted.
+  const inheritedLessonsRef = useRef<Map<string, Set<string>>>(new Map())
   // The playhead sweeps every grid on the deck — drums, bass, and stabs — so
   // its root is the deck, not one panel.
   const deckRef = useRef<HTMLElement>(null)
@@ -258,7 +294,17 @@ export default function App() {
   const fxSettings = project.instrumentSettings.fx
   const samplerSettings = project.instrumentSettings.sampler
   const bpm = project.transport.bpm
-  const soloing = Object.values(project.mixer).some((mix) => mix?.soloed)
+  const swing = project.transport.swing
+  const mixer = project.mixer
+  const soloing = anySoloed(mixer)
+  // The sampler is handed only its own four strips, memoized on them, so a
+  // Level dragged on a drum lane or the bass is not a new prop for the panel.
+  const padMixer = useMemo<Mixer>(
+    () => ({ pad1: mixer.pad1, pad2: mixer.pad2, pad3: mixer.pad3, pad4: mixer.pad4 }),
+    [mixer.pad1, mixer.pad2, mixer.pad3, mixer.pad4],
+  )
+  const bassMix = voiceMix(mixer, 'bass')
+  const stabMix = voiceMix(mixer, 'stab')
   // Mirrored so the sampler's handlers can read the current sources and pads
   // without closing over them — a fresh closure is a changed prop, and these
   // are handed to a memoized panel.
@@ -301,6 +347,47 @@ export default function App() {
   const lessonProgress = project.lessonProgress[activeLesson.id]
   const lessonCompleted = lessonProgress?.completed ?? false
   const lessonDismissed = lessonProgress?.dismissed ?? false
+  // Where Next ▸ goes from here, named on the button so the learner knows.
+  const nextLessonId = nextUnfinishedLessonId(
+    activeArc.lessons,
+    project.lessonProgress,
+    activeLesson.id,
+  )
+  const nextLessonTitle =
+    activeArc.lessons.find((lesson) => lesson.id === nextLessonId)?.title ?? null
+  // The lesson the learner just earned, while its celebration card is up.
+  // Session-only and set only for an edit the learner made, so hydrating onto
+  // an earned lesson lands straight on the completed strip.
+  const [celebratingLessonId, setCelebratingLessonId] = useState<string | null>(null)
+
+  // What every goal is evaluated against right now. It changes on a document
+  // edit, a knob move or a bigger chord — the user-edit cadence — and never on
+  // the audio clock. The whole document, so a goal about the sampler reads the
+  // sampler: one builder, because a caller that quietly left half the deck out
+  // would make assertions unmeetable rather than fail loudly.
+  const goalContext = useMemo(
+    () => goalContextFor(project, { motion: paramMotion, chord: chordPlay }),
+    [project, paramMotion, chordPlay],
+  )
+  // One Progress chip per assertion, handed back as the same array while
+  // nothing on it changed, so a knob drag that moves no chip leaves the lesson
+  // card alone.
+  const shownChipsRef = useRef<ProgressChip[]>([])
+  const lessonChips = useMemo(() => {
+    const next = progressChips(activeLesson, goalContext)
+    if (!sameChips(next, shownChipsRef.current)) shownChipsRef.current = next
+    return shownChipsRef.current
+  }, [activeLesson, goalContext])
+  // What the lesson live region last said. Keyed, so the same words said again
+  // are a new node and are heard again.
+  const [announcement, setAnnouncement] = useState<{ id: number; text: string } | null>(null)
+  // The chips the last edit left on the card, and the document they were read
+  // from. Null until the deck has hydrated: the placeholder deck is not work.
+  const chipBaselineRef = useRef<{
+    lessonId: string
+    preview: typeof sharePreview
+    chips: readonly ProgressChip[]
+  } | null>(null)
 
   // Spotlight guides toward the goal, so it rests once the goal is met or
   // the lesson is put away.
@@ -326,9 +413,15 @@ export default function App() {
   const spotlitTarget = (target: string) =>
     !spotlitResting && spotlightsTarget(activeLesson, target)
   const spotlitSources = spotlitTarget('sampler:sources')
+  const canShowMe = !spotlitResting && activeLesson.spotlight.length > 0
 
   usePlayhead(deckRef, isPlaying)
+  useSlotLights(deckRef, isPlaying)
   useRoomLight(isPlaying, bpm)
+  const { requestSpotlightScroll, showSpotlight } = useSpotlightScroll(
+    deckRef,
+    canShowMe && !lessonChips.every((chip) => chip.met),
+  )
 
   // Hydrate from IndexedDB once on mount: a returning user gets their saved
   // beat back, a first-time one gets the demo groove so the deck is never
@@ -348,7 +441,7 @@ export default function App() {
       if (incoming.status === 'ready') {
         // Every registered track, not only the techno one: a beat can arrive
         // carrying sampling work as readily as it carries a kick pattern.
-        inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+        inheritedLessonsRef.current = slotsAlreadyMeeting(ALL_LESSONS, next)
       }
       try {
         // Orphans are collected against the user's *own* document, never the
@@ -389,7 +482,7 @@ export default function App() {
   // Once the deck changes, an older generated link no longer describes what
   // is on it. Clear the stale result; the user can press Share again.
   useEffect(() => {
-    setSharedUrl(null)
+    setShareLink(null)
     setShareCopied(false)
   }, [project])
 
@@ -420,39 +513,105 @@ export default function App() {
   // move — and never on the audio clock. Completion is latched in the
   // document, so undoing the work later doesn't revoke it and the earned
   // lesson survives a reload.
+  //
+  // The lesson live region speaks from here too, and only for a change the
+  // learner just made: a chip becoming met, or the lesson completing — never
+  // a count. Hydrating, a shared beat arriving or leaving, and walking onto a
+  // lesson all change the card without the learner finishing anything, so
+  // each starts a fresh baseline instead of an announcement.
   useEffect(() => {
+    const baseline = chipBaselineRef.current
+    chipBaselineRef.current = hydrated
+      ? { lessonId: activeLesson.id, preview: sharePreview, chips: lessonChips }
+      : null
+    const continuing =
+      baseline !== null && baseline.lessonId === activeLesson.id && baseline.preview === sharePreview
+    const announce = (text: string) =>
+      setAnnouncement((last) => ({ id: (last?.id ?? 0) + 1, text }))
+
     const completion = detectLessonCompletion(
       activeArc.lessons,
       activeLesson,
       lessonCompleted,
-      // The whole document, so a goal about the sampler reads the sampler: one
-      // builder, because a caller that quietly left half the deck out would
-      // make assertions unmeetable rather than fail loudly.
-      goalContextFor(project, { motion: paramMotion, chord: chordPlay }),
+      goalContext,
     )
     if (!completion.justCompleted) {
-      // The goal is not met right now, so whatever the shared beat brought
-      // with it is gone: from here the lesson is the user's to earn.
-      inheritedLessonsRef.current.delete(activeLesson.id)
+      // The goal is not met in this slot right now, so whatever the shared
+      // beat brought with it here is gone: from here this slot is the
+      // learner's to earn. Only this slot — a shared slot the learner is not
+      // looking at still holds the sender's work.
+      const heldIn = inheritedLessonsRef.current.get(activeLesson.id)
+      heldIn?.delete(project.activePatternId)
+      if (heldIn?.size === 0) inheritedLessonsRef.current.delete(activeLesson.id)
+      // An earned card already reads as a finished checklist; saying one of
+      // its chips is done again would be chatter.
+      if (continuing && !lessonCompleted) {
+        const met = chipsNewlyMet(baseline.chips, lessonChips)
+        if (met.length > 0) announce(chipMetAnnouncement(met))
+      }
       return
     }
     // Met, but only because the beat arrived that way — hold the credit.
-    if (inheritedLessonsRef.current.has(activeLesson.id)) return
+    if (inheritedLessonsRef.current.get(activeLesson.id)?.has(project.activePatternId)) return
     setProject((p) => updateLessonProgress(p, activeLesson.id, { completed: true }))
+    // Completion is said instead of the chip that completed it, never as well.
+    // The celebration is for the same moment, so it is gated the same way.
+    if (continuing) {
+      announce(lessonCompleteAnnouncement(activeLesson))
+      setCelebratingLessonId(activeLesson.id)
+    }
     if (completion.showFinale) setFinaleArcId(activeArc.id)
-  }, [project, paramMotion, chordPlay, activeArc, activeLesson, lessonCompleted])
+  }, [
+    goalContext,
+    lessonChips,
+    activeArc,
+    activeLesson,
+    lessonCompleted,
+    hydrated,
+    sharePreview,
+    project.activePatternId,
+  ])
 
-  // Keep the audio engine pointed at the latest pattern; playback reads it
-  // live on each scheduled 16th, so edits are audible immediately.
+  // A celebration has its moment, then the card shrinks to the completed strip.
+  // A capstone's finale covers the deck, so the moment starts once it closes.
+  // A UI timer, not musical time — it has nothing to stay in step with.
   useEffect(() => {
-    engine.setPattern(pattern)
-  }, [pattern])
+    if (celebratingLessonId === null || finaleArcId !== null) return
+    const timer = setTimeout(() => setCelebratingLessonId(null), CELEBRATION_MS)
+    return () => clearTimeout(timer)
+  }, [celebratingLessonId, finaleArcId])
 
-  // Same for mute/solo: the engine reads the live mixer per 16th, so toggling
-  // a lane silences or solos it on the next step with no restart.
+  // Keep the audio engine pointed at the latest bank and selected slot;
+  // playback reads them live on each scheduled 16th, so edits to the playing
+  // slot are audible immediately and a newly selected slot comes in at the bar.
+  const bank = project.patterns
+  const selectedSlotId = project.activePatternId
+  // Mirrored for the copy handler, which must know the source slot before it
+  // edits the document: the hold it carries is a ref, not state, so it is
+  // written outside the state updater, which must stay pure.
+  const selectedSlotIdRef = useRef(selectedSlotId)
+  selectedSlotIdRef.current = selectedSlotId
   useEffect(() => {
-    engine.setMixer(project.mixer)
-  }, [project.mixer])
+    engine.setBank(bank, selectedSlotId)
+  }, [bank, selectedSlotId])
+
+  // The slot buttons need each slot's letter and whether it is empty, handed
+  // back as the same array while those are unchanged, so a step tap that
+  // leaves every slot as full or as empty as it was leaves the memoized
+  // transport strip alone.
+  const shownSlotsRef = useRef<BankSlot[]>([])
+  const slots = useMemo(() => {
+    const next = bankSlots(bank)
+    if (!sameBankSlots(next, shownSlotsRef.current)) shownSlotsRef.current = next
+    return shownSlotsRef.current
+  }, [bank])
+
+  // Same for the mixer: the engine reads mute/solo per 16th and per live note,
+  // so toggling a voice silences or solos it on the next step with no restart,
+  // and it ramps each channel to its Level, so a dragged knob fades.
+  useEffect(() => {
+    engine.setMixer(mixer)
+  }, [mixer])
 
   // And the bass patch: the engine ramps cutoff/resonance, so a knob dragged
   // mid-loop reshapes the sound as it moves rather than on the next note.
@@ -471,6 +630,12 @@ export default function App() {
   useEffect(() => {
     engine.setFxSettings(fxSettings)
   }, [fxSettings])
+
+  // And swing: the step callback reads it on every 16th, so a dragged knob
+  // changes the feel on the very next off-beat with no restart.
+  useEffect(() => {
+    engine.setSwing(swing)
+  }, [swing])
 
   // Pad regions and Tune values are read live at each scheduled or performed
   // hit, so edits take effect without rebuilding or restarting the transport.
@@ -510,16 +675,33 @@ export default function App() {
   // handed to are memoized: a fresh closure is a changed prop, and a changed
   // prop would rebuild seven lanes and a keyboard on each pointer move of a
   // dragged knob — the dropped frame this deck must not have while playing.
+  const handleSelectSlot = useCallback((slotId: string) => {
+    setProject((p) => selectSlot(p, slotId))
+  }, [])
+
+  // A copy of a held shared slot is still the sender's work, so its hold goes
+  // with it.
+  const handleCopySlot = useCallback((targetId: string) => {
+    const sourceId = selectedSlotIdRef.current
+    if (targetId === sourceId) return
+    inheritedLessonsRef.current = heldAfterCopy(inheritedLessonsRef.current, sourceId, targetId)
+    setProject((p) => copySlot(p, targetId))
+  }, [])
+
+  const handleClearSlot = useCallback(() => {
+    setProject(clearSlot)
+  }, [])
+
   const handleCycleStep = useCallback((laneId: LaneId, stepIndex: number) => {
     setProject((p) => cycleActivePatternStep(p, laneId, stepIndex))
   }, [])
 
-  const handleToggleMute = useCallback((laneId: LaneId) => {
-    setProject((p) => toggleLaneMute(p, laneId))
+  const handleToggleMute = useCallback((voiceId: VoiceId) => {
+    setProject((p) => toggleVoiceMute(p, voiceId))
   }, [])
 
-  const handleToggleSolo = useCallback((laneId: LaneId) => {
-    setProject((p) => toggleLaneSolo(p, laneId))
+  const handleToggleSolo = useCallback((voiceId: VoiceId) => {
+    setProject((p) => toggleVoiceSolo(p, voiceId))
   }, [])
 
   const handleToggleNoteStep = useCallback((laneId: NoteLaneId, stepIndex: number) => {
@@ -540,28 +722,53 @@ export default function App() {
     [],
   )
 
-  const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
-    setProject((p) => setBassParamValue(p, id, value))
-    // Sound design is something you do to a running loop, so only motion over
-    // playing audio counts toward a sweep goal. Read from the ref rather than
-    // the state so this handler never has to change identity.
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
+  const handleToggleNoteAccent = useCallback((laneId: NoteLaneId, stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteAccent(p, laneId, stepIndex))
   }, [])
+
+  const handleToggleNoteSlide = useCallback((laneId: NoteLaneId, stepIndex: number) => {
+    setProject((p) => toggleActivePatternNoteSlide(p, laneId, stepIndex))
+  }, [])
+
+  /**
+   * Record a knob move toward sweep goals. Sound design is something you do to
+   * a running loop, so only motion over playing audio counts, and the position
+   * the knob moved *from* counts with it: one keypress from the bottom to the
+   * top is a full sweep. Read from refs so no handler has to change identity.
+   */
+  const observeKnob = useCallback((id: DeckParamId, value: number) => {
+    const from = deckParamValue(projectRef.current, id)
+    setParamMotion((m) =>
+      observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current, from),
+    )
+  }, [])
+
+  const handleBassParamChange = useCallback((id: BassParamId, value: number) => {
+    observeKnob(id, value)
+    setProject((p) => setBassParamValue(p, id, value))
+  }, [observeKnob])
 
   const handleMasterParamChange = useCallback((id: MasterParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setMasterParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   const handleFxParamChange = useCallback((id: FxParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setFxParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
 
   const handleSamplerParamChange = useCallback((id: SamplerParamId, value: number) => {
+    observeKnob(id, value)
     setProject((p) => setSamplerParamValue(p, id, value))
-    setParamMotion((m) => observeParamMotion(m, deckParamSpec(id), value, isPlayingRef.current))
-  }, [])
+  }, [observeKnob])
+
+  // Every Level knob is a deck param, so its motion is observed like any other
+  // knob's: a future mixing lesson can ask for a sweep in JSON alone.
+  const handleLevelChange = useCallback((id: LevelParamId, value: number) => {
+    observeKnob(id, value)
+    setProject((p) => setLevelParamValue(p, id, value))
+  }, [observeKnob])
 
   /**
    * Keep new audio, and say what keeping it cost.
@@ -949,6 +1156,13 @@ export default function App() {
     engine.setBpm(next)
   }, [])
 
+  // The knob reads in percent; the Transport stores the fraction. Motion is
+  // observed in the knob's own units, like every other knob's.
+  const handleSwingChange = useCallback((id: TransportParamId, percent: number) => {
+    observeKnob(id, percent)
+    setProject((p) => setTransportSwing(p, swingFromPercent(percent)))
+  }, [observeKnob])
+
   const handleTogglePlay = useCallback(async () => {
     if (isPlayingRef.current) {
       stopTransport()
@@ -1009,9 +1223,20 @@ export default function App() {
     })
   }, [])
 
-  const handleSelectLesson = useCallback((lessonId: string) => {
-    setProject((p) => enterLesson(p, arcById(p.activeArcId).id, lessonId))
-  }, [])
+  // Entering a lesson — Next ▸, picking it on the path, resuming it — is the
+  // one moment the deck scrolls its spotlight into view.
+  const handleNextLesson = useCallback(() => {
+    requestSpotlightScroll()
+    handleDismissLesson()
+  }, [requestSpotlightScroll, handleDismissLesson])
+
+  const handleSelectLesson = useCallback(
+    (lessonId: string) => {
+      requestSpotlightScroll()
+      setProject((p) => enterLesson(p, arcById(p.activeArcId).id, lessonId))
+    },
+    [requestSpotlightScroll],
+  )
 
   /**
    * Bring the other track on screen. Pure marker movement: neither track's
@@ -1023,8 +1248,9 @@ export default function App() {
   }, [])
 
   const handleResumeLesson = useCallback(() => {
+    requestSpotlightScroll()
     setProject((p) => enterLesson(p, arcById(p.activeArcId).id, activeLessonOf(p).id))
-  }, [])
+  }, [requestSpotlightScroll])
 
   const removeShareFromAddress = () => {
     const url = new URL(window.location.href)
@@ -1036,11 +1262,17 @@ export default function App() {
     setIsSharing(true)
     setOutgoingShareError(null)
     try {
-      const url = await createShareUrl(project, window.location.href)
-      setSharedUrl(url)
+      // A bank too big for a link falls back to the slot being heard — read
+      // from the engine, because mid-queue that is not the one on the grid.
+      const link = await createShareLink(
+        project,
+        window.location.href,
+        engine.getSlotLights().playing ?? project.activePatternId,
+      )
+      setShareLink(link)
       if (navigator.clipboard?.writeText) {
         try {
-          await navigator.clipboard.writeText(url)
+          await navigator.clipboard.writeText(link.url)
           setShareCopied(true)
         } catch {
           // Clipboard permission is optional: the rendered URL remains
@@ -1137,7 +1369,7 @@ export default function App() {
     // A bundle carries real audio, so without this a recipient would arrive
     // with "build your own kit" already earned — the most obviously unearned
     // completion the product could hand out.
-    inheritedLessonsRef.current = lessonsAlreadyMet(ALL_LESSONS, goalContextFor(next))
+    inheritedLessonsRef.current = slotsAlreadyMeeting(ALL_LESSONS, next)
     setSharePreview({ recipientProject })
     setProject(next)
     engine.setBpm(next.transport.bpm)
@@ -1178,7 +1410,7 @@ export default function App() {
     engine.setBpm(sharePreview.recipientProject.transport.bpm)
     setProject(sharePreview.recipientProject)
     // The shared beat is off the deck, so nothing is inherited from it any more.
-    inheritedLessonsRef.current = new Set()
+    inheritedLessonsRef.current = new Map()
     setSharePreview(null)
     removeShareFromAddress()
     // A bundle put audio on the pads, so giving the document back is only half
@@ -1211,6 +1443,13 @@ export default function App() {
         <div className="room-beam room-beam-b" />
       </div>
 
+      {/* The deck's one lesson live region. Outside the deck, because the deck
+          is hidden from assistive tech while the finale is up, and always
+          mounted, because the lesson card it speaks for can be put away. */}
+      <div className="visually-hidden lesson-announcer" aria-live="polite" aria-atomic="true">
+        {announcement && <span key={announcement.id}>{announcement.text}</span>}
+      </div>
+
       <main
         className="deck"
         ref={deckRef}
@@ -1226,22 +1465,26 @@ export default function App() {
           Elevated <em>BPM</em>
         </h1>
         <span className="deck-model">RHYTHM COMPOSER · EB-01</span>
+        <ShareMenu
+          shareReady={hydrated}
+          isSharing={isSharing}
+          isBundling={isBundling}
+          sharedUrl={shareLink?.url ?? null}
+          onlySlot={shareLink?.onlySlot ?? null}
+          copied={shareCopied}
+          strip={incomingShareError ?? outgoingShareError ?? (sharePreview ? 'preview' : null)}
+          onShare={handleShare}
+          onExportBundle={handleExportBundle}
+          onOpenBundle={handleOpenBundle}
+        />
       </header>
 
-      <ShareControls
+      <ShareStrips
         previewing={sharePreview !== null}
         errorMessage={incomingShareError ?? outgoingShareError}
-        shareReady={hydrated}
-        isSharing={isSharing}
-        isBundling={isBundling}
-        sharedUrl={sharedUrl}
-        copied={shareCopied}
         // Counted from the pads that landed silent, so a bundle — which carries
         // its audio — says nothing, and a link says exactly what it cost.
         degradedNotice={sharePreview ? sharedAudioNotice(project, audio) : null}
-        onShare={handleShare}
-        onExportBundle={handleExportBundle}
-        onOpenBundle={handleOpenBundle}
         onKeep={handleKeepSharedBeat}
         onRestore={handleRestoreOwnProject}
         onDismissError={() => {
@@ -1251,6 +1494,23 @@ export default function App() {
             setOutgoingShareError(null)
           }
         }}
+      />
+
+      <TransportStrip
+        isPlaying={isPlaying}
+        bpm={bpm}
+        swing={swing}
+        spotlitTempo={spotlitTarget('transport:tempo')}
+        spotlitSwing={spotlitParams.includes(SWING_PARAM.id)}
+        heldForRecording={isTransportHeld(recordingState)}
+        onTogglePlay={handleTogglePlay}
+        onBpmChange={handleBpmChange}
+        onSwingChange={handleSwingChange}
+        slots={slots}
+        selectedSlotId={selectedSlotId}
+        onSelectSlot={handleSelectSlot}
+        onCopySlot={handleCopySlot}
+        onClearSlot={handleClearSlot}
       />
 
       <LessonArc
@@ -1270,16 +1530,149 @@ export default function App() {
         </button>
       ) : (
         <LessonPanel
+          // Keyed by lesson, so a reopened strip folds again on the next one.
+          key={activeLesson.id}
           lesson={activeLesson}
           position={here.position}
           total={arcDone.total}
           completed={lessonCompleted}
+          celebrating={celebratingLessonId === activeLesson.id}
+          nextTitle={nextLessonTitle}
+          chips={lessonChips}
+          canShowMe={canShowMe}
           onDismiss={handleDismissLesson}
+          onNext={handleNextLesson}
+          onShowMe={showSpotlight}
         />
       )}
 
-      {/* The master strip: deck-global transport, the main-out scope, and the
-          two macro knobs — filter and drive — that shape the whole mix. */}
+      {/* The instruments, in two columns on a wide screen — rhythm (Drums,
+          Sampler) on the left, melody (Bass, Stab) on the right — and one
+          stack below 1600px, where both wrappers dissolve. The source order is
+          the reading order either way, so skip links and headings still
+          follow the screen. */}
+      <div className="deck-instruments">
+      <div className="deck-column">
+      <section
+        className="panel"
+        id={DECK_SECTION_IDS.drums}
+        tabIndex={-1}
+        aria-labelledby={sectionTitleId(DECK_SECTION_IDS.drums)}
+      >
+        <PanelTitle
+          sectionId={DECK_SECTION_IDS.drums}
+          name="Drum Machine"
+          model="RHYTHM SECTION · DR-909"
+        />
+        {pattern.lanes.map((lane) => {
+          const mix = voiceMix(mixer, lane.id)
+          return (
+            <StepRow
+              key={lane.id}
+              lane={lane}
+              spotlit={spotlitLanes.includes(lane.id)}
+              muted={mix.muted}
+              soloed={mix.soloed}
+              // Not sounding — muted, or un-soloed while another voice solos —
+              // shown dimmed so the deck reflects what is actually sounding.
+              silenced={!voiceIsAudible(lane.id, mixer)}
+              level={mix.level}
+              levelSpotlit={spotlitParams.includes(levelParamForVoice(lane.id).id)}
+              onCycleStep={handleCycleStep}
+              onToggleMute={handleToggleMute}
+              onToggleSolo={handleToggleSolo}
+              onLevelChange={handleLevelChange}
+            />
+          )
+        })}
+        <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
+      </section>
+
+      <SamplerPanel
+        lanes={pattern.padLanes}
+        settings={samplerSettings}
+        sources={project.sources}
+        audio={audio}
+        mixer={padMixer}
+        soloing={soloing}
+        spotlitPads={spotlitPads}
+        spotlitParams={spotlitParams}
+        spotlitSources={spotlitSources}
+        intakeError={intakeError}
+        storageNotice={storageNotice}
+        sourceToDelete={sourceToDelete}
+        bpm={bpm}
+        recording={recordingState}
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
+        onAssign={handleAssignSamplerSource}
+        onOpenEditor={handleOpenEditor}
+        onFitChange={handleFitChange}
+        onLoadFile={handleLoadFile}
+        onRelinkPad={handleRelinkPad}
+        onAskDeleteSource={setSourceToDelete}
+        onDeleteSource={handleDeleteSource}
+        onDismissStorageNotice={handleDismissStorageNotice}
+        onDismissIntakeError={handleDismissIntakeError}
+        onTuneChange={handleSamplerParamChange}
+        onAttack={handlePadAttack}
+        onRelease={handlePadRelease}
+        getSoundingPadIds={engine.getSoundingPadIds}
+        onCycleStep={handleCycleStep}
+        onToggleMute={handleToggleMute}
+        onToggleSolo={handleToggleSolo}
+        onLevelChange={handleLevelChange}
+      />
+      </div>
+
+      <div className="deck-column">
+      <BassPanel
+        lane={bassLane}
+        settings={bassSettings}
+        spotlitLane={spotlitNoteLanes.includes('bass')}
+        spotlitAccentRow={spotlitTarget('accentRow:bass')}
+        spotlitSlideRow={spotlitTarget('slideRow:bass')}
+        spotlitParams={spotlitParams}
+        onToggleStep={handleToggleNoteStep}
+        onTranspose={handleTransposeNote}
+        onResize={handleResizeNote}
+        onToggleAccent={handleToggleNoteAccent}
+        onToggleSlide={handleToggleNoteSlide}
+        onParamChange={handleBassParamChange}
+        muted={bassMix.muted}
+        soloed={bassMix.soloed}
+        silenced={!voiceIsAudible('bass', mixer)}
+        level={bassMix.level}
+        onToggleMute={handleToggleMute}
+        onToggleSolo={handleToggleSolo}
+        onLevelChange={handleLevelChange}
+      />
+
+      <StabKeyboard
+        lane={stabLane}
+        spotlitLane={spotlitNoteLanes.includes('stab')}
+        spotlitKeys={spotlitTarget('keyboard:stab')}
+        onAttack={handleStabAttack}
+        onRelease={handleStabRelease}
+        getSoundingNotes={engine.getSoundingStabNotes}
+        onToggleStep={handleToggleNoteStep}
+        onTranspose={handleTransposeNote}
+        onResize={handleResizeNote}
+        muted={stabMix.muted}
+        soloed={stabMix.soloed}
+        silenced={!voiceIsAudible('stab', mixer)}
+        level={stabMix.level}
+        levelSpotlit={spotlitParams.includes(levelParamForVoice('stab').id)}
+        onToggleMute={handleToggleMute}
+        onToggleSolo={handleToggleSolo}
+        onLevelChange={handleLevelChange}
+      />
+      </div>
+      </div>
+
+      {/* The master strip, last on screen as it is last in the signal chain:
+          the main-out scope, the two macro knobs — filter and drive — that
+          shape the whole mix, and the send FX bus. */}
       <section
         className="panel master-panel"
         id={DECK_SECTION_IDS.master}
@@ -1290,14 +1683,6 @@ export default function App() {
           sectionId={DECK_SECTION_IDS.master}
           name="Master"
           model="MAIN OUT · MX-01"
-        />
-        <TransportBar
-          isPlaying={isPlaying}
-          bpm={bpm}
-          spotlitTempo={spotlitTarget('transport:tempo')}
-          heldForRecording={isTransportHeld(recordingState)}
-          onTogglePlay={handleTogglePlay}
-          onBpmChange={handleBpmChange}
         />
         <div className="master-out">
           <SpectrumScope />
@@ -1332,97 +1717,6 @@ export default function App() {
           </div>
         </div>
       </section>
-
-      <section
-        className="panel"
-        id={DECK_SECTION_IDS.drums}
-        tabIndex={-1}
-        aria-labelledby={sectionTitleId(DECK_SECTION_IDS.drums)}
-      >
-        <PanelTitle
-          sectionId={DECK_SECTION_IDS.drums}
-          name="Drum Machine"
-          model="RHYTHM SECTION · DR-909"
-        />
-        {pattern.lanes.map((lane) => {
-          const mix = project.mixer[lane.id]
-          // With any solo engaged, a lane that is not soloed is silenced —
-          // shown dimmed so the deck reflects what is actually sounding.
-          const silenced = soloing ? !mix?.soloed : (mix?.muted ?? false)
-          return (
-            <StepRow
-              key={lane.id}
-              lane={lane}
-              spotlit={spotlitLanes.includes(lane.id)}
-              muted={mix?.muted ?? false}
-              soloed={mix?.soloed ?? false}
-              silenced={silenced}
-              onCycleStep={handleCycleStep}
-              onToggleMute={handleToggleMute}
-              onToggleSolo={handleToggleSolo}
-            />
-          )
-        })}
-        <p className="panel-hint">Tap a step: once to place it, again for an accent, again to clear.</p>
-      </section>
-
-      <SamplerPanel
-        lanes={pattern.padLanes}
-        settings={samplerSettings}
-        sources={project.sources}
-        audio={audio}
-        mixer={project.mixer}
-        soloing={soloing}
-        spotlitPads={spotlitPads}
-        spotlitParams={spotlitParams}
-        spotlitSources={spotlitSources}
-        intakeError={intakeError}
-        storageNotice={storageNotice}
-        sourceToDelete={sourceToDelete}
-        bpm={bpm}
-        recording={recordingState}
-        onStartRecording={handleStartRecording}
-        onStopRecording={handleStopRecording}
-        onAssign={handleAssignSamplerSource}
-        onOpenEditor={handleOpenEditor}
-        onFitChange={handleFitChange}
-        onLoadFile={handleLoadFile}
-        onRelinkPad={handleRelinkPad}
-        onAskDeleteSource={setSourceToDelete}
-        onDeleteSource={handleDeleteSource}
-        onDismissStorageNotice={handleDismissStorageNotice}
-        onDismissIntakeError={handleDismissIntakeError}
-        onTuneChange={handleSamplerParamChange}
-        onAttack={handlePadAttack}
-        onRelease={handlePadRelease}
-        getSoundingPadIds={engine.getSoundingPadIds}
-        onCycleStep={handleCycleStep}
-        onToggleMute={handleToggleMute}
-        onToggleSolo={handleToggleSolo}
-      />
-
-      <BassPanel
-        lane={bassLane}
-        settings={bassSettings}
-        spotlitLane={spotlitNoteLanes.includes('bass')}
-        spotlitParams={spotlitParams}
-        onToggleStep={handleToggleNoteStep}
-        onTranspose={handleTransposeNote}
-        onResize={handleResizeNote}
-        onParamChange={handleBassParamChange}
-      />
-
-      <StabKeyboard
-        lane={stabLane}
-        spotlitLane={spotlitNoteLanes.includes('stab')}
-        spotlitKeys={spotlitTarget('keyboard:stab')}
-        onAttack={handleStabAttack}
-        onRelease={handleStabRelease}
-        getSoundingNotes={engine.getSoundingStabNotes}
-        onToggleStep={handleToggleNoteStep}
-        onTranspose={handleTransposeNote}
-        onResize={handleResizeNote}
-      />
     </main>
       {editor && (
         <RegionEditor

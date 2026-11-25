@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CURATED_SAMPLE_SOURCE, createSamplerSettings } from '../model/sampler'
-import { ACCENT_GAIN, UNACCENTED_GAIN } from './hits'
+import { ACCENT_GAIN, UNACCENTED_GAIN } from './stepResolution'
 import { createSliceRegistry } from './sliceRegistry'
 import { createPadVoice } from './padVoice'
 
